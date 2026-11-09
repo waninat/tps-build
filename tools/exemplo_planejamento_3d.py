@@ -89,7 +89,7 @@ def main():
     ax[0].clabel(cs, fmt=lambda v: f"{v * 100:.0f}%", fontsize=7)
     ax[0].contour(g.x, g.y, r.estruturas["PTV_fantoma"][k], levels=[0.5], colors="m", linewidths=1.5,
                   linestyles="--")
-    ax[0].set_title(f"Axial no isocentro — isodoses (% de {rx.dose_total_gy:g} Gy), PTV tracejado")
+    ax[0].set_title(f"Axial no isocentro: isodoses (% de {rx.dose_total_gy:g} Gy), PTV tracejado", fontsize=10)
     ax[0].set_xlabel("x (mm)")
     ax[0].set_ylabel("y (mm)")
     c = p.campos[0]
@@ -107,7 +107,7 @@ def main():
     ax[1].set_xlim(-60, 60)
     ax[1].set_ylim(-60, 60)
     ax[1].set_aspect("equal")
-    ax[1].set_title(f"BEV {c.nome}: lâminas Agility (cinza), jaws Y (laranja), PTV (magenta)")
+    ax[1].set_title(f"BEV {c.nome}: lâminas (cinza), jaws Y (laranja), PTV (magenta)", fontsize=10)
     ax[1].set_xlabel("u — direção das lâminas (mm)")
     ax[1].set_ylabel("v (mm)")
     fig.tight_layout()
