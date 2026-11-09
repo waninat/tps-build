@@ -63,7 +63,7 @@ espectro ficou muito endurecido (k = 12), sinal de que ele compensa outra coisa.
 
 Consequências:
 1. Para o TPS: novo requisito SRS-COM-006 (ajustar e validar também em geometria isocêntrica).
-2. **Para o SecDose: o mesmo algoritmo de comissionamento está em produção.** Vale rodar este teste no modelo
+2. **Para o SecDose: ele usa o mesmo algoritmo de comissionamento.** Vale rodar este teste no modelo
    comissionado da clínica. Campos pequenos em profundidade (SBRT, boosts) e campos grandes são os mais afetados.
 
 ## Pendências (em ordem de prioridade)
