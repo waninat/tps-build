@@ -14,14 +14,16 @@ OAR 20 cm a 25 cm = 0,904: todos iguais ao PDF).
 | TMR campo aberto, 26 campos, 1,5–30 cm | extraído (1.508 pontos) |
 | Sc, Sp, Scp (3×3 a 40×40) | extraído. **Atenção: o Sp vem do BJR 25, não de medida; o Scp é Sc × Sp calculado** |
 | OAR diagonal 40×40, profundidades 1,5/5/10/20/25 cm | extraído (105 pontos) |
-| Cunha motorizada 60°: fator, OAR, PDD e TMR | **não extraído** (fica para a Fase 1b; o extrator lê só as tabelas de campo aberto) |
+| Cunha motorizada 60°: fator, OAR, PDD e TMR | não usado: cunha fora do escopo |
 | Perfis inplane/crossplane | **não existem** no documento |
 | Campos < 3×3 cm² | **não existem** |
 | Dados de MLC (transmissão, gap dosimétrico, ponta) | **não existem** |
-| Calibração absoluta (cGy/UM em condição de referência) | **não consta** |
+| Calibração absoluta | não consta no documento; **informada em 8/11/2026: 1,000 cGy/UM** (condição de referência a confirmar; o modelo assume dmax, 10×10, SSD 100) |
 
 ### 2. Relatório de validação do modelo Monaco — "SynergyP06x", 6 MV (Elekta/IMPAC, 27/2/2018, Monaco 5.11)
-- **O relatório é de um Synergy com MLCi2 (40 pares de 10 mm), não Agility.** Precisamos saber se o Synergy da
+- **O relatório é de um Synergy com MLCi2 (40 pares de 10 mm). O Synergy S/N 154828 tem hoje Agility (confirmado em
+  8/11/2026)**, então este relatório é anterior à troca do MLC ou de outra máquina; o modelo atual do Monaco para o
+  Agility tem outro relatório e outros dados. Nota original: precisamos saber se o Synergy da
   OncoMed foi trocado para Agility depois de 2018 ou se este relatório é de outra máquina.
 - Útil como referência: Scp **medidos** a SSD 90 / 10 cm de 2×2 a 40×40 (2×2 = 0,803; 40×40 = 1,168), parâmetros do
   modelo de fonte virtual (σ primário 0,09; fonte de espalhamento; contaminação eletrônica) e de colimação do MLCi2
@@ -39,8 +41,8 @@ na pasta de dados da clínica e não vieram no zip.
 
 ## Modelo de feixe comissionado a partir da planilha (protótipo)
 Gerado por `tools/comissionar.py` com o algoritmo de comissionamento do SecDose (8 min em CPU); arquivos em
-`dados/maquinas/oncomed_synergy_154828/6MV/modelo/`. Usa calibração **provisória de 1,000 cGy/UM em dmax (10×10,
-SSD 100)** até recebermos a calibração real. Serve para desenvolver e testar; **não** serve para uso clínico.
+`dados/maquinas/oncomed_synergy_154828/6MV/modelo/`. Usa a calibração **informada de 1,000 cGy/UM, assumida em dmax (10×10,
+SSD 100)**; a condição de referência ainda precisa ser confirmada. Serve para desenvolver e testar; **não** serve para uso clínico.
 
 Resultado contra os dados usados no ajuste (SSD 100):
 - PDD: RMS 0,5–0,8% por campo; máximo 2,9% (3×3, logo após dmax). Dentro de ±1% depois de 3 cm.
@@ -67,15 +69,17 @@ Consequências:
    comissionado da clínica. Campos pequenos em profundidade (SBRT, boosts) e campos grandes são os mais afetados.
 
 ## Pendências (em ordem de prioridade)
-1. **Qual MLC o Synergy S/N 154828 tem hoje** (Agility ou MLCi2) e a qual máquina pertence o relatório do Monaco.
-2. **Arquivos de varredura originais** do comissionamento do Monaco (PDD e perfis, todos os campos e profundidades),
-   das duas máquinas e de todas as energias, no formato do software de varredura (.mcc, .asc, .w2CAD, .csv).
-3. **Calibração absoluta** de cada máquina e energia (cGy/UM e condição de referência, TRS-398).
-4. **Versão do Mosaiq** e o DICOM Conformance Statement dessa versão.
-5. **RTPLANs do Monaco já aceitos pelo Mosaiq**: 2–3 planos 3D (um com cunha motorizada), exportados como vão para o
-   Mosaiq. São o gabarito da exportação.
-6. Medidas de MLC pelo protocolo de Roche et al. (transmissão, tongue-and-groove, ponta de lâmina).
-7. Campos pequenos (1×1, 2×2) com detector adequado e fatores de correção do TRS-483 (dá para aproveitar a tese).
-8. 10–20 casos 3D anonimizados (CT + RTSTRUCT + RTPLAN + RTDOSE do Monaco).
-9. Curva HU→DE atual de cada tomógrafo (a do SecDose é `siemens_spirit_oncomed`).
-10. Tolerance tables cadastradas no Mosaiq e nomes exatos das máquinas no Mosaiq.
+Resolvidas em 8/11/2026: MLC do Synergy = **Agility**; calibração = **1,000 cGy/UM**; **sem cunha** no escopo.
+
+1. **Arquivos de varredura do comissionamento do Monaco para o Agility** (PDD e perfis em água, todos os campos e
+   profundidades), no formato do software do tanque (.mcc, .asc/.opax, .w2CAD, .csv), mais o relatório de validação
+   do modelo Monaco do Agility (equivalente ao do MLCi2 de 2018).
+2. Condição de referência da calibração de 1,000 cGy/UM (dmax a SSD 100 ou 10 cm, SSD/SAD).
+3. **Versão do Mosaiq** (não foi informada nas conversas do QualiRT: o pedido à TI ficou com o campo em branco) e o
+   DICOM Conformance Statement dessa versão.
+4. **RTPLANs 3D do Monaco já aceitos pelo Mosaiq** (2–3 planos), exportados como vão para o Mosaiq.
+5. Medidas de MLC pelo protocolo de Roche et al. (transmissão, tongue-and-groove, ponta de lâmina).
+6. Campos pequenos (1×1, 2×2) com detector adequado e fatores de correção do TRS-483.
+7. 10–20 casos 3D anonimizados (CT + RTSTRUCT + RTPLAN + RTDOSE do Monaco).
+8. Curva HU→DE atual de cada tomógrafo.
+9. Tolerance tables e nomes exatos das máquinas no Mosaiq.

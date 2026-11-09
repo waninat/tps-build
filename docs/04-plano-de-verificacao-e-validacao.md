@@ -23,7 +23,7 @@ Referências: IAEA TRS-430 (CQ de TPS), IAEA TECDOC-1583 (testes de comissioname
 
 ## 3. Heterogeneidade e geometria (TECDOC-1583)
 - Fantoma CIRS 002LFC (ou equivalente) com câmara: 8 casos do TECDOC-1583 (campos abertos, oblíquos, bandejas,
-  heterogeneidades, cunha).
+  heterogeneidades); os casos com cunha do TECDOC ficam de fora (sem cunha no escopo).
 - Campos com colimador e mesa girados, medidos com filme: confirma SRS-PLN-015 e R-04.
 
 ## 4. Comparação com o Monaco

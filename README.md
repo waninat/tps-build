@@ -10,7 +10,7 @@ Desenvolvimento sob IEC 62304 classe C. **Não é dispositivo liberado para uso 
 - Plano com estado e aprovação; plano aprovado congelado por hash SHA-256 e conferido antes de exportar.
 - Exportação RTPLAN (convenções Elekta) e RTDOSE, com conferência dos atributos obrigatórios. O RTPLAN exportado,
   relido por um leitor independente e recalculado, reproduz a dose do planejamento.
-- Modelo 6 MV protótipo comissionado com a planilha da OncoMed (calibração provisória).
+- Modelo 6 MV protótipo comissionado com a planilha da OncoMed (1,000 cGy/UM; condição de referência a confirmar).
 
 ## Documentos (`docs/`)
 | Arquivo | Conteúdo |

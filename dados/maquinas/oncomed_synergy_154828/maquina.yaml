@@ -10,8 +10,7 @@ energies_mv: [6]                     # CONFIRMAR outras energias
 fff: false
 techniques: ["3D"]                   # Fase 1
 collimation:
-  # CONFIRMAR: Agility (80 pares × 5 mm, sem jaws X) ou MLCi2 (40 pares × 10 mm, com jaws X)?
-  # O relatório do Monaco de 2018 ("SynergyP06x") descreve MLCi2.
+  # Agility confirmado em 8/11/2026 (o relatório Monaco de 2018, "SynergyP06x", é da época do MLCi2).
   jaw_x: {present: false, dicom_types: []}
   jaw_y: {present: true, dicom_types: ["ASYMY", "Y"]}
   mlc:
@@ -23,8 +22,9 @@ collimation:
     max_overtravel_mm: 150.0
     min_gap_mm: 0.0                   # CONFIRMAR
     interdigitation: true
-cunha_motorizada: {angulo_nominal: 60, dados: "relatório RXT 2019 (não extraídos)"}
+cunha_motorizada: null           # fora do escopo: o serviço não usa cunha
 dados_de_feixe:
   "6MV":
     origem: "Planilha RXT Dosimetria, fev/2019 (PDD, TMR, Sc, Sp de BJR 25, OAR diagonal)"
-    calibracao_cGy_por_UM_dmax: CONFIRMAR   # o modelo atual usa 1,000 provisório
+    calibracao_cGy_por_UM: 1.000            # informada em 8/11/2026
+    condicao_referencia: CONFIRMAR          # o modelo assume dmax, 10×10, SSD 100

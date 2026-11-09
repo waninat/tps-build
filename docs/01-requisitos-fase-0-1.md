@@ -28,7 +28,7 @@ Situação de cada requisito: **I** = implementado com teste automático · **H*
 | SRS-COM-002 | Só modelo comissionado calcula plano de paciente; modelo de demonstração só com permissão explícita | I | planejamento/calculo | test_modelo_nao_comissionado_recusado |
 | SRS-COM-003 | O plano registra energia, hash e situação do modelo de feixe usado | I | planejamento/fluxo, modelo | test_fluxo_3d_* |
 | SRS-COM-004 | Modelo de MLC (transmissão, tongue-and-groove, ponta arredondada) ajustado a **medidas próprias** | P | engine/beam_model | campos do artigo Roche et al. 2018 |
-| SRS-COM-005 | Fatores e PDD de cunha motorizada (60°) no modelo | P (1b) | — | dados W60 do relatório RXT |
+| SRS-COM-005 | Cunha motorizada: **fora do escopo** (decisão de 8/11/2026: o serviço não usa cunha). O TPS não gera campos com cunha (NumberOfWedges = 0 em todo RTPLAN) | I | exportacao/rtplan | conferir_rtplan |
 | SRS-COM-006 | Comissionamento ajusta e valida também a geometria isocêntrica: Scp a SSD 90 / 10 cm medido e dose/UM no isocentro × TMR, dentro de 1% (≥ 4×4) e 2% (< 4×4). **Hoje falha: −2,8% a +2,5%** | P | commissioning, tools/validar_isocentrico.py | docs/06 |
 
 ## 3. Planejamento

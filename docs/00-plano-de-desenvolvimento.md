@@ -30,7 +30,7 @@ verificação e validação documentadas:
 |---|---|---|
 | 0 | Fundação: repositório, processo, requisitos, risco, motor herdado do SecDose | Este conjunto de documentos aprovado; testes automáticos rodando no CI |
 | 1 | **3D conformacional ponta a ponta**: CT → contornos → campos conformados → dose → UM → aprovação → RTPLAN/RTDOSE → Mosaiq → entrega em simulador | Testes TRS-430/TECDOC-1583 em água e heterogêneo; plano aceito pelo Mosaiq de teste e entregue no simulador dentro de 3% / 3 mm |
-| 1b | Cunha motorizada (Elekta), campos assimétricos com mesa e colimador girados, múltiplos isocentros, soma de planos | Idem, com casos de mama e pelve |
+| 1b | Campos assimétricos com mesa e colimador girados, múltiplos isocentros, soma de planos | Idem, com casos de mama e pelve |
 | 2 | Interface do usuário, banco de pacientes, contorno manual, registro rígido | Avaliação de usabilidade formativa |
 | 3 | IMRT step-and-shoot (otimização de fluência + sequenciamento / DMPO) | TG-119 + CQ paciente-específico |
 | 4 | VMAT; Monte Carlo GPU para dose final | TG-119, MPPG 5.b, comparação com Monaco |
