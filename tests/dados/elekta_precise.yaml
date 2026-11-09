@@ -1,0 +1,34 @@
+# Modelo de máquina — Elekta Precise (MLCi/MLCi2)
+# Valores marcados CONFIRMAR devem ser preenchidos com dados locais.
+id: elekta_precise
+vendor: Elekta
+model: Precise
+dicom_machine_names: ["CONFIRMAR"]   # TreatmentMachineName exportado pelo Monaco
+sad_mm: 1000.0
+energies_mv: [6]                     # CONFIRMAR (ex.: [6, 15])
+fff: false
+techniques: ["3D", "STEP&SHOOT", "VMAT"]   # CONFIRMAR se VMAT é usado no Precise
+
+collimation:
+  jaw_x:          # backup diaphragms (direção das lâminas)
+    present: true
+    dicom_types: ["ASYMX", "X"]
+    min_mm: -200.0
+    max_mm: 200.0
+  jaw_y:
+    present: true
+    dicom_types: ["ASYMY", "Y"]
+    min_mm: -200.0
+    max_mm: 200.0
+  mlc:
+    dicom_type: MLCX
+    leaf_pairs: 40
+    leaf_width_mm: 10.0               # no isocentro
+    max_overtravel_mm: 125.0          # CONFIRMAR
+    min_gap_mm: 5.0                   # CONFIRMAR (gap mínimo programado entre A/B)
+    interdigitation: false
+    # Parâmetros dosimétricos (ajustados no comissionamento do modelo):
+    transmission: null                # fração (ex.: 0.01–0.02)
+    leaf_tip_offset_mm: null          # rounded leaf end / DLG equivalente
+
+collimator_rotation_deg: [-180, 180]

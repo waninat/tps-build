@@ -1,0 +1,141 @@
+"""Cálculo de dose do plano e normalização em UM. SRS-PLN-020..027.
+
+Fluxo da Fase 1 (3D conformacional):
+  1. Densidade eletrônica na grade de dose (CT → HU → DE, curva do tomógrafo).
+  2. Dose por UM de cada campo (motor CCC herdado do SecDose; Monte Carlo na Fase 4).
+  3. UM de cada campo = peso × s, com s tal que a métrica de normalização (média no alvo, isocentro ou ponto)
+     receba a dose por fração prescrita (÷ isodose de prescrição).
+  4. A dose é linear nas UM: a dose final é Σ UM_i · d_i, recalculada depois do arredondamento das UM.
+"""
+from __future__ import annotations
+
+import hashlib
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+from scipy.ndimage import map_coordinates
+
+from tps.engine.beam_model import BeamModelParams, ModeloNaoComissionado
+from tps.engine.calc import DoseGrid, Segment, compute_dose
+from tps.engine.geometry import beam_frame
+from tps.imaging.ct import CTVolume
+from tps.imaging.hu_ed import HUtoED
+from tps.physics.kernels import cones_for_spectrum, load_mono
+from tps.physics.spectrum import Spectrum
+from tps.pipeline import resample_ct
+from tps.planejamento.conformacao import Colimacao
+from tps.planejamento.modelo import Campo, Plano
+
+RESOLUCAO_UM = 0.1          # Elekta/Mosaiq: UM com uma casa decimal
+
+
+@dataclass
+class GradeDose:
+    x: np.ndarray
+    y: np.ndarray
+    z: np.ndarray
+    eta: np.ndarray          # [nz, ny, nx]
+
+    @property
+    def voxel_cc(self) -> float:
+        return float(abs((self.x[1] - self.x[0]) * (self.y[1] - self.y[0]) * (self.z[1] - self.z[0]))) / 1000.0
+
+    def para_motor(self) -> DoseGrid:
+        return DoseGrid(self.eta, np.array([self.x[0], self.y[0], self.z[0]]),
+                        np.array([self.x[1] - self.x[0], self.y[1] - self.y[0], self.z[1] - self.z[0]]))
+
+
+def grade_de_dose(ct: CTVolume, curva: HUtoED, voxel_mm: float = 3.0, caixa_mm: tuple | None = None) -> GradeDose:
+    """Grade de dose cobrindo o CT (ou a caixa ((x0,x1),(y0,y1),(z0,z1)))."""
+    cx, cy, cz = ct.axes()
+    if caixa_mm is None:
+        caixa_mm = ((cx[0], cx[-1]), (cy[0], cy[-1]), (cz[0], cz[-1]))
+    x, y, z = (np.arange(a, b + 1e-6, voxel_mm) for a, b in caixa_mm)
+    return GradeDose(x, y, z, resample_ct(ct, x, y, z, curva))
+
+
+def hash_modelo(modelo: BeamModelParams) -> str:
+    import dataclasses
+    import json
+    txt = json.dumps(dataclasses.asdict(modelo), sort_keys=True, default=str)
+    return hashlib.sha256(txt.encode()).hexdigest()[:16]
+
+
+def segmento_do_campo(c: Campo, colim: Colimacao, mu: float = 1.0, sad_mm: float = 1000.0) -> Segment:
+    return Segment(gantry=c.gantry, collimator=c.colimador, couch=c.mesa,
+                   isocenter=np.asarray(c.isocentro_mm, float), mu=mu,
+                   jaw_x=tuple(c.jaw_x) if c.jaw_x else None, jaw_y=tuple(c.jaw_y),
+                   mlc_a=np.asarray(c.mlc_a, float), mlc_b=np.asarray(c.mlc_b, float),
+                   leaf_boundaries=np.asarray(colim.limites_laminas, float), sad=sad_mm)
+
+
+def dose_por_um(grade: GradeDose, campos: list[Campo], colim: Colimacao, modelo: BeamModelParams,
+                kernels: str | Path | None = None, posicao: str = "HFS",
+                permitir_demonstracao: bool = False) -> dict[str, np.ndarray]:
+    """Dose (Gy) por 1 UM de cada campo, na grade."""
+    if not modelo.comissionado and not (permitir_demonstracao and modelo.demonstracao):
+        raise ModeloNaoComissionado("Modelo de feixe não comissionado: não calcula plano de paciente")
+    from tps import paths
+    cones = cones_for_spectrum(load_mono(kernels or paths.kernels_file()),
+                               Spectrum.mohan(int(modelo.energy_mv), modelo.spectrum_hardening_k))
+    g = grade.para_motor()
+    return {c.nome: compute_dose(g, [segmento_do_campo(c, colim)], modelo, cones, patient_position=posicao)
+            for c in campos}
+
+
+def valor_em_ponto(dose: np.ndarray, grade: GradeDose, p_mm) -> float:
+    ix = (p_mm[0] - grade.x[0]) / (grade.x[1] - grade.x[0])
+    iy = (p_mm[1] - grade.y[0]) / (grade.y[1] - grade.y[0])
+    iz = (p_mm[2] - grade.z[0]) / (grade.z[1] - grade.z[0])
+    return float(map_coordinates(dose, [[iz], [iy], [ix]], order=1, mode="nearest")[0])
+
+
+def metrica_normalizacao(dose: np.ndarray, plano: Plano, grade: GradeDose, mascara_alvo: np.ndarray | None) -> float:
+    pr = plano.prescricao
+    if pr.metodo == "media_alvo":
+        if mascara_alvo is None or not mascara_alvo.any():
+            raise ValueError("Normalização pela média do alvo sem máscara do alvo")
+        return float(dose[mascara_alvo].mean())
+    if pr.metodo == "isocentro":
+        isos = {tuple(np.round(c.isocentro_mm, 1)) for c in plano.campos}
+        if len(isos) != 1:
+            raise ValueError("Normalização no isocentro com mais de um isocentro")
+        return valor_em_ponto(dose, grade, next(iter(isos)))
+    return valor_em_ponto(dose, grade, pr.ponto_mm)
+
+
+def normalizar(plano: Plano, doses_um: dict[str, np.ndarray], grade: GradeDose,
+               mascara_alvo: np.ndarray | None) -> np.ndarray:
+    """Define as UM dos campos e devolve a dose por fração (Gy) já com as UM arredondadas."""
+    plano._exigir_rascunho()
+    pesos = {c.nome: c.peso for c in plano.campos}
+    if any(w <= 0 for w in pesos.values()):
+        raise ValueError("Peso de campo ≤ 0")
+    d_pesos = sum(pesos[n] * d for n, d in doses_um.items())
+    alvo = plano.prescricao.dose_fracao_gy * 100.0 / plano.prescricao.isodose_pct
+    m = metrica_normalizacao(d_pesos, plano, grade, mascara_alvo)
+    if m <= 0:
+        raise ValueError("Métrica de normalização nula: o alvo não recebe dose")
+    s = alvo / m
+    for c in plano.campos:
+        c.mu = round(pesos[c.nome] * s / RESOLUCAO_UM) * RESOLUCAO_UM
+        if c.mu < 1.0:
+            raise ValueError(f"Campo {c.nome} com menos de 1 UM ({c.mu:.1f}): revise os pesos")
+    return sum(c.mu * doses_um[c.nome] for c in plano.campos)
+
+
+def ssd_no_eixo(grade: GradeDose, campo: Campo, sad_mm: float = 1000.0, limiar_eta: float = 0.5,
+                passo_mm: float = 1.0, posicao: str = "HFS") -> float | None:
+    """SSD (mm) ao longo do eixo central: primeiro ponto com densidade ≥ limiar. None se não cruza o paciente."""
+    fr = beam_frame(campo.gantry, campo.colimador, campo.mesa, campo.isocentro_mm, sad_mm, posicao)
+    for t in np.arange(0.0, sad_mm + 400.0, passo_mm):
+        p = fr.source + t * fr.w
+        ix = (p[0] - grade.x[0]) / (grade.x[1] - grade.x[0])
+        iy = (p[1] - grade.y[0]) / (grade.y[1] - grade.y[0])
+        iz = (p[2] - grade.z[0]) / (grade.z[1] - grade.z[0])
+        if not (0 <= ix <= len(grade.x) - 1 and 0 <= iy <= len(grade.y) - 1 and 0 <= iz <= len(grade.z) - 1):
+            continue
+        if map_coordinates(grade.eta, [[iz], [iy], [ix]], order=1)[0] >= limiar_eta:
+            return float(t)
+    return None

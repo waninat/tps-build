@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+saida/
+# Dados de paciente NUNCA entram no repositório
+pacientes/
+casos/
+*.dcm
+!tests/dados/**/*.dcm

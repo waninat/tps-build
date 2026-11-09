@@ -1,0 +1,10 @@
+# TPS — dependências (Python 3.12 ou 3.13). Fixar versões exatas em cada versão liberada (docs/05-soup.md).
+pydicom>=3.0
+numpy>=1.26
+scipy>=1.11
+pyyaml>=6.0
+numba>=0.61
+matplotlib>=3.8
+contourpy>=1.2
+pdfplumber>=0.11
+pytest>=8.0

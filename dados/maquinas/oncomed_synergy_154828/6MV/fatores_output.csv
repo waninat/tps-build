@@ -1,0 +1,25 @@
+maquina,energia,campo_x_cm,campo_y_cm,ssd_cm,profundidade_mm,fator_output,sc,sp,detector,correcao_aplicada
+oncomed_synergy_154828,6,3,3,,,0.928,0.95,0.977,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,4,4,,,0.942,0.962,0.979,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,5,5,,,0.954,0.97,0.983,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,6,6,,,0.966,0.979,0.987,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,7,7,,,0.976,0.986,0.99,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,8,8,,,0.986,0.992,0.994,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,9,9,,,0.994,0.997,0.997,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,10,10,,,1.0,1.0,1.0,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,11,11,,,1.009,1.006,1.003,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,12,12,,,1.016,1.01,1.006,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,13,13,,,1.022,1.013,1.009,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,14,14,,,1.027,1.016,1.011,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,15,15,,,1.032,1.019,1.013,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,16,16,,,1.037,1.022,1.015,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,17,17,,,1.041,1.024,1.017,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,18,18,,,1.045,1.026,1.019,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,19,19,,,1.048,1.026,1.021,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,20,20,,,1.051,1.027,1.023,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,22,22,,,1.057,1.031,1.025,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,25,25,,,1.063,1.033,1.029,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,28,28,,,1.068,1.035,1.032,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,30,30,,,1.071,1.036,1.034,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,35,35,,,1.075,1.037,1.037,relatorio_RXT_2019,Sp de BJR25
+oncomed_synergy_154828,6,40,40,,,1.078,1.037,1.04,relatorio_RXT_2019,Sp de BJR25

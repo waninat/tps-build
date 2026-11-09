@@ -1,0 +1,4 @@
+maquina,energia,campo_x_cm,campo_y_cm,ssd_cm,profundidade_mm,eixo,posicao_mm,dose_rel,detector
+elekta_precise,6,40,40,100,50,diagonal,0,100.0,EXEMPLO
+elekta_precise,6,40,40,100,50,diagonal,100,101.5,EXEMPLO
+elekta_precise,6,40,40,100,50,diagonal,200,100.8,EXEMPLO

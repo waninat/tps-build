@@ -1,0 +1,4 @@
+maquina,energia,campo_x_cm,campo_y_cm,ssd_cm,profundidade_mm,eixo,posicao_mm,dose_rel,detector
+elekta_precise,6,10,10,100,100,crossplane,-80,2.0,EXEMPLO
+elekta_precise,6,10,10,100,100,crossplane,0,100.0,EXEMPLO
+elekta_precise,6,10,10,100,100,crossplane,80,2.0,EXEMPLO

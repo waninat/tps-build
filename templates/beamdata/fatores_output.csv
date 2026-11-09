@@ -1,0 +1,3 @@
+maquina,energia,campo_x_cm,campo_y_cm,ssd_cm,profundidade_mm,fator_output,detector,correcao_aplicada
+elekta_precise,6,10,10,100,100,1.000,EXEMPLO,nao
+elekta_precise,6,5,5,100,100,0.930,EXEMPLO,nao
