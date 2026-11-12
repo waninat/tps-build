@@ -38,6 +38,17 @@ encostou no limite do ajuste — sinais de que os parâmetros compensam limitaç
 profundidade). Funciona para os dados medidos, mas **perfis medidos** são necessários para validar a penumbra e a dose
 fora do campo, e o kernel com endurecimento em profundidade continua no backlog do motor.
 
+### Synergy 6 MV (OncoMed) — também recomissionado com o v2
+| Teste | v1 | v2 |
+|---|---|---|
+| PDD, máximo além de dmax | 2,9% | 2,6% (40×40 perto de dmax; ≤ 1,6% até 20×20) |
+| Scp em dmax | 0,7% | 0,56% |
+| Isocêntrico × TMR/Scp | −4,5% a +2,5% | **−0,58% a +1,12%** |
+| Scp SSD 90 / 10 cm × medida Monaco 2018 (época do MLCi2) | −2,9% a +1,6% | −1,5% a +2,4% (≥ 4×4: dentro de 1,5%) |
+
+O modelo v2 agora concorda com as tabelas da RXT; a medida do Monaco de 2018 discorda das tabelas em até ~2% nos
+campos de 2–3 cm. Campos pequenos precisam de medida própria com detector adequado (TRS-483).
+
 
 ## Recebidos
 ### 1. Planilha de dosimetria 6 MV — Elekta Synergy S/N 154828 (OncoMed Niterói, RXT, fevereiro de 2019)
@@ -102,7 +113,7 @@ espectro ficou muito endurecido (k = 12), sinal de que ele compensa outra coisa.
 
 Consequências:
 1. Para o TPS: novo requisito SRS-COM-006 (ajustar e validar também em geometria isocêntrica).
-2. **Para o SecDose: ele usa o mesmo algoritmo de comissionamento.** Vale rodar este teste no modelo
+2. **Para o SecDose: ele usa o mesmo algoritmo de comissionamento (v1).** O v2 deste repositório corrige o problema e pode ser levado para o SecDose. Vale rodar este teste no modelo
    comissionado da clínica. Campos pequenos em profundidade (SBRT, boosts) e campos grandes são os mais afetados.
 
 ## Pendências (em ordem de prioridade)
