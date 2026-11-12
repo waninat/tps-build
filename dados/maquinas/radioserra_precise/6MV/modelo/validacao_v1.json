@@ -1,0 +1,279 @@
+{
+ "pdd": {
+  "3x3": {
+   "max_abs_diff_pct": 1.2524202992250544,
+   "rms_diff_pct": 0.7578129368521862,
+   "buildup_diff_0mm_pct": -22.409568041964057
+  },
+  "5x5": {
+   "max_abs_diff_pct": 1.286777100465578,
+   "rms_diff_pct": 0.6539101286580623,
+   "buildup_diff_0mm_pct": -23.550761082081763
+  },
+  "10x10": {
+   "max_abs_diff_pct": 3.622127749795368,
+   "rms_diff_pct": 1.0249805436964967,
+   "buildup_diff_0mm_pct": -12.044431160133826
+  },
+  "20x20": {
+   "max_abs_diff_pct": 4.94973778865031,
+   "rms_diff_pct": 1.2553345098100357,
+   "buildup_diff_0mm_pct": -18.700981018999656
+  },
+  "30x30": {
+   "max_abs_diff_pct": 4.906688075692259,
+   "rms_diff_pct": 1.3018251277120063,
+   "buildup_diff_0mm_pct": -23.35683385215544
+  },
+  "40x40": {
+   "max_abs_diff_pct": 4.357675908091139,
+   "rms_diff_pct": 1.1555104424635054,
+   "buildup_diff_0mm_pct": -23.262072636165193
+  }
+ },
+ "scp": {
+  "3": {
+   "medido": 0.926,
+   "calculado": 0.9264787949464119,
+   "diff_pct": 0.05170571775505728
+  },
+  "4": {
+   "medido": 0.94,
+   "calculado": 0.938843692099425,
+   "diff_pct": -0.12301147878457375
+  },
+  "5": {
+   "medido": 0.952,
+   "calculado": 0.9502746412414326,
+   "diff_pct": -0.18123516371506554
+  },
+  "6": {
+   "medido": 0.964,
+   "calculado": 0.9615356768079087,
+   "diff_pct": -0.2556351859015815
+  },
+  "7": {
+   "medido": 0.976,
+   "calculado": 0.9687986746041015,
+   "diff_pct": -0.7378407167928702
+  },
+  "8": {
+   "medido": 0.984,
+   "calculado": 0.9796627019622904,
+   "diff_pct": -0.4407823209054418
+  },
+  "9": {
+   "medido": 0.992,
+   "calculado": 0.9900829426412784,
+   "diff_pct": -0.19325174987112614
+  },
+  "10": {
+   "medido": 1.0,
+   "calculado": 1.0,
+   "diff_pct": 0.0
+  },
+  "11": {
+   "medido": 1.007,
+   "calculado": 1.0088777630718777,
+   "diff_pct": 0.1864710101169731
+  },
+  "12": {
+   "medido": 1.014,
+   "calculado": 1.0170254128125367,
+   "diff_pct": 0.29836418269593157
+  },
+  "13": {
+   "medido": 1.021,
+   "calculado": 1.0255445152076725,
+   "diff_pct": 0.44510432984061765
+  },
+  "14": {
+   "medido": 1.028,
+   "calculado": 1.0306649923124656,
+   "diff_pct": 0.25924049732155563
+  },
+  "15": {
+   "medido": 1.035,
+   "calculado": 1.0372449518992224,
+   "diff_pct": 0.21690356514225684
+  },
+  "16": {
+   "medido": 1.039,
+   "calculado": 1.0429113851132787,
+   "diff_pct": 0.3764567000268393
+  },
+  "17": {
+   "medido": 1.043,
+   "calculado": 1.0480985858772263,
+   "diff_pct": 0.4888385308941867
+  },
+  "18": {
+   "medido": 1.046,
+   "calculado": 1.0484492902539564,
+   "diff_pct": 0.23415776806465782
+  },
+  "19": {
+   "medido": 1.049,
+   "calculado": 1.054807525624253,
+   "diff_pct": 0.5536249403482518
+  },
+  "20": {
+   "medido": 1.053,
+   "calculado": 1.0572226209588753,
+   "diff_pct": 0.4010086380698441
+  },
+  "21": {
+   "medido": 1.055,
+   "calculado": 1.0589941582233764,
+   "diff_pct": 0.37859319652857604
+  },
+  "22": {
+   "medido": 1.057,
+   "calculado": 1.0612197425823258,
+   "diff_pct": 0.3992187873534281
+  },
+  "23": {
+   "medido": 1.059,
+   "calculado": 1.0634638098814122,
+   "diff_pct": 0.42151179239020564
+  },
+  "24": {
+   "medido": 1.061,
+   "calculado": 1.0649001734116308,
+   "diff_pct": 0.36759410100195566
+  },
+  "25": {
+   "medido": 1.064,
+   "calculado": 1.0676172937041029,
+   "diff_pct": 0.33997121279161213
+  },
+  "26": {
+   "medido": 1.066,
+   "calculado": 1.0692363687791993,
+   "diff_pct": 0.30359932262655764
+  },
+  "27": {
+   "medido": 1.068,
+   "calculado": 1.0692161820446002,
+   "diff_pct": 0.11387472327717418
+  },
+  "28": {
+   "medido": 1.07,
+   "calculado": 1.0719667641828128,
+   "diff_pct": 0.18380973671145995
+  },
+  "29": {
+   "medido": 1.072,
+   "calculado": 1.073059374581703,
+   "diff_pct": 0.09882225575585935
+  },
+  "30": {
+   "medido": 1.074,
+   "calculado": 1.0724653487127018,
+   "diff_pct": -0.14289118131268763
+  },
+  "32": {
+   "medido": 1.075,
+   "calculado": 1.07592474440151,
+   "diff_pct": 0.08602273502420488
+  },
+  "34": {
+   "medido": 1.076,
+   "calculado": 1.0777975482752349,
+   "diff_pct": 0.16705838989170552
+  },
+  "35": {
+   "medido": 1.077,
+   "calculado": 1.0773296560019303,
+   "diff_pct": 0.03060872812723492
+  },
+  "40": {
+   "medido": 1.08,
+   "calculado": 1.0825649736345306,
+   "diff_pct": 0.23749755875281942
+  }
+ },
+ "oar": {
+  "1cm": {
+   "max_abs_diff_pct_dentro_campo": 1.6728715468299127
+  },
+  "2cm": {
+   "max_abs_diff_pct_dentro_campo": 1.2313203874573242
+  },
+  "3cm": {
+   "max_abs_diff_pct_dentro_campo": 0.7952830569301517
+  },
+  "4cm": {
+   "max_abs_diff_pct_dentro_campo": 0.6286760944083536
+  },
+  "5cm": {
+   "max_abs_diff_pct_dentro_campo": 0.6437670812398322
+  },
+  "6cm": {
+   "max_abs_diff_pct_dentro_campo": 0.5090377675171398
+  },
+  "7cm": {
+   "max_abs_diff_pct_dentro_campo": 0.450055162716656
+  },
+  "8cm": {
+   "max_abs_diff_pct_dentro_campo": 0.8066132072454657
+  },
+  "9cm": {
+   "max_abs_diff_pct_dentro_campo": 0.807771457288764
+  },
+  "10cm": {
+   "max_abs_diff_pct_dentro_campo": 0.56004571686874
+  },
+  "11cm": {
+   "max_abs_diff_pct_dentro_campo": 0.704023185224445
+  },
+  "12cm": {
+   "max_abs_diff_pct_dentro_campo": 0.6071746602837047
+  },
+  "13cm": {
+   "max_abs_diff_pct_dentro_campo": 0.6007666797634426
+  },
+  "14cm": {
+   "max_abs_diff_pct_dentro_campo": 0.6999125568067699
+  },
+  "15cm": {
+   "max_abs_diff_pct_dentro_campo": 0.9250713819318523
+  },
+  "16cm": {
+   "max_abs_diff_pct_dentro_campo": 0.9199400654863688
+  },
+  "17cm": {
+   "max_abs_diff_pct_dentro_campo": 1.1382997030538133
+  },
+  "18cm": {
+   "max_abs_diff_pct_dentro_campo": 1.0649597904701436
+  },
+  "19cm": {
+   "max_abs_diff_pct_dentro_campo": 0.9302290827425952
+  },
+  "20cm": {
+   "max_abs_diff_pct_dentro_campo": 1.2894500351363303
+  },
+  "21cm": {
+   "max_abs_diff_pct_dentro_campo": 1.7887994922172745
+  },
+  "22cm": {
+   "max_abs_diff_pct_dentro_campo": 2.399899635582037
+  },
+  "23cm": {
+   "max_abs_diff_pct_dentro_campo": 2.2808276341608313
+  },
+  "24cm": {
+   "max_abs_diff_pct_dentro_campo": 2.527634821097713
+  },
+  "25cm": {
+   "max_abs_diff_pct_dentro_campo": 2.353052853138027
+  }
+ },
+ "dmax_mm": 15.0,
+ "resumo": {
+  "pdd_max_pct": 4.94973778865031,
+  "scp_max_pct": 0.7378407167928702,
+  "aceitavel": false
+ }
+}

@@ -20,7 +20,7 @@ from tps import paths  # noqa: E402
 from tps.engine.beam_model import BeamModelParams  # noqa: E402
 from tps.engine.calc import compute_dose  # noqa: E402
 from tps.engine.phantom import cax_profile, square_field, water_box  # noqa: E402
-from tps.physics.kernels import cones_for_spectrum, load_mono  # noqa: E402
+from tps.physics.kernels import cones_do_modelo, load_mono  # noqa: E402
 from tps.physics.spectrum import Spectrum  # noqa: E402
 
 
@@ -37,7 +37,7 @@ def main():
     m = BeamModelParams.load(pasta / "modelo" / "modelo_6MV.yaml")
     cgy = float(m.ref.get("cGy_por_MU_dmax", 1.0))
     dmax = float(m.ref.get("prof_calibracao_dmax_mm", 15.0))
-    cones = cones_for_spectrum(load_mono(paths.kernels_file()), Spectrum.mohan(int(m.energy_mv), m.spectrum_hardening_k))
+    cones = cones_do_modelo(load_mono(paths.kernels_file()), m)
     tmr = {(float(r["campo_x_cm"]), float(r["profundidade_mm"])): float(r["tmr"])
            for r in csv.DictReader(open(pasta / "tmr.csv", encoding="utf-8")) if r["campo_x_cm"] == r["campo_y_cm"]}
     scp = {float(r["campo_x_cm"]): float(r["fator_output"])

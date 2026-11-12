@@ -2,8 +2,8 @@
 
 Documento controlado. Versão 0.1 (rascunho), novembro de 2026.
 
-Escopo da Fase 1: **planejamento 3D conformacional de ponta a ponta**, fótons 6 MV, aceleradores Elekta
-(Agility e MLCi/MLCi2), paciente em decúbito dorsal cabeça primeiro (HFS), exportação ao Mosaiq.
+Escopo da Fase 1 (revisado em 12/11/2026): **TPS 2D e 3D completo (planejamento direto)**, fótons 6 MV, primeiro no
+**Elekta Precise (MLCi) da Radioserra**; também Agility e MLCi2; paciente HFS; exportação ao Mosaiq. Sem cunha.
 
 Situação de cada requisito: **I** = implementado com teste automático · **H** = herdado do SecDose (teste herdado) ·
 **P** = pendente · **M** = verificação manual (medida, Mosaiq, máquina).
@@ -29,7 +29,8 @@ Situação de cada requisito: **I** = implementado com teste automático · **H*
 | SRS-COM-003 | O plano registra energia, hash e situação do modelo de feixe usado | I | planejamento/fluxo, modelo | test_fluxo_3d_* |
 | SRS-COM-004 | Modelo de MLC (transmissão, tongue-and-groove, ponta arredondada) ajustado a **medidas próprias** | P | engine/beam_model | campos do artigo Roche et al. 2018 |
 | SRS-COM-005 | Cunha motorizada: **fora do escopo** (decisão de 8/11/2026: o serviço não usa cunha). O TPS não gera campos com cunha (NumberOfWedges = 0 em todo RTPLAN) | I | exportacao/rtplan | conferir_rtplan |
-| SRS-COM-006 | Comissionamento ajusta e valida também a geometria isocêntrica: Scp a SSD 90 / 10 cm medido e dose/UM no isocentro × TMR, dentro de 1% (≥ 4×4) e 2% (< 4×4). **Hoje falha: −2,8% a +2,5%** | P | commissioning, tools/validar_isocentrico.py | docs/06 |
+| SRS-COM-007 | Comissionamento v2: escala do espalhamento no fantoma e contaminação eletrônica dependente do campo, ajustadas ao PDD de 5 campos e às saídas em dmax e no isocentro (10 e 20 cm) | I | comissionamento_v2 | docs/06 (resultados) |
+| SRS-COM-006 (v2) | Comissionamento ajusta e valida também a geometria isocêntrica: Scp a SSD 90 / 10 cm medido e dose/UM no isocentro × TMR, dentro de 1% (≥ 4×4) e 2% (< 4×4). **Hoje falha: −2,8% a +2,5%** | P | commissioning, tools/validar_isocentrico.py | docs/06 |
 
 ## 3. Planejamento
 | ID | Requisito | Sit. | Módulo | Verificação |
@@ -53,7 +54,34 @@ Situação de cada requisito: **I** = implementado com teste automático · **H*
 | SRS-PLN-024 | Recusar campo com menos de 1 UM e pesos ≤ 0 | I | planejamento/calculo | revisão de código |
 | SRS-PLN-025 | SSD calculada no eixo central a partir do CT | I | planejamento/calculo | test_fluxo_3d_* (900–1000 mm no fantoma) |
 | SRS-PLN-026 | DVH cumulativo e métricas (D95, D98, D2, Dmean, Dmax) por estrutura | H | dicom_io/rtstruct | test_fluxo_3d_* |
-| SRS-PLN-027 | Cálculo independente das UM por tabela (TMR/Scp, método clássico) como checagem interna em todo plano 3D | P | — | dados TMR/Scp já extraídos |
+| SRS-PLN-027 | Cálculo independente das UM por tabela (TMR, Sc, Sp, OAR; quadrado equivalente 4A/P da abertura; profundidade radiológica) em todo plano 2D/3D, tolerância 3% | I | planejamento/um_tabela | test_conferencia_de_um_por_tabela_em_agua, test_ap_pa_* |
+
+## 3b. Ajuste de MLC e otimizações do 3D (estilo Eclipse, com automações próprias)
+| ID | Requisito | Sit. | Módulo | Verificação |
+|---|---|---|---|---|
+| SRS-PLN-030 | Projeção cônica da estrutura no BEV por traçado de raios (resolução 0,5 mm) | I | planejamento/ajuste_mlc | test_ponto_de_encontro_esfera |
+| SRS-PLN-031 | Margens BEV por lado (X1, X2, Y1, Y2), elípticas ou retangulares | I | ajuste_mlc | test_margem_assimetrica |
+| SRS-PLN-032 | Ponto de encontro lâmina-contorno: fora, dentro, meio (eixo da lâmina), área (50%) ou fração livre | I | ajuste_mlc | test_ponto_de_encontro_esfera |
+| SRS-PLN-033 | Jaws ajustados à abertura, com folga opcional; colimador X (MLCi) no envelope das lâminas | I | ajuste_mlc | test_mlci_pares_fechados_respeitam_vizinhos |
+| SRS-PLN-034 | Blindagem de órgãos com margem própria, com ou sem prioridade do alvo | I | ajuste_mlc | test_blindagem_de_orgao_corta_a_abertura |
+| SRS-PLN-035 | Pares fechados escondidos sob o jaw X quando a mecânica permite | I | ajuste_mlc | test_mlci_* |
+| SRS-PLN-036 | MLCi/MLCi2: nenhuma lâmina A passa a B dos pares vizinhos (menos o gap); correção automática com aviso | I | ajuste_mlc | test_mlci_sem_interdigitacao_alvo_obliquo |
+| SRS-PLN-037 | Verificação mecânica de todo campo (gap, overtravel, campo máximo, extensão do banco, jaws) antes de aceitar | I | ajuste_mlc.verificar_mecanica | todos os testes de ajuste |
+| SRS-PLN-038 | Aviso quando a blindagem pediria abrir o meio de um par (impossível com MLC) | I | ajuste_mlc | revisão |
+| SRS-PLN-040 | Otimização automática do ângulo de colimador (menor erro de conformação, desempate perto de 0°/90°) | I | ajuste_mlc.otimizar_colimador | test_otimizacao_do_colimador_alinha_com_o_alvo |
+| SRS-PLN-050 | Otimização dos pesos dos campos (homogeneidade do alvo; penalidade de dose média em OAR) | I | otimizacao3d.otimizar_pesos | test_field_in_field_* (indireto) |
+| SRS-PLN-052 | Field-in-field automático: sub-campos bloqueiam a projeção das regiões > 107/105/103%, pesos otimizados, UM mínima por sub-campo, campo aberto mantém ≥ 60% do peso | I | otimizacao3d.field_in_field | test_field_in_field_compensa_separacao_variavel |
+
+## 3c. Planejamento 2D (sem CT)
+| ID | Requisito | Sit. | Módulo | Verificação |
+|---|---|---|---|---|
+| SRS-2D-001 | Fantoma virtual: caixa, elipse ou contorno axial extrudado; densidade informada; volume parcial na pele | I | planejamento/plano_2d | test_fantoma_virtual |
+| SRS-2D-002 | Campos retangulares simétricos ou assimétricos; ajuste manual de pares; checagem mecânica | I | plano_2d | test_campo_retangular_assimetrico_mlci |
+| SRS-2D-003 | Técnica SAD (isocentro no ponto) e SSD (isocentro na pele, SSD 100) | I | plano_2d | test_ap_pa_*, test_ssd_isocentro_na_pele |
+| SRS-2D-004 | Normalização no ponto de prescrição | I | plano_2d + calculo | test_ap_pa_* |
+| SRS-2D-005 | UM conferidas por tabela no ponto (≤ 2% no teste AP/PA) | I | um_tabela | test_ap_pa_* |
+| SRS-2D-006 | Exportação RTPLAN na geometria do equipamento (sem CT, sem FrameOfReference) | I | exportacao/rtplan | test_ap_pa_* |
+| SRS-2D-007 | **Mosaiq aceita plano TREATMENT_DEVICE?** Se não, exportar o fantoma virtual como série de CT + RTSTRUCT | P/M | — | Mosaiq de teste |
 
 ## 4. Exportação
 | ID | Requisito | Sit. | Módulo | Verificação |

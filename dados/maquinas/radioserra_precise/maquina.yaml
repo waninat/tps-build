@@ -1,0 +1,30 @@
+# Elekta Precise — Radioserra, Petrópolis (RJ)
+# Valores marcados CONFIRMAR devem ser confirmados pela física antes de qualquer uso clínico.
+id: radioserra_precise
+vendor: Elekta
+model: Precise
+serial: CONFIRMAR
+dicom_machine_names: ["CONFIRMAR"]   # TreatmentMachineName EXATO cadastrado no Mosaiq
+sad_mm: 1000.0
+energies_mv: [6]                     # CONFIRMAR outras energias de fótons (e elétrons)
+fff: false
+techniques: ["2D", "3D"]             # inverso/modulado: depois (decisão de 12/11/2026)
+collimation:
+  jaw_x: {present: true, dicom_types: ["ASYMX", "X"]}    # diafragma de reserva, sob as lâminas
+  jaw_y: {present: true, dicom_types: ["ASYMY", "Y"]}
+  mlc:
+    dicom_type: MLCX
+    preset: mlci
+    leaf_pairs: 40
+    leaf_width_mm: 10.0
+    widths: [[40, 10.0]]
+    max_overtravel_mm: 125.0          # CONFIRMAR
+    min_gap_mm: 5.0                   # CONFIRMAR (gap mínimo entre A e B, e entre vizinhos opostos)
+    interdigitation: false            # MLCi: a lâmina A não pode passar a B dos pares vizinhos
+    max_bank_span_mm: null            # CONFIRMAR, se houver limite de extensão do banco
+cunha_motorizada: null                # fora do escopo: o serviço não usa cunha (field-in-field automático)
+dados_de_feixe:
+  "6MV":
+    origem: "RXT Dosimetria, nov/2019 (PDD 3–40, TMR, FAC = Scp medido, NPSF de Li 1999, OCR × profundidade 40×40)"
+    calibracao_cGy_por_UM: 1.000      # @ dmax 1,5 cm, 10×10, SSD 100 (relatório RXT, nov/2019)
+    qualidade: {D20_D10: 0.589, TPR20_10: 0.685}

@@ -64,6 +64,17 @@ class MonoKernels:
         t = (e - self.energies[i]) / (self.energies[i + 1] - self.energies[i])
         return (1 - t) * self.edk[i] + t * self.edk[i + 1]
 
+    def polyenergetic_primary(self, energies: np.ndarray, terma_weights: np.ndarray) -> np.ndarray:
+        w = np.asarray(terma_weights, float)
+        w = w / w.sum()
+        out = 0.0
+        for ei, wi in zip(energies, w):
+            e = np.clip(ei, self.energies[0], self.energies[-1])
+            i = int(np.clip(np.searchsorted(self.energies, e) - 1, 0, len(self.energies) - 2))
+            t = (e - self.energies[i]) / (self.energies[i + 1] - self.energies[i])
+            out = out + wi * ((1 - t) * self.edk_primary[i] + t * self.edk_primary[i + 1])
+        return out
+
     def polyenergetic(self, energies: np.ndarray, terma_weights: np.ndarray) -> np.ndarray:
         """Kernel poli-energético ponderado pela fração de TERMA de cada energia."""
         w = np.asarray(terma_weights, float)
@@ -174,3 +185,17 @@ def cones_for_spectrum(mono: MonoKernels, spectrum, bands=DEFAULT_BANDS) -> Coll
     from tps.physics.data import mu_rho_water
     w = spectrum.fluence * spectrum.energies * mu_rho_water(spectrum.energies)
     return collapse(mono.polyenergetic(spectrum.energies, w), mono.radii, bands)
+
+
+def cones_do_modelo(mono: MonoKernels, modelo, bands=DEFAULT_BANDS) -> CollapsedCones:
+    """Cones do modelo de feixe: espectro (endurecimento k) e escala do espalhamento no fantoma."""
+    from tps.physics.data import mu_rho_water
+    from tps.physics.spectrum import Spectrum
+    sp = Spectrum.mohan(int(round(modelo.energy_mv)), modelo.spectrum_hardening_k)
+    w = sp.fluence * sp.energies * mu_rho_water(sp.energies)
+    tot = mono.polyenergetic(sp.energies, w)
+    s = float(getattr(modelo, "escala_espalhamento", 1.0))
+    if abs(s - 1.0) > 1e-9:
+        prim = mono.polyenergetic_primary(sp.energies, w)
+        tot = prim + s * (tot - prim)
+    return collapse(tot, mono.radii, bands)

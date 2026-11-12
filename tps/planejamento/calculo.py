@@ -21,7 +21,7 @@ from tps.engine.calc import DoseGrid, Segment, compute_dose
 from tps.engine.geometry import beam_frame
 from tps.imaging.ct import CTVolume
 from tps.imaging.hu_ed import HUtoED
-from tps.physics.kernels import cones_for_spectrum, load_mono
+from tps.physics.kernels import cones_do_modelo, load_mono
 from tps.physics.spectrum import Spectrum
 from tps.pipeline import resample_ct
 from tps.planejamento.conformacao import Colimacao
@@ -77,8 +77,7 @@ def dose_por_um(grade: GradeDose, campos: list[Campo], colim: Colimacao, modelo:
     if not modelo.comissionado and not (permitir_demonstracao and modelo.demonstracao):
         raise ModeloNaoComissionado("Modelo de feixe não comissionado: não calcula plano de paciente")
     from tps import paths
-    cones = cones_for_spectrum(load_mono(kernels or paths.kernels_file()),
-                               Spectrum.mohan(int(modelo.energy_mv), modelo.spectrum_hardening_k))
+    cones = cones_do_modelo(load_mono(kernels or paths.kernels_file()), modelo)
     g = grade.para_motor()
     return {c.nome: compute_dose(g, [segmento_do_campo(c, colim)], modelo, cones, patient_position=posicao)
             for c in campos}
@@ -105,8 +104,12 @@ def metrica_normalizacao(dose: np.ndarray, plano: Plano, grade: GradeDose, masca
     return valor_em_ponto(dose, grade, pr.ponto_mm)
 
 
+def normalizar_sem_minimo(plano, doses_um, grade, mascara_alvo) -> np.ndarray:
+    return normalizar(plano, doses_um, grade, mascara_alvo, um_minimo=0.0)
+
+
 def normalizar(plano: Plano, doses_um: dict[str, np.ndarray], grade: GradeDose,
-               mascara_alvo: np.ndarray | None) -> np.ndarray:
+               mascara_alvo: np.ndarray | None, um_minimo: float = 1.0) -> np.ndarray:
     """Define as UM dos campos e devolve a dose por fração (Gy) já com as UM arredondadas."""
     plano._exigir_rascunho()
     pesos = {c.nome: c.peso for c in plano.campos}
@@ -119,9 +122,9 @@ def normalizar(plano: Plano, doses_um: dict[str, np.ndarray], grade: GradeDose,
         raise ValueError("Métrica de normalização nula: o alvo não recebe dose")
     s = alvo / m
     for c in plano.campos:
-        c.mu = round(pesos[c.nome] * s / RESOLUCAO_UM) * RESOLUCAO_UM
-        if c.mu < 1.0:
-            raise ValueError(f"Campo {c.nome} com menos de 1 UM ({c.mu:.1f}): revise os pesos")
+        c.mu = round(round(pesos[c.nome] * s / RESOLUCAO_UM) * RESOLUCAO_UM, 1)
+        if c.mu < um_minimo:
+            raise ValueError(f"Campo {c.nome} com menos de {um_minimo:g} UM ({c.mu:.1f}): revise os pesos")
     return sum(c.mu * doses_um[c.nome] for c in plano.campos)
 
 

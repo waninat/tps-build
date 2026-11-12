@@ -208,7 +208,7 @@ def read_rtplan(path: str | Path) -> Plan:
                 mlc_a=mlc_a,
                 mlc_b=mlc_b,
                 isocenter=(tuple(float(x) for x in c.IsocenterPosition)
-                           if "IsocenterPosition" in c else (prev.isocenter if prev else (0.0, 0.0, 0.0))),
+                           if c.get("IsocenterPosition") else (prev.isocenter if prev else (0.0, 0.0, 0.0))),
                 ssd=inh("SourceToSurfaceDistance", prev.ssd if prev else None),
             )
             beam.control_points.append(cp)

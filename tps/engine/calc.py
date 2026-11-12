@@ -108,9 +108,18 @@ def compute_dose(grid: DoseGrid, segments: list[Segment], params: BeamModelParam
             else:
                 ap = aperture(fg, s.jaw_x, s.jaw_y, s.mlc_a, s.mlc_b, s.leaf_boundaries, params)
             psi = np.ascontiguousarray(energy_fluence(ap, fg, params) * s.mu)
+            sig_e = float(getattr(params, "e_contam_sigma_mm", 0.0))
+            alvo_econ = econ if not (use_e and sig_e > 0) else np.zeros_like(eta)
             ccc.terma_hybrid(eta, origin, spacing, fr.source / 10.0, fr.w, fr.u, fr.v, fr.sad / 10.0,
                              psi, fg.u0 / 10.0, fg.v0 / 10.0, fg.du / 10.0, fg.dv / 10.0, tab, tab_step,
-                             depth_sector, exact_threshold * float(psi.max()), e_k, terma, econ)
+                             depth_sector, exact_threshold * float(psi.max()), e_k, terma, alvo_econ)
+            if use_e and sig_e > 0:
+                # contaminação eletrônica com dependência do tamanho de campo: fluência borrada (σ no isocentro)
+                from scipy.ndimage import gaussian_filter
+                psi_e = np.ascontiguousarray(gaussian_filter(psi, sig_e / fg.du, mode="constant"))
+                ccc.terma_hybrid(eta, origin, spacing, fr.source / 10.0, fr.w, fr.u, fr.v, fr.sad / 10.0,
+                                 psi_e, fg.u0 / 10.0, fg.v0 / 10.0, fg.du / 10.0, fg.dv / 10.0, tab, tab_step,
+                                 depth_sector, exact_threshold * float(psi_e.max()), e_k, np.zeros_like(eta), econ)
         dose += ccc.superpose(eta, terma, spacing, fr_mean.w, cones, fr_mean.u, fr_mean.v)
     if use_e:
         dose += params.e_contam_amp * params.e_contam_ref_raw * econ

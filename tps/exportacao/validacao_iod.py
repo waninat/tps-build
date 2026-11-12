@@ -11,7 +11,7 @@ from pydicom.dataset import Dataset
 _RAIZ = [("SOPClassUID", 1), ("SOPInstanceUID", 1), ("Modality", 1), ("PatientName", 2), ("PatientID", 2),
          ("PatientBirthDate", 2), ("PatientSex", 2), ("StudyInstanceUID", 1), ("StudyDate", 2), ("StudyTime", 2),
          ("ReferringPhysicianName", 2), ("StudyID", 2), ("AccessionNumber", 2), ("SeriesInstanceUID", 1),
-         ("SeriesNumber", 2), ("FrameOfReferenceUID", 1), ("PositionReferenceIndicator", 2), ("Manufacturer", 2),
+         ("SeriesNumber", 2), ("Manufacturer", 2),
          ("RTPlanLabel", 1), ("RTPlanDate", 2), ("RTPlanTime", 2), ("RTPlanGeometry", 1), ("ApprovalStatus", 1),
          ("FractionGroupSequence", 1), ("BeamSequence", 1), ("PatientSetupSequence", 1)]
 _FEIXE = [("BeamNumber", 1), ("BeamType", 1), ("RadiationType", 2), ("TreatmentMachineName", 2),
@@ -42,6 +42,8 @@ def _faltas(d: Dataset, regras, onde: str) -> list[str]:
 
 def conferir_rtplan(ds: Dataset) -> list[str]:
     erros = _faltas(ds, _RAIZ, "RTPLAN")
+    if ds.get("RTPlanGeometry") == "PATIENT":               # módulo Frame of Reference: obrigatório só com imagem
+        erros += _faltas(ds, [("FrameOfReferenceUID", 1), ("PositionReferenceIndicator", 2)], "RTPLAN")
     if ds.get("ApprovalStatus") == "APPROVED":
         erros += _faltas(ds, [("ReviewDate", 2), ("ReviewTime", 2), ("ReviewerName", 2)], "RTPLAN")
     if len(str(ds.get("RTPlanLabel", ""))) > 16:

@@ -75,6 +75,7 @@ class Campo:
     taxa_dose: float = 600.0
     alvo_conformado: str | None = None   # estrutura usada na conformação (rastreabilidade)
     margem_mm: float | None = None
+    campo_pai: str | None = None         # sub-campo (field-in-field) de qual campo
 
     def abertura_definida(self) -> bool:
         return self.jaw_y is not None and self.mlc_a is not None and self.mlc_b is not None

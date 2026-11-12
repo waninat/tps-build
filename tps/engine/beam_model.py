@@ -34,6 +34,8 @@ class BeamModelParams:
     e_contam_k_cm: float = 2.0
     e_contam_ref_raw: float = 0.0           # dose bruta em dmax (10×10, 1 MU) usada como escala da contaminação
     head_leakage: float = 0.0               # vazamento do cabeçote (fração da fluência aberta, uniforme)
+    escala_espalhamento: float = 1.0        # kernel = primária + s·(total − primária)  (comissionamento v2)
+    e_contam_sigma_mm: float = 0.0          # >0: contaminação ∝ fluência borrada (cresce com o campo)
     norm_dose_per_mu: float = 1.0           # fator absoluto (Gy/MU por unidade de cálculo)
     ref: dict = field(default_factory=dict)  # condições de calibração
     # Origem do modelo. Só um modelo comissionado (ajustado aos dados medidos, com calibração absoluta) calcula

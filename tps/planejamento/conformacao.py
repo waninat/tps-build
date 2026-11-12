@@ -30,6 +30,9 @@ class Colimacao:
     jaw_y_max_mm: float = 200.0
     jaw_x_max_mm: float = 200.0
     tipo_mlc: str = "MLCX"
+    interdigitacao: bool = True          # MLCi/MLCi2: False (lâmina A não passa a B dos pares vizinhos)
+    extensao_banco_mm: float | None = None   # máx. diferença entre lâminas do mesmo banco (se houver)
+    nome: str = ""
 
     @property
     def n_pares(self) -> int:
@@ -45,16 +48,27 @@ class Colimacao:
         lim = np.concatenate([[0.0], np.cumsum(larg)]) - larg.sum() / 2
         return cls(limites_laminas=lim, tem_jaw_x=bool(col.get("jaw_x", {}).get("present", False)),
                    gap_minimo_mm=float(mlc.get("min_gap_mm") or 0.0),
-                   overtravel_mm=float(mlc.get("max_overtravel_mm") or 150.0), tipo_mlc=mlc.get("dicom_type", "MLCX"))
+                   overtravel_mm=float(mlc.get("max_overtravel_mm") or 150.0), tipo_mlc=mlc.get("dicom_type", "MLCX"),
+                   interdigitacao=bool(mlc.get("interdigitation", True)),
+                   extensao_banco_mm=mlc.get("max_bank_span_mm"), nome=str(raw.get("id", "")))
 
     @classmethod
     def agility(cls) -> "Colimacao":
-        return cls(np.linspace(-200, 200, 81), tem_jaw_x=False, gap_minimo_mm=0.0, overtravel_mm=150.0)
+        return cls(np.linspace(-200, 200, 81), tem_jaw_x=False, gap_minimo_mm=0.0, overtravel_mm=150.0,
+                   interdigitacao=True, nome="Agility")
 
     @classmethod
     def mlci2(cls) -> "Colimacao":
         # Relatório de validação do Monaco (SynergyP06x, MLCi2): LeafGap 5 mm
-        return cls(np.linspace(-200, 200, 41), tem_jaw_x=True, gap_minimo_mm=5.0, overtravel_mm=125.0)
+        return cls(np.linspace(-200, 200, 41), tem_jaw_x=True, gap_minimo_mm=5.0, overtravel_mm=125.0,
+                   interdigitacao=False, nome="MLCi2")
+
+    @classmethod
+    def mlci(cls) -> "Colimacao":
+        # Elekta Precise: MLCi, 40 pares × 10 mm, diafragma X de reserva, sem interdigitação.
+        # gap mínimo e overtravel a CONFIRMAR no comissionamento.
+        return cls(np.linspace(-200, 200, 41), tem_jaw_x=True, gap_minimo_mm=5.0, overtravel_mm=125.0,
+                   interdigitacao=False, nome="MLCi")
 
 
 def pontos_do_alvo(mascara: np.ndarray, x: np.ndarray, y: np.ndarray, z: np.ndarray) -> np.ndarray:

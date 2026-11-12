@@ -23,7 +23,7 @@ from tps.beamdata.csv_loader import load_curves
 from tps.engine.beam_model import BeamModelParams, FluenceGrid, aperture, energy_fluence
 from tps.engine.calc import compute_dose
 from tps.engine.phantom import cax_profile, square_field, water_box
-from tps.physics.kernels import cones_for_spectrum, load_mono
+from tps.physics.kernels import cones_do_modelo, cones_for_spectrum, load_mono
 from tps.physics.spectrum import Spectrum
 
 from tps import paths
@@ -322,7 +322,7 @@ def validate(model: BeamModelParams, beamdir: Path, out_dir: Path, kernels: Path
     m = measured(beamdir)
     pdd_m, scp_m, oar_m, dmax = m["pdd"], m["scp"], m["oar"], m["dmax_mm"]
     nominal, _ = parse_energy(model.ref.get("energia", f"{int(model.energy_mv)}MV"))
-    cones = cones_for_spectrum(load_mono(kernels), Spectrum.mohan(nominal, model.spectrum_hardening_k))
+    cones = cones_do_modelo(load_mono(kernels), model)
     res = {"pdd": {}, "scp": {}, "oar": {}, "dmax_mm": dmax}
     fig, axs = plt.subplots(1, 2, figsize=(12, 4.6))
     raw = {}

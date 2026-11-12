@@ -26,14 +26,17 @@ sob prescrição e aprovação de radio-oncologista, para entrega em aceleradore
 Desenvolvimento incremental em fases. Cada fase entrega software que funciona de ponta a ponta e fecha com
 verificação e validação documentadas:
 
+Ordem definida em 12/11/2026: primeiro o Precise comissionado e o TPS 2D/3D completo (planejamento direto);
+depois o comissionamento do Mevatron; só então o planejamento inverso/modulado.
+
 | Fase | Entrega | Critério de saída |
 |---|---|---|
-| 0 | Fundação: repositório, processo, requisitos, risco, motor herdado do SecDose | Este conjunto de documentos aprovado; testes automáticos rodando no CI |
-| 1 | **3D conformacional ponta a ponta**: CT → contornos → campos conformados → dose → UM → aprovação → RTPLAN/RTDOSE → Mosaiq → entrega em simulador | Testes TRS-430/TECDOC-1583 em água e heterogêneo; plano aceito pelo Mosaiq de teste e entregue no simulador dentro de 3% / 3 mm |
-| 1b | Campos assimétricos com mesa e colimador girados, múltiplos isocentros, soma de planos | Idem, com casos de mama e pelve |
-| 2 | Interface do usuário, banco de pacientes, contorno manual, registro rígido | Avaliação de usabilidade formativa |
-| 3 | IMRT step-and-shoot (otimização de fluência + sequenciamento / DMPO) | TG-119 + CQ paciente-específico |
-| 4 | VMAT; Monte Carlo GPU para dose final | TG-119, MPPG 5.b, comparação com Monaco |
+| 0 | Fundação: repositório, processo, requisitos, risco, motor herdado do SecDose | concluída (nov/2026) |
+| 1 | **Precise 6 MV comissionado + TPS 2D/3D completo**: plano 2D sem CT (fantoma virtual, SAD/SSD); 3D com ajuste de MLC estilo Eclipse, blindagem de órgãos, otimização de colimador e pesos, field-in-field automático (sem cunha); conferência independente de UM por tabela; aprovação; RTPLAN/RTDOSE → Mosaiq | testes TRS-430/TECDOC-1583 no Precise; plano aceito pelo Mosaiq de teste e entregue no simulador: ponto ≤ 3%, gama 3%/3 mm ≥ 95% |
+| 1b | Interface (visualizador, BEV/DRR, edição de campos e lâminas, contorno), banco de pacientes, relatório do plano, campos de setup, soma de planos, envio C-STORE ao Mosaiq | avaliação de usabilidade formativa |
+| 2 | **Comissionamento do Mevatron (Siemens)**: colimação e convenções Siemens, exportação para o Mosaiq | mesmos testes da Fase 1 no Mevatron |
+| 3 | IMRT step-and-shoot (otimização de fluência + sequenciamento) | TG-119 + CQ paciente-específico |
+| 4 | VMAT; Monte Carlo GPU para dose final | TG-119, MPPG 5.b, comparação com Monaco/Eclipse |
 | 5 | Auto-segmentação, funções biológicas, registro deformável | — |
 
 ## 4. Gerência de configuração

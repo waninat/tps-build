@@ -17,7 +17,7 @@ from tps.engine.beam_model import BeamModelParams
 from tps.engine.calc import DoseGrid, compute_dose, segments_from_beam
 from tps.imaging.ct import CTVolume
 from tps.imaging.hu_ed import HUtoED
-from tps.physics.kernels import cones_for_spectrum, load_mono
+from tps.physics.kernels import cones_do_modelo, load_mono
 from tps.physics.spectrum import Spectrum
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,8 +74,7 @@ def compute_segments_dose(ct: CTVolume, segs: list, model: BeamModelParams, curv
     grid = DoseGrid(eta, np.array([x[0], y[0], z[0]]),
                     np.array([x[1] - x[0], y[1] - y[0], z[1] - z[0]]))
     from tps import paths
-    cones = cones_for_spectrum(load_mono(kernels_path or paths.kernels_file()),
-                               Spectrum.mohan(int(model.energy_mv), model.spectrum_hardening_k))
+    cones = cones_do_modelo(load_mono(kernels_path or paths.kernels_file()), model)
     return compute_dose(grid, segs, model, cones, sector_deg=sector_deg,
                         patient_position=ct.patient_position or "HFS")
 

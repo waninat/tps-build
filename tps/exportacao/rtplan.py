@@ -52,7 +52,8 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     if erros:
         raise ValueError("Plano inválido para exportação: " + "; ".join(erros))
     ref = plano.referencia_ct
-    if not ref.get("FrameOfReferenceUID"):
+    sem_imagem = plano.tecnica == "2D"                     # plano 2D: geometria do equipamento, sem CT
+    if not sem_imagem and not ref.get("FrameOfReferenceUID"):
         raise ValueError("Plano sem referência ao CT (FrameOfReferenceUID)")
     agora = dt.datetime.now()
 
@@ -70,11 +71,16 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     for k in ("PatientName", "PatientID", "PatientBirthDate", "PatientSex", "StudyInstanceUID", "StudyID",
               "StudyDate", "StudyTime", "AccessionNumber", "ReferringPhysicianName"):
         setattr(ds, k, ref.get(k, ""))
+    if sem_imagem:
+        ds.PatientID = ds.PatientID or plano.paciente_id
+        ds.StudyInstanceUID = generate_uid()
+        ds.StudyDate, ds.StudyTime = agora.strftime("%Y%m%d"), agora.strftime("%H%M%S")
     ds.Modality = "RTPLAN"
     ds.SeriesInstanceUID = generate_uid()
     ds.SeriesNumber = 1
-    ds.FrameOfReferenceUID = ref["FrameOfReferenceUID"]
-    ds.PositionReferenceIndicator = ""
+    if not sem_imagem:
+        ds.FrameOfReferenceUID = ref["FrameOfReferenceUID"]
+        ds.PositionReferenceIndicator = ""
     ds.Manufacturer = FABRICANTE
     ds.ManufacturerModelName = "TPS"
     ds.SoftwareVersions = __version__
@@ -84,7 +90,7 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     ds.RTPlanLabel = plano.rotulo
     ds.RTPlanName = plano.rotulo
     ds.RTPlanDate, ds.RTPlanTime = agora.strftime("%Y%m%d"), agora.strftime("%H%M%S")
-    ds.RTPlanGeometry = "PATIENT"
+    ds.RTPlanGeometry = "TREATMENT_DEVICE" if sem_imagem else "PATIENT"
     if plano.referencia_rtstruct:
         ds.ReferencedStructureSetSequence = Sequence([_ds(ReferencedSOPClassUID=RTSTRUCT_SOP,
                                                           ReferencedSOPInstanceUID=plano.referencia_rtstruct)])
@@ -159,7 +165,7 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
         cp0.TableTopEccentricAngle = 0.0
         cp0.TableTopEccentricRotationDirection = "NONE"
         cp0.TableTopVerticalPosition = cp0.TableTopLongitudinalPosition = cp0.TableTopLateralPosition = None
-        cp0.IsocenterPosition = [round(float(v), 2) for v in c.isocentro_mm]
+        cp0.IsocenterPosition = None if sem_imagem else [round(float(v), 2) for v in c.isocentro_mm]
         if c.ssd_mm is not None:
             cp0.SourceToSurfaceDistance = round(float(c.ssd_mm), 1)
         cp0.CumulativeMetersetWeight = 0.0
