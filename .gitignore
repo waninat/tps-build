@@ -9,3 +9,6 @@ casos/
 *.dcm
 !tests/dados/**/*.dcm
 casos_teste/
+empacotar/saida/
+*.build/
+*.dist/

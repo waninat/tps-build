@@ -115,7 +115,8 @@ def test_plano_2d_com_compensador_e_envio_dicom(cli):
     assert all(e["status"] == 0 for e in ex["envio"]["enviados"])
     rp = pydicom.dcmread(ex["arquivos"][0])
     assert rp.RTPlanGeometry == "PATIENT"
-    ct = [f for f in ex["arquivos"] if "imagens_" in f and f.endswith(".dcm") and "RS" not in f.split("/")[-1]][0]
+    from pathlib import Path as _P
+    ct = [f for f in ex["arquivos"] if "imagens_" in f and _P(f).name.startswith("CT")][0]
     d = pydicom.dcmread(ct)
     assert d.FrameOfReferenceUID == rp.FrameOfReferenceUID and "FANTOMA VIRTUAL" in d.SeriesDescription
 

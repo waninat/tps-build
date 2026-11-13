@@ -1,0 +1,114 @@
+# Compila o TPS (Nuitka) e gera o instalador do Windows (Inno Setup) a cada envio para a main,
+# ou manualmente em Actions → "Instalador Windows" → Run workflow.
+# O instalador fica em Actions → (execução) → Artifacts → TPS-Setup, e numa Release "v<versão>".
+name: Instalador Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: instalador
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r empacotar/requirements-compilacao.txt
+
+      - name: Testes (Python, antes de compilar)
+        run: python -m pytest -q -x
+
+      - name: Cache do Nuitka
+        uses: actions/cache/restore@v4
+        with:
+          path: ~\AppData\Local\Nuitka
+          key: nuitka-${{ runner.os }}-${{ hashFiles('requirements.txt', 'empacotar/requirements-compilacao.txt') }}-${{ github.sha }}
+          restore-keys: nuitka-${{ runner.os }}-${{ hashFiles('requirements.txt', 'empacotar/requirements-compilacao.txt') }}-
+
+      - name: Compilar (Nuitka)
+        run: python empacotar/compilar.py --jobs 4
+
+      - name: Guardar o cache do Nuitka
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~\AppData\Local\Nuitka
+          key: nuitka-${{ runner.os }}-${{ hashFiles('requirements.txt', 'empacotar/requirements-compilacao.txt') }}-${{ github.sha }}
+
+      - name: Testar o programa compilado
+        shell: pwsh
+        run: |
+          $exe = "empacotar\saida\TPS\TPS-cmd.exe"
+          & $exe --versao; if ($LASTEXITCODE) { exit 1 }
+          & $exe --autoteste 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP\auto.txt"
+          if ($LASTEXITCODE) { Get-Content "$env:RUNNER_TEMP\auto.txt" | Select-Object -Last 20 | ForEach-Object { Write-Output "::error::autoteste: $_" }; exit 1 }
+          $p = Start-Process $exe -ArgumentList "--sem-navegador","--porta","8123","--home","$env:RUNNER_TEMP\home" -PassThru `
+                 -RedirectStandardOutput "$env:RUNNER_TEMP\srv.txt" -RedirectStandardError "$env:RUNNER_TEMP\srv_err.txt"
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep 2
+            try { $r = Invoke-WebRequest "http://127.0.0.1:8123/api/info" -UseBasicParsing; if ($r.StatusCode -eq 200) { $ok = $true; break } } catch {}
+          }
+          try { $pg = Invoke-WebRequest "http://127.0.0.1:8123/" -UseBasicParsing; Write-Host "página: $($pg.StatusCode)" } catch { Write-Host $_ }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-Content "$env:RUNNER_TEMP\srv.txt","$env:RUNNER_TEMP\srv_err.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
+          if (-not $ok) { Write-Error "o servidor compilado não respondeu"; exit 1 }
+
+      - name: Instalador (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress | Out-Null }
+          if (-not (Test-Path $iscc)) { $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source }
+          $v = (Select-String -Path tps\version.py -Pattern '__version__ = "(.+)"').Matches[0].Groups[1].Value
+          "VERSAO=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & $iscc /Q "/DVersao=$v" empacotar\tps.iss
+          if ($LASTEXITCODE) { exit 1 }
+          Get-ChildItem empacotar\saida\*.exe | ForEach-Object { "{0}  {1:N1} MB" -f $_.Name, ($_.Length / 1MB) }
+
+      - name: Testar a instalação silenciosa
+        shell: pwsh
+        run: |
+          $setup = (Get-ChildItem empacotar\saida\TPS-Setup-*.exe)[0].FullName
+          $p = Start-Process $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/LOG=$env:RUNNER_TEMP\inst.log" -Wait -PassThru
+          if ($p.ExitCode) { Get-Content "$env:RUNNER_TEMP\inst.log" | Select-Object -Last 30; exit 1 }
+          & "$env:ProgramFiles\TPS\TPS-cmd.exe" --versao; if ($LASTEXITCODE) { exit 1 }
+          if (-not (Test-Path "$env:ProgramData\TPS")) { Write-Error "pasta de dados não criada"; exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TPS-Setup
+          path: empacotar/saida/TPS-Setup-*.exe
+          retention-days: 30
+
+      - name: Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:VERSAO"
+          $arq = (Get-ChildItem empacotar\saida\TPS-Setup-*.exe)[0].FullName
+          gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) { gh release upload $tag $arq --clobber }
+          else { gh release create $tag $arq --title "TPS $env:VERSAO" --notes "Instalador do Windows (em desenvolvimento: não usar em paciente)." --prerelease }

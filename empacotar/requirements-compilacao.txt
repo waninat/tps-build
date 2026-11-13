@@ -1,0 +1,4 @@
+# Só para compilar o instalador (não é preciso para usar o TPS em Python)
+nuitka==4.3.3
+ordered-set>=4.1
+zstandard>=0.22
