@@ -33,7 +33,7 @@ def _meta(ds, sop):
 
 
 def exportar_volume(pasta: str | Path, hu: np.ndarray, x: np.ndarray, y: np.ndarray, z: np.ndarray,
-                    estruturas: dict, paciente: tuple = ("TESTE^FANTOMA", "FANTOMA02")):
+                    estruturas: dict, paciente: tuple = ("TESTE^FANTOMA", "FANTOMA02"), descricao: str = ""):
     """hu [nz, ny, nx]; estruturas {nome: (máscara [nz,ny,nx], tipo, (r,g,b))}."""
     pasta = Path(pasta)
     pasta.mkdir(parents=True, exist_ok=True)
@@ -48,6 +48,8 @@ def exportar_volume(pasta: str | Path, hu: np.ndarray, x: np.ndarray, y: np.ndar
         ds.StudyDate = ds.SeriesDate = hoje
         ds.StudyID, ds.SeriesNumber, ds.InstanceNumber = "1", 1, k + 1
         ds.PatientPosition = "HFS"
+        if descricao:
+            ds.SeriesDescription = descricao[:64]
         ds.ImageOrientationPatient = [1, 0, 0, 0, 1, 0]
         ds.ImagePositionPatient = [float(x[0]), float(y[0]), float(zz)]
         ds.PixelSpacing = [float(y[1] - y[0]), float(x[1] - x[0])]
@@ -130,13 +132,28 @@ def separacao_variavel(pasta):
                     ("TESTE^SEPARACAO", "FANTOMA03"))
 
 
+def fantoma_agua(pasta, lado_mm: float = 400.0, prof_mm: float = 400.0, voxel_mm: float = 2.0):
+    """Cubo de água para calcular perfis/PDD num TPS (ex.: Monaco) e comparar com o nosso modelo.
+    Superfície anterior em y = 0; 5 cm de ar acima; isocentro sugerido em (0, 100, 0) para SSD 90 ou na superfície."""
+    x = np.arange(-lado_mm / 2 - 20, lado_mm / 2 + 20 + 1e-6, voxel_mm)
+    y = np.arange(-50.0, prof_mm + 20 + 1e-6, voxel_mm)
+    z = np.arange(-lado_mm / 2 - 20, lado_mm / 2 + 20 + 1e-6, voxel_mm)
+    Z, Y, X = np.meshgrid(z, y, x, indexing="ij")
+    agua = (np.abs(X) <= lado_mm / 2) & (np.abs(Z) <= lado_mm / 2) & (Y >= 0) & (Y <= prof_mm)
+    hu = np.where(agua, 0.0, -1000.0).astype(np.float32)
+    exportar_volume(pasta, hu, x, y, z, {"BODY": (agua, "EXTERNAL", (0, 200, 0))}, ("AGUA^FANTOMA", "AGUA40"))
+
+
 def main():
-    out = Path(sys.argv[1] if len(sys.argv) > 1 else "casos_teste")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    out = Path(args[0] if args else "casos_teste")
     from tps import fantoma
     fantoma.gerar_exportacao(out / "cilindro", calcular_dose=False)
     for f in ("RP.dcm", "RD.dcm"):
         (out / "cilindro" / f).unlink(missing_ok=True)
     separacao_variavel(out / "separacao_variavel")
+    if "--agua" in sys.argv:
+        fantoma_agua(out / "agua_40cm")
     print(f"Casos de teste em {out.resolve()}")
 
 

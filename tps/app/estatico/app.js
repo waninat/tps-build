@@ -8,8 +8,9 @@ const E = {
   idx: { axial: 0, coronal: 0, sagital: 0 }, cruz: null,
   wl: { janela: 400, nivel: 40 },
   imgs: {}, sobre: {}, campoSel: null, bev: null, bevSeg: 0, drrImg: null,
-  ocultas: new Set(), dvh: null, arrasto: null,
+  ocultas: new Set(), dvh: null, arrasto: null, token: null, usuario: null,
 };
+try { E.token = sessionStorage.getItem("tps_token"); } catch (e) { /* sem storage */ }
 const ISO_CORES = { 30: "#3355ff", 50: "#00b7ff", 70: "#00e08a", 80: "#9be000", 90: "#ffe100", 95: "#ffae00",
                     100: "#ff7a00", 105: "#ff2d55", 107: "#ff00c8", 110: "#ffffff" };
 
@@ -18,10 +19,12 @@ async function api(metodo, url, corpo, msg) {
   if (msg) ocupado(msg);
   try {
     const op = { method: metodo, headers: {} };
+    if (E.token) op.headers["X-Token"] = E.token;
     if (corpo instanceof FormData) op.body = corpo;
     else if (corpo !== undefined) { op.body = JSON.stringify(corpo); op.headers["Content-Type"] = "application/json"; }
     const r = await fetch(url, op);
     const j = await r.json().catch(() => ({ erro: `Resposta inválida (${r.status})` }));
+    if (r.status === 401 && j.login) { ocupado(null); await entrar(); return api(metodo, url, corpo, msg); }
     if (!r.ok) throw new Error(j.erro || `Erro ${r.status}`);
     return j;
   } finally { if (msg) ocupado(null); }
@@ -32,7 +35,57 @@ function aviso(msg, info = false) {
   const t = $("#toast"); t.textContent = msg; t.className = info ? "info" : "";
   clearTimeout(toastT); toastT = setTimeout(() => t.classList.add("oculto"), info ? 3500 : 8000);
 }
-async function tentar(fn) { try { await fn(); } catch (e) { aviso(e.message); } }
+async function tentar(fn) { try { await fn(); } catch (e) { if (e.message !== "cancelado") aviso(e.message); } }
+
+function modal(titulo, html, { ok = "OK", cancelar = true } = {}) {
+  return new Promise((resolve, reject) => {
+    $("#modal-titulo").textContent = titulo; $("#modal-corpo").innerHTML = html;
+    $("#modal-ok").textContent = ok; $("#modal-cancelar").classList.toggle("oculto", !cancelar);
+    $("#modal").classList.remove("oculto");
+    const campos = $$("#modal-corpo input, #modal-corpo select");
+    if (campos[0]) setTimeout(() => campos[0].focus(), 50);
+    const fechar = (v, erro) => { $("#modal").classList.add("oculto"); $("#modal-ok").onclick = $("#modal-cancelar").onclick = null; erro ? reject(new Error("cancelado")) : resolve(v); };
+    const valores = () => Object.fromEntries(campos.filter(c => c.name).map(c => [c.name, c.value]));
+    $("#modal-ok").onclick = () => fechar(valores());
+    $("#modal-cancelar").onclick = () => fechar(null, true);
+    $("#modal-corpo").onkeydown = (ev) => { if (ev.key === "Enter") fechar(valores()); };
+  });
+}
+
+async function entrar() {
+  const info = E.info || await (await fetch("/api/info")).json();
+  for (;;) {
+    let r;
+    if (info.configurar) {
+      const v = await modal("Primeiro uso: crie o seu usuário",
+        `<p class="pequeno-txt">Será o primeiro físico do sistema, com direito de cadastrar os outros usuários.</p>
+         <label>Login<input name="login"></label><label>Nome completo<input name="nome"></label>
+         <label>Senha (mín. 8 caracteres)<input name="senha" type="password"></label>`, { ok: "Criar", cancelar: false });
+      r = await fetch("/api/configurar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(v) });
+    } else {
+      const v = await modal("Entrar no TPS", `<label>Login<input name="login" autocomplete="username"></label>
+        <label>Senha<input name="senha" type="password" autocomplete="current-password"></label>`, { ok: "Entrar", cancelar: false });
+      r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(v) });
+    }
+    const j = await r.json();
+    if (r.ok) {
+      E.token = j.token; E.usuario = j.usuario; info.configurar = false;
+      try { sessionStorage.setItem("tps_token", j.token); } catch (e) { /* ok */ }
+      mostrarUsuario();
+      return;
+    }
+    aviso(j.erro || "Falha no login");
+  }
+}
+function mostrarUsuario() {
+  if (E.usuario) $("#usuario-txt").textContent = `${E.usuario.nome} · ${E.info ? E.info.papeis[E.usuario.papel] : E.usuario.papel}`;
+}
+
+async function assinatura(acao) {
+  const v = await modal(`Assinar: ${acao}`, `<p class="pequeno-txt">Confirme com a sua senha. A ação fica registrada na
+    trilha de auditoria com o seu nome.</p><label>Senha<input name="senha" type="password"></label>`, { ok: "Assinar" });
+  return v.senha;
+}
 
 // ------------------------------------------------------------------ início
 async function iniciar() {
@@ -40,9 +93,13 @@ async function iniciar() {
   $("#versao").textContent = E.info.versao;
   $("#maquina").innerHTML = E.info.maquinas.map(m => `<option value="${m.id}">${m.nome}</option>`).join("");
   const pm = E.info.maquinas.find(m => m.id === "radioserra_precise"); if (pm) $("#maquina").value = pm.id;
-  $("#planos-salvos").innerHTML = E.info.planos_salvos.map(p => `<option value="${p}">${p.split(/[\\/]/).pop()}</option>`).join("");
-  try { $("#a-usuario").value = localStorage.getItem("tps_usuario") || ""; } catch (e) { /* sem storage */ }
   ligar();
+  if (!E.token) await entrar();
+  else {
+    try { E.usuario = await api("GET", "/api/eu"); } catch (e) { await entrar(); }
+  }
+  mostrarUsuario();
+  await listarPlanos();
   window.addEventListener("resize", () => desenharTudo());
 }
 
@@ -81,17 +138,34 @@ function ligar() {
   $$("[data-arranjo]").forEach(b => b.onclick = () => tentar(() => arranjo(b.dataset.arranjo)));
   $("#b-calc").onclick = () => tentar(calcular);
   $("#b-aprovar").onclick = () => tentar(async () => {
-    try { localStorage.setItem("tps_usuario", $("#a-usuario").value); } catch (e) { /* ok */ }
-    atualizar(await api("POST", `/api/${E.sid}/aprovar`, { usuario: $("#a-usuario").value, papel: $("#a-papel").value }));
+    const senha = await assinatura("aprovar o plano");
+    atualizar(await api("POST", `/api/${E.sid}/aprovar`, { senha }));
     aviso("Plano aprovado e bloqueado para edição", true);
   });
   $("#b-desaprovar").onclick = () => tentar(async () => {
-    const motivo = prompt("Motivo para desaprovar (fica no histórico):"); if (!motivo) return;
-    atualizar(await api("POST", `/api/${E.sid}/desaprovar`, { usuario: $("#a-usuario").value, motivo }));
+    const v = await modal("Desaprovar o plano", `<label>Motivo (fica no histórico)<input name="motivo"></label>
+      <label>Senha<input name="senha" type="password"></label>`, { ok: "Desaprovar" });
+    if (!v.motivo) throw new Error("Informe o motivo");
+    atualizar(await api("POST", `/api/${E.sid}/desaprovar`, v));
   });
   $("#b-exportar").onclick = () => tentar(exportar);
   $("#b-salvar").onclick = () => tentar(async () => aviso("Salvo em " + (await api("POST", `/api/${E.sid}/salvar`)).arquivo, true));
-  $("#b-relatorio").onclick = () => window.open(`/api/${E.sid}/relatorio`, "_blank");
+  $("#b-relatorio").onclick = () => window.open(`/api/${E.sid}/relatorio.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
+  $("#b-sair").onclick = () => tentar(async () => {
+    await api("POST", "/api/logout"); E.token = null;
+    try { sessionStorage.removeItem("tps_token"); } catch (e) { /* ok */ }
+    location.reload();
+  });
+  $("#b-auditoria").onclick = () => tentar(verAuditoria);
+  $("#b-bolus").onclick = () => tentar(async () => {
+    const campos = Array.from($("#bo-campos").selectedOptions).map(o => o.value);
+    atualizar(await api("POST", `/api/${E.sid}/bolus`, { espessura_mm: +$("#bo-esp").value, campos }, "Criando bolus…"));
+  });
+  $("#b-ponto").onclick = () => tentar(async () => {
+    if (!E.cruz) throw new Error("Clique num corte para posicionar a cruz");
+    atualizar(await api("POST", `/api/${E.sid}/ponto`, { nome: $("#pt-nome").value, xyz: E.cruz }));
+    $("#pt-nome").value = "";
+  });
   $("#v-axial .wl").onchange = (e) => { const [j, n] = e.target.value.split(",").map(Number); E.wl = { janela: j, nivel: n }; E.imgs = {}; carregarCortes(); };
   $("#v-axial .t-iso").onchange = () => desenharTudo();
   $("#bev-campo").onchange = () => tentar(() => carregarBev($("#bev-campo").value));
@@ -152,8 +226,13 @@ function atualizar(r) {
     $(sel).value = alvos.includes(atual) ? atual : (sel === "#p-alvo" && r.tipo === "fantoma" ? "" : preferido);
   }
   $("#c-blind").innerHTML = alvos.map(n => `<option>${n}</option>`).join("");
+  const dens = (p && p.densidades) || {};
   $("#lista-estruturas").innerHTML = r.estruturas.map(e => `<li><input type="checkbox" data-est="${e.nome}" ${E.ocultas.has(e.nome) ? "" : "checked"}>
-    <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span></li>`).join("");
+    <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span>
+    <input class="dens ${dens[e.nome] != null ? "ativa" : ""}" data-dens="${e.nome}" title="densidade eletrônica relativa forçada (vazio = do CT)"
+      placeholder="ρe" value="${dens[e.nome] != null ? dens[e.nome] : ""}" ${p && p.estado === "RASCUNHO" ? "" : "disabled"}></li>`).join("");
+  $$("[data-dens]").forEach(c => c.onchange = () => tentar(async () =>
+    atualizar(await api("POST", `/api/${E.sid}/densidade`, { estrutura: c.dataset.dens, valor: c.value.trim() || null }))));
   $$("[data-est]").forEach(c => c.onchange = () => { c.checked ? E.ocultas.delete(c.dataset.est) : E.ocultas.add(c.dataset.est); desenharTudo(); desenharDvh(); });
   $("#iso-txt").textContent = r.isocentro ? r.isocentro.map(v => v.toFixed(1)).join(", ") : "—";
   // estados dos botões
@@ -168,6 +247,17 @@ function atualizar(r) {
   $("#b-exportar").disabled = !aprovado;
   $("#b-salvar").disabled = !temPlano; $("#b-relatorio").disabled = !temPlano;
   $$("[data-arranjo]").forEach(b => b.disabled = !temPlano || aprovado);
+  $("#b-ponto").disabled = !temPlano; $("#b-bolus").disabled = !temPlano || aprovado;
+  $("#bo-campos").innerHTML = p ? p.campos.filter(c => !c.campo_pai).map(c => `<option>${c.nome}</option>`).join("") : "";
+  $("#lista-bolus").innerHTML = p ? p.bolus.map(b => `<li>${b.nome} · ${b.volume_cc} cc · ${b.campos.join(", ")}
+    ${aprovado ? "" : `<button class="pequeno" data-rem-bolus="${b.nome}">remover</button>`}</li>`).join("") : "";
+  $$("[data-rem-bolus]").forEach(b => b.onclick = () => tentar(async () => atualizar(await api("DELETE", `/api/${E.sid}/bolus/${encodeURIComponent(b.dataset.remBolus)}`))));
+  $("#tab-pontos tbody").innerHTML = p ? p.pontos.map(q => `<tr title="${Object.entries(q.campos || {}).map(([n, d]) => n + ": " + d + " Gy").join(" | ")}">
+    <td>${q.nome}</td><td>${f1(q.total_gy, 2)}</td><td>${f1(q.pct)}</td><td><button data-ir="${q.xyz}">ir</button>
+    <button data-rem-pt="${q.nome}">×</button></td></tr>`).join("") : "";
+  $$("[data-ir]").forEach(b => b.onclick = () => irPara(b.dataset.ir.split(",").map(Number)));
+  $$("[data-rem-pt]").forEach(b => b.onclick = () => tentar(async () => atualizar(await api("DELETE", `/api/${E.sid}/ponto/${encodeURIComponent(b.dataset.remPt)}`))));
+  doseCruz();
   listarCampos(); tabelas();
   $("#avisos").innerHTML = (r.avisos || []).map(a => `<li>${a}</li>`).join("");
   $("#log").innerHTML = (r.log || []).slice().reverse().map(a => `<li>${a}</li>`).join("");
@@ -260,8 +350,10 @@ async function calcular() {
 async function exportar() {
   const corpo = { modo_segmentos: $("#e-modo").value, pasta: $("#e-pasta").value.trim() || null };
   if ($("#m-enviar").checked) corpo.enviar = { host: $("#m-host").value, porta: +$("#m-porta").value, ae_destino: $("#m-ae").value };
+  corpo.senha = await assinatura("exportar o plano");
+  if ($("#e-imagens").checked) corpo.incluir_imagens = true;
   const r = await api("POST", `/api/${E.sid}/exportar`, corpo, "Exportando…");
-  $("#exportados").innerHTML = r.arquivos.map(a => `<div><a href="/api/${E.sid}/arquivo?caminho=${encodeURIComponent(a)}">${a.split(/[\\/]/).pop()}</a></div>`).join("") +
+  $("#exportados").innerHTML = r.arquivos.filter(a => !/imagens_/.test(a)).map(a => `<div><a href="/api/${E.sid}/arquivo?t=${encodeURIComponent(E.token)}&caminho=${encodeURIComponent(a)}">${a.split(/[\\/]/).pop()}</a></div>`).join("") +
     (r.envio ? `<div class="ok">Enviado: ${r.envio.enviados.length} arquivo(s)</div>` : "") + `<div class="pequeno-txt">${r.pasta}</div>`;
   aviso("RTPLAN exportado e conferido", true);
 }
@@ -317,7 +409,7 @@ function carregarCorte(vista) {
   if (!E.imgs[chave]) {
     const img = new Image();
     img.onload = () => desenharCorte(vista);
-    img.src = `/api/${E.sid}/corte/${vista}/${i}.png?janela=${E.wl.janela}&nivel=${E.wl.nivel}`;
+    img.src = `/api/${E.sid}/corte/${vista}/${i}.png?janela=${E.wl.janela}&nivel=${E.wl.nivel}&t=${encodeURIComponent(E.token)}`;
     E.imgs[chave] = img;
   }
   carregarSobreVista(vista);
@@ -427,7 +519,7 @@ function clicarCorte(vista, ev) {
   c[k[EIXO_IDX[vista]]] = posDoIdx(vista, E.idx[vista]);
   E.cruz = c.map(v => Math.round(v * 10) / 10);
   for (const outra of Object.keys(VISTAS)) if (outra !== vista) E.idx[outra] = idxDaPos(outra, E.cruz[k[EIXO_IDX[outra]]]);
-  carregarCortes();
+  carregarCortes(); doseCruz();
   if ($("#p-metodo").value === "ponto" && ev.shiftKey) { $("#p-px").value = E.cruz[0]; $("#p-py").value = E.cruz[1]; $("#p-pz").value = E.cruz[2]; }
 }
 
@@ -440,7 +532,7 @@ async function carregarBev(nome) {
   $("#bev-seg").classList.toggle("oculto", ns === 0);
   $("#bev-seg-r").max = Math.max(0, ns); $("#bev-seg-r").value = 0;
   if ($("#t-drr").checked) {
-    const img = new Image(); img.onload = () => desenharBev(); img.src = `/api/${E.sid}/drr/${encodeURIComponent(nome)}.png?t=${Date.now()}`; E.drrImg = img;
+    const img = new Image(); img.onload = () => desenharBev(); img.src = `/api/${E.sid}/drr/${encodeURIComponent(nome)}.png?t=${encodeURIComponent(E.token)}&r=${Date.now()}`; E.drrImg = img;
   } else E.drrImg = null;
   desenharBev();
 }
@@ -554,6 +646,44 @@ function desenharDvh() {
     g.stroke();
   }
   g.fillStyle = "#8b95a3"; g.fillText("Gy", w - 18, h - 8); g.fillText("%", 4, 10);
+}
+
+async function doseCruz() {
+  const el = $("#dose-cruz");
+  if (!E.cruz) { el.textContent = "Clique num corte"; return; }
+  const pos = `(${E.cruz.map(v => v.toFixed(1)).join(", ")}) mm`;
+  if (!E.resumo || !E.resumo.dose_atualizada) { el.textContent = pos; return; }
+  try {
+    const d = await api("GET", `/api/${E.sid}/dose?x=${E.cruz[0]}&y=${E.cruz[1]}&z=${E.cruz[2]}`);
+    el.innerHTML = d.total_gy == null ? pos + " — fora da grade" :
+      `${pos} · <b>${d.total_gy.toFixed(2)} Gy</b> (${d.pct.toFixed(1)}%)<br>` +
+      Object.entries(d.campos).map(([n, v]) => `${n} ${v.toFixed(2)}`).join(" · ");
+  } catch (e) { el.textContent = pos; }
+}
+
+async function listarPlanos() {
+  try {
+    const ps = await api("GET", "/api/planos");
+    $("#planos-salvos").innerHTML = ps.map(p => `<option value="${p.arquivo}">${p.paciente_id} · ${p.rotulo} · ${p.estado} · ${p.atualizado.slice(0, 16).replace("T", " ")}</option>`).join("");
+  } catch (e) { /* sem planos */ }
+}
+
+async function verAuditoria() {
+  const a = await api("GET", "/api/auditoria");
+  const us = await api("GET", "/api/usuarios");
+  const v = a.verificacao;
+  const html = `<p class="${v.integra ? "selo-ok" : "selo-falha"}">${v.integra ? "Trilha íntegra" : "TRILHA ADULTERADA no registro " + v.registro}
+    (${v.verificados} registros conferidos pelo encadeamento de hashes)</p>
+    <table><thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Caso</th></tr></thead><tbody>
+    ${a.registros.slice(0, 80).map(r => `<tr><td>${r.quando.replace("T", " ")}</td><td>${r.usuario || ""}</td><td>${r.acao}</td><td>${r.caso || ""}</td></tr>`).join("")}
+    </tbody></table>
+    <h3>Usuários</h3><table><tbody>${us.map(u => `<tr><td>${u.login}</td><td>${u.nome}</td><td>${E.info.papeis[u.papel]}</td><td>${u.ativo ? "ativo" : "inativo"}</td></tr>`).join("")}</tbody></table>
+    <h3>Novo usuário (opcional)</h3><div class="linha2"><label>Login<input name="login"></label><label>Nome<input name="nome"></label></div>
+    <div class="linha2"><label>Papel<select name="papel">${Object.entries(E.info.papeis).map(([k, n]) => `<option value="${k}">${n}</option>`).join("")}</select></label>
+    <label>Senha inicial<input name="senha" type="password"></label></div>
+    <label>Sua senha (para autorizar)<input name="senha_admin" type="password"></label>`;
+  const r = await modal("Auditoria e usuários", html, { ok: "Criar usuário / fechar" });
+  if (r && r.login) { await api("POST", "/api/usuarios", r); aviso(`Usuário ${r.login} criado`, true); }
 }
 
 iniciar().catch(e => aviso(e.message));

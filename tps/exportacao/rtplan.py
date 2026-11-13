@@ -76,8 +76,8 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     if erros:
         raise ValueError("Plano inválido para exportação: " + "; ".join(erros))
     ref = plano.referencia_ct
-    sem_imagem = plano.tecnica == "2D"                     # plano 2D: geometria do equipamento, sem CT
-    if not sem_imagem and not ref.get("FrameOfReferenceUID"):
+    sem_imagem = not ref.get("FrameOfReferenceUID")       # sem CT: geometria do equipamento
+    if sem_imagem and plano.tecnica != "2D":
         raise ValueError("Plano sem referência ao CT (FrameOfReferenceUID)")
     agora = dt.datetime.now()
 
@@ -164,7 +164,9 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
             raise ValueError(f"{nome}: UM abaixo de 0,1")
         fg.ReferencedBeamSequence.append(_ds(ReferencedBeamNumber=nb, BeamMeterset=round(mu, 1)))
         b = Dataset()
-        b.BeamNumber, b.BeamName, b.BeamDescription = nb, nome[:16], nome
+        bol = [x for x in plano.bolus if not x.get("campos") or c.nome in x["campos"] or (c.campo_pai or "") in x["campos"]]
+        b.BeamNumber, b.BeamName = nb, nome[:16]
+        b.BeamDescription = (nome + "".join(f" BOLUS {x['espessura_mm']:g}mm" for x in bol))[:64]
         b.TreatmentMachineName = plano.nome_dicom_maquina
         b.PrimaryDosimeterUnit = "MU"
         b.SourceAxisDistance = float(sad_mm)

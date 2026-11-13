@@ -99,6 +99,9 @@ class Plano:
     estado: str = "RASCUNHO"
     aprovacao: dict | None = None
     historico: list[dict] = field(default_factory=list)
+    densidades: dict = field(default_factory=dict)          # estrutura → densidade eletrônica relativa forçada
+    bolus: list = field(default_factory=list)               # [{"nome", "espessura_mm", "campos"}]
+    pontos: list = field(default_factory=list)              # [{"nome", "xyz"}] pontos de referência
 
     # ------------------------------------------------------------------ edição controlada
     def _exigir_rascunho(self):
@@ -122,7 +125,7 @@ class Plano:
     def conteudo(self) -> dict:
         """Tudo o que define o tratamento (sem estado/aprovação/histórico): base do hash."""
         d = asdict(self)
-        for k in ("estado", "aprovacao", "historico"):
+        for k in ("estado", "aprovacao", "historico", "pontos"):
             d.pop(k)
         return _normalizar(d)
 

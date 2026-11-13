@@ -115,3 +115,18 @@ tr.sub td:first-child { padding-left: 14px; color: var(--fraco); }
   border: 1px solid var(--perigo); color: #ffd6da; padding: 9px 16px; border-radius: 6px; z-index: 11;
   max-width: 70vw; }
 #toast.info { background: #13283a; border-color: var(--acento); color: #d6ecff; }
+
+.usuario { color: var(--fraco); font-size: 12px; }
+#lista-estruturas input.dens { width: 46px; padding: 1px 3px; font-size: 11px; margin-left: 4px; }
+#lista-estruturas input.dens.ativa { border-color: var(--aviso); color: var(--aviso); }
+.linha-ponto { display: flex; gap: 6px; }
+.linha-ponto input { flex: 1; }
+#tab-pontos td button { padding: 0 5px; font-size: 11px; }
+#lista-bolus { padding-left: 16px; margin: 4px 0; }
+#modal { position: fixed; inset: 0; background: rgba(5, 8, 12, .7); display: flex; align-items: center;
+  justify-content: center; z-index: 12; }
+#modal .caixa { background: var(--painel); border: 1px solid var(--borda); border-radius: 8px; padding: 18px 20px;
+  width: min(560px, 92vw); max-height: 86vh; overflow-y: auto; }
+#modal h2 { margin: 0 0 10px; font-size: 16px; }
+#modal table td { font-size: 11px; }
+.selo-ok { color: var(--ok); } .selo-falha { color: var(--perigo); }

@@ -14,7 +14,10 @@
   <div class="espaco"></div>
   <span class="nao-clinico">Em desenvolvimento — não usar em paciente</span>
   <button id="b-salvar" disabled>Salvar plano</button>
-  <button id="b-relatorio" disabled>Relatório</button>
+  <button id="b-relatorio" disabled>Relatório PDF</button>
+  <button id="b-auditoria" title="Trilha de auditoria e usuários">Auditoria</button>
+  <span id="usuario-txt" class="usuario"></span>
+  <button id="b-sair" class="pequeno">Sair</button>
 </header>
 
 <main>
@@ -47,7 +50,7 @@
       <button id="b-fantoma" class="primario">Criar fantoma virtual</button>
     </div>
     <div class="painel-aba oculto" id="aba-abrir">
-      <select id="planos-salvos" size="5"></select>
+      <select id="planos-salvos" size="6"></select>
       <button id="b-abrir">Abrir</button>
     </div>
   </details>
@@ -85,6 +88,14 @@
       <button class="pequeno" data-arranjo="tres">3 campos</button>
     </div>
     <table id="tab-campos"><thead><tr><th>Campo</th><th>G</th><th>C</th><th>UM</th><th>Seg</th></tr></thead><tbody></tbody></table>
+    <details class="sub" id="sec-bolus"><summary>Bolus</summary>
+      <div class="linha2">
+        <label>Espessura (mm)<input id="bo-esp" type="number" value="5" min="2" max="30"></label>
+        <label>Campos<select id="bo-campos" multiple size="2"></select></label>
+      </div>
+      <button id="b-bolus" class="pequeno">Criar bolus nos campos</button>
+      <ul id="lista-bolus" class="pequeno-txt"></ul>
+    </details>
     <fieldset id="form-campo" disabled>
       <div class="linha3">
         <label>Nome<input id="c-nome" maxlength="16"></label>
@@ -145,10 +156,7 @@
   </details>
 
   <details id="sec-aprov"><summary>5 · Aprovação e exportação</summary>
-    <div class="linha2">
-      <label>Usuário<input id="a-usuario"></label>
-      <label>Papel<select id="a-papel"><option>Físico Médico</option><option>Radio-oncologista</option></select></label>
-    </div>
+    <div class="pequeno-txt">Aprovar, desaprovar e exportar pedem a sua senha (assinatura).</div>
     <div class="botoes">
       <button id="b-aprovar" class="primario" disabled>Aprovar</button>
       <button id="b-desaprovar" disabled>Desaprovar…</button>
@@ -165,6 +173,7 @@
       </div>
       <label class="check"><input id="m-enviar" type="checkbox"> enviar ao exportar</label>
     </details>
+    <label class="check"><input id="e-imagens" type="checkbox"> incluir CT e RTSTRUCT (sempre no plano 2D)</label>
     <button id="b-exportar" class="primario" disabled>Exportar RTPLAN</button>
     <div id="exportados"></div>
   </details>
@@ -204,6 +213,11 @@
   <h3>Dose</h3>
   <div id="resumo-dose" class="pequeno-txt">—</div>
   <table id="tab-estat"><thead><tr><th>Estrutura</th><th>Dméd</th><th>D95</th><th>D2</th><th>Dmax</th></tr></thead><tbody></tbody></table>
+  <h3>Cruz</h3>
+  <div id="dose-cruz" class="pequeno-txt">Clique num corte</div>
+  <h3>Pontos de referência</h3>
+  <div class="linha-ponto"><input id="pt-nome" placeholder="nome"><button id="b-ponto" class="pequeno" disabled>+ na cruz</button></div>
+  <table id="tab-pontos"><thead><tr><th>Ponto</th><th>Gy</th><th>%</th><th></th></tr></thead><tbody></tbody></table>
   <h3>UM e conferência independente</h3>
   <table id="tab-um"><thead><tr><th>Campo</th><th>UM</th><th>SSD</th><th>Tabela</th></tr></thead><tbody></tbody></table>
   <h3>Avisos</h3>
@@ -211,6 +225,11 @@
   <details class="sub"><summary>Registro</summary><ul id="log" class="pequeno-txt"></ul></details>
 </aside>
 </main>
+<div id="modal" class="oculto"><div class="caixa">
+  <h2 id="modal-titulo"></h2>
+  <div id="modal-corpo"></div>
+  <div class="botoes"><button id="modal-ok" class="primario">OK</button><button id="modal-cancelar">Cancelar</button></div>
+</div></div>
 <div id="ocupado" class="oculto"><div class="girando"></div><span id="ocupado-txt">Calculando…</span></div>
 <div id="toast" class="oculto"></div>
 <script src="/estatico/app.js"></script>
