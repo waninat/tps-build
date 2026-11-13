@@ -32,21 +32,49 @@ def _meta(ds, sop):
     ds.file_meta.MediaStorageSOPInstanceUID = ds.SOPInstanceUID
 
 
+def _quadrado(hu, x, y, estruturas):
+    """Completa com ar até a imagem ficar quadrada (Rows = Columns): o Monaco/XiO não importa corte retangular."""
+    ny, nx = hu.shape[1:]
+    n = max(nx, ny)
+    if n % 2:
+        n += 1
+    dx, dy = float(x[1] - x[0]), float(y[1] - y[0])
+
+    def eixo(v, d, falta):
+        a = falta // 2
+        return np.concatenate([v[0] - d * np.arange(a, 0, -1), v, v[-1] + d * np.arange(1, falta - a + 1)]), a
+    x2, ax = eixo(x, dx, n - nx)
+    y2, ay = eixo(y, dy, n - ny)
+    pad = ((0, 0), (ay, n - ny - ay), (ax, n - nx - ax))
+    hu2 = np.pad(hu, pad, constant_values=-1000.0)
+    est2 = {k: (np.pad(m, pad, constant_values=False), *resto) for k, (m, *resto) in estruturas.items()}
+    return hu2, x2, y2, est2
+
+
 def exportar_volume(pasta: str | Path, hu: np.ndarray, x: np.ndarray, y: np.ndarray, z: np.ndarray,
                     estruturas: dict, paciente: tuple = ("TESTE^FANTOMA", "FANTOMA02"), descricao: str = ""):
     """hu [nz, ny, nx]; estruturas {nome: (máscara [nz,ny,nx], tipo, (r,g,b))}."""
     pasta = Path(pasta)
     pasta.mkdir(parents=True, exist_ok=True)
+    hu, x, y, estruturas = _quadrado(hu, x, y, estruturas)
     estudo, serie, frame = generate_uid(), generate_uid(), generate_uid()
     hoje = dt.date.today().strftime("%Y%m%d")
+    agora = dt.datetime.now().strftime("%H%M%S")
     uids = []
     for k, zz in enumerate(z):
         ds = Dataset()
         _meta(ds, CT_SOP)
         ds.Modality, ds.PatientName, ds.PatientID, ds.PatientBirthDate, ds.PatientSex = "CT", *paciente, "", "O"
         ds.StudyInstanceUID, ds.SeriesInstanceUID, ds.FrameOfReferenceUID = estudo, serie, frame
-        ds.StudyDate = ds.SeriesDate = hoje
-        ds.StudyID, ds.SeriesNumber, ds.InstanceNumber = "1", 1, k + 1
+        ds.SpecificCharacterSet = "ISO_IR 100"
+        ds.StudyDate = ds.SeriesDate = ds.ContentDate = ds.AcquisitionDate = ds.InstanceCreationDate = hoje
+        ds.StudyTime = ds.SeriesTime = ds.ContentTime = ds.AcquisitionTime = ds.InstanceCreationTime = agora
+        ds.StudyID, ds.SeriesNumber, ds.InstanceNumber, ds.AcquisitionNumber = "1", 1, k + 1, 1
+        ds.AccessionNumber, ds.ReferringPhysicianName, ds.PositionReferenceIndicator = "", "", ""
+        ds.Manufacturer, ds.ManufacturerModelName, ds.StationName = "TPS", "Fantoma sintetico", "TPS"
+        ds.ImageType = ["ORIGINAL", "PRIMARY", "AXIAL"]
+        ds.KVP, ds.SliceLocation = 120, float(zz)
+        ds.WindowCenter, ds.WindowWidth = 40, 400
         ds.PatientPosition = "HFS"
         if descricao:
             ds.SeriesDescription = descricao[:64]
@@ -56,16 +84,19 @@ def exportar_volume(pasta: str | Path, hu: np.ndarray, x: np.ndarray, y: np.ndar
         ds.SliceThickness = float(z[1] - z[0])
         ds.Rows, ds.Columns = len(y), len(x)
         ds.SamplesPerPixel, ds.PhotometricInterpretation = 1, "MONOCHROME2"
-        ds.BitsAllocated, ds.BitsStored, ds.HighBit, ds.PixelRepresentation = 16, 16, 15, 1
-        ds.RescaleIntercept, ds.RescaleSlope = 0, 1
-        ds.PixelData = np.round(hu[k]).astype("<i2").tobytes()
+        # sem sinal com intercepto -1024 (o formato mais comum de tomógrafo; alguns importadores não aceitam com sinal)
+        ds.BitsAllocated, ds.BitsStored, ds.HighBit, ds.PixelRepresentation = 16, 12, 11, 0
+        ds.RescaleIntercept, ds.RescaleSlope, ds.RescaleType = -1024, 1, "HU"
+        ds.PixelData = np.clip(np.round(hu[k]) + 1024, 0, 4095).astype("<u2").tobytes()
         ds.save_as(pasta / f"CT{k + 1:04d}.dcm", enforce_file_format=True)
         uids.append(ds.SOPInstanceUID)
     rs = Dataset()
     _meta(rs, RS_SOP)
     rs.Modality, rs.PatientName, rs.PatientID, rs.PatientBirthDate, rs.PatientSex = "RTSTRUCT", *paciente, "", "O"
     rs.StudyInstanceUID, rs.SeriesInstanceUID = estudo, generate_uid()
-    rs.StudyDate = hoje
+    rs.SpecificCharacterSet = "ISO_IR 100"
+    rs.StudyDate, rs.StudyTime, rs.StudyID, rs.SeriesNumber = hoje, agora, "1", 2
+    rs.AccessionNumber, rs.ReferringPhysicianName, rs.Manufacturer = "", "", "TPS"
     rs.StructureSetLabel, rs.StructureSetDate = "TESTE", hoje
     fr = Dataset()
     fr.FrameOfReferenceUID = frame
@@ -141,7 +172,8 @@ def fantoma_agua(pasta, lado_mm: float = 400.0, prof_mm: float = 400.0, voxel_mm
     Z, Y, X = np.meshgrid(z, y, x, indexing="ij")
     agua = (np.abs(X) <= lado_mm / 2) & (np.abs(Z) <= lado_mm / 2) & (Y >= 0) & (Y <= prof_mm)
     hu = np.where(agua, 0.0, -1000.0).astype(np.float32)
-    exportar_volume(pasta, hu, x, y, z, {"BODY": (agua, "EXTERNAL", (0, 200, 0))}, ("AGUA^FANTOMA", "AGUA40"))
+    exportar_volume(pasta, hu, x, y, z, {"BODY": (agua, "EXTERNAL", (0, 200, 0))}, ("AGUA^FANTOMA40", "AGUA40"),
+                    descricao="Fantoma de agua 40x40x40 cm")
 
 
 def main():
