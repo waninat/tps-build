@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TPS — planejamento</title>
+<link rel="stylesheet" href="/estatico/estilo.css">
+</head>
+<body>
+<header id="topo">
+  <div class="marca">TPS <span id="versao"></span></div>
+  <div id="caso-nome" class="caso">Nenhum caso aberto</div>
+  <div id="estado" class="selo">—</div>
+  <div class="espaco"></div>
+  <span class="nao-clinico">Em desenvolvimento — não usar em paciente</span>
+  <button id="b-salvar" disabled>Salvar plano</button>
+  <button id="b-relatorio" disabled>Relatório</button>
+</header>
+
+<main>
+<aside id="esquerda">
+  <details open id="sec-caso"><summary>1 · Caso</summary>
+    <div class="abas">
+      <button class="aba ativa" data-aba="ct">CT + RTSTRUCT</button>
+      <button class="aba" data-aba="fantoma">2D (sem CT)</button>
+      <button class="aba" data-aba="abrir">Abrir plano</button>
+    </div>
+    <div class="painel-aba" id="aba-ct">
+      <label>Pasta com CT e RTSTRUCT (neste computador)
+        <input id="ct-pasta" placeholder="C:\Exportados\Paciente123"></label>
+      <button id="b-ct" class="primario">Carregar pasta</button>
+      <label class="arquivo">ou escolher a pasta…
+        <input id="ct-upload" type="file" webkitdirectory multiple></label>
+    </div>
+    <div class="painel-aba oculto" id="aba-fantoma">
+      <div class="linha2">
+        <label>Paciente (ID)<input id="f-id"></label>
+        <label>Nome<input id="f-nome"></label>
+      </div>
+      <label>Forma
+        <select id="f-tipo"><option value="elipse">Elipse</option><option value="caixa">Caixa</option></select></label>
+      <div class="linha3">
+        <label>Largura (cm)<input id="f-larg" type="number" value="34" step="0.5"></label>
+        <label>Separação AP (cm)<input id="f-esp" type="number" value="22" step="0.5"></label>
+        <label>Compr. (cm)<input id="f-comp" type="number" value="30" step="1"></label>
+      </div>
+      <button id="b-fantoma" class="primario">Criar fantoma virtual</button>
+    </div>
+    <div class="painel-aba oculto" id="aba-abrir">
+      <select id="planos-salvos" size="5"></select>
+      <button id="b-abrir">Abrir</button>
+    </div>
+  </details>
+
+  <details open id="sec-plano"><summary>2 · Máquina e prescrição</summary>
+    <label>Máquina <select id="maquina"></select></label>
+    <div class="linha3">
+      <label>Rótulo<input id="p-rotulo" value="PLANO1" maxlength="16"></label>
+      <label>Dose (Gy)<input id="p-dose" type="number" value="50" step="0.1"></label>
+      <label>Frações<input id="p-fx" type="number" value="25"></label>
+    </div>
+    <label>Alvo <select id="p-alvo"></select></label>
+    <label>Normalização
+      <select id="p-metodo">
+        <option value="media_alvo">Média do alvo = 100%</option>
+        <option value="isocentro">Isocentro = 100%</option>
+        <option value="ponto">Ponto (x, y, z)</option>
+      </select></label>
+    <div class="linha3" id="p-ponto-linha">
+      <label>x<input id="p-px" type="number" value="0"></label>
+      <label>y<input id="p-py" type="number" value="0"></label>
+      <label>z<input id="p-pz" type="number" value="0"></label>
+    </div>
+    <button id="b-plano" class="primario" disabled>Criar plano</button>
+    <div class="isocentro">Isocentro (mm): <span id="iso-txt">—</span>
+      <button id="b-iso" class="pequeno" title="Usar a posição da cruz no corte axial" disabled>usar cruz</button></div>
+  </details>
+
+  <details open id="sec-campos"><summary>3 · Campos</summary>
+    <div class="modelos">
+      <span>Arranjos:</span>
+      <button class="pequeno" data-arranjo="appa">AP/PA</button>
+      <button class="pequeno" data-arranjo="lat">Laterais</button>
+      <button class="pequeno" data-arranjo="caixa">Caixa 4</button>
+      <button class="pequeno" data-arranjo="tres">3 campos</button>
+    </div>
+    <table id="tab-campos"><thead><tr><th>Campo</th><th>G</th><th>C</th><th>UM</th><th>Seg</th></tr></thead><tbody></tbody></table>
+    <fieldset id="form-campo" disabled>
+      <div class="linha3">
+        <label>Nome<input id="c-nome" maxlength="16"></label>
+        <label>Gantry<input id="c-gantry" type="number" value="0"></label>
+        <label>Colimador<input id="c-col" type="number" value="0"></label>
+      </div>
+      <div class="linha3">
+        <label>Mesa<input id="c-mesa" type="number" value="0"></label>
+        <label>Peso<input id="c-peso" type="number" value="1" step="0.05"></label>
+        <label>Modo<select id="c-modo"><option value="conformado">Conformado</option><option value="retangular">Retangular</option></select></label>
+      </div>
+      <div id="c-conformado">
+        <label>Conformar a <select id="c-alvo"></select></label>
+        <div class="linha4">
+          <label>X1<input id="c-x1m" type="number" value="7"></label>
+          <label>X2<input id="c-x2m" type="number" value="7"></label>
+          <label>Y1<input id="c-y1m" type="number" value="7"></label>
+          <label>Y2<input id="c-y2m" type="number" value="7"></label>
+        </div>
+        <label>Ponto de encontro lâmina–contorno
+          <select id="c-encontro">
+            <option value="fora">Fora (cobre todo o alvo)</option>
+            <option value="area">Área 50% (menor erro)</option>
+            <option value="meio">Meio da lâmina</option>
+            <option value="dentro">Dentro (não expõe tecido)</option>
+          </select></label>
+        <label>Proteger (blindagem)<select id="c-blind" multiple size="3"></select></label>
+        <div class="linha2">
+          <label>Margem da blindagem (mm)<input id="c-blind-m" type="number" value="3"></label>
+          <label class="check"><input id="c-otcol" type="checkbox"> otimizar colimador</label>
+        </div>
+      </div>
+      <div id="c-retangular" class="oculto">
+        <div class="linha4">
+          <label>X1 (cm)<input id="c-x1" type="number" value="5" step="0.5"></label>
+          <label>X2 (cm)<input id="c-x2" type="number" value="5" step="0.5"></label>
+          <label>Y1 (cm)<input id="c-y1" type="number" value="5" step="0.5"></label>
+          <label>Y2 (cm)<input id="c-y2" type="number" value="5" step="0.5"></label>
+        </div>
+      </div>
+      <div class="botoes">
+        <button id="b-campo" class="primario">Adicionar campo</button>
+        <button id="b-campo-novo">Novo</button>
+        <button id="b-campo-rem" class="perigo">Remover</button>
+      </div>
+    </fieldset>
+  </details>
+
+  <details open id="sec-calc"><summary>4 · Cálculo</summary>
+    <label class="check"><input id="o-pesos" type="checkbox"> otimizar pesos dos campos</label>
+    <label class="check"><input id="o-fif" type="checkbox"> field-in-field automático</label>
+    <label class="check"><input id="o-comp" type="checkbox"> compensador de fluência</label>
+    <div class="linha2">
+      <label>Níveis do compensador<input id="o-niveis" type="number" value="6" min="2" max="12"></label>
+      <label>UM mín. por segmento<input id="o-ummin" type="number" value="2" step="0.5"></label>
+    </div>
+    <button id="b-calc" class="primario grande" disabled>Calcular dose</button>
+  </details>
+
+  <details id="sec-aprov"><summary>5 · Aprovação e exportação</summary>
+    <div class="linha2">
+      <label>Usuário<input id="a-usuario"></label>
+      <label>Papel<select id="a-papel"><option>Físico Médico</option><option>Radio-oncologista</option></select></label>
+    </div>
+    <div class="botoes">
+      <button id="b-aprovar" class="primario" disabled>Aprovar</button>
+      <button id="b-desaprovar" disabled>Desaprovar…</button>
+    </div>
+    <label>Campos com segmentos exportados como
+      <select id="e-modo"><option value="campos_separados">um campo por segmento (seguro)</option>
+        <option value="step_and_shoot">step-and-shoot (testar no Mosaiq)</option></select></label>
+    <label>Pasta de destino (vazio = pasta do TPS)<input id="e-pasta"></label>
+    <details class="sub"><summary>Enviar ao Mosaiq (DICOM)</summary>
+      <div class="linha3">
+        <label>Host/IP<input id="m-host"></label>
+        <label>Porta<input id="m-porta" type="number" value="104"></label>
+        <label>AE destino<input id="m-ae" value="MOSAIQ"></label>
+      </div>
+      <label class="check"><input id="m-enviar" type="checkbox"> enviar ao exportar</label>
+    </details>
+    <button id="b-exportar" class="primario" disabled>Exportar RTPLAN</button>
+    <div id="exportados"></div>
+  </details>
+</aside>
+
+<section id="centro">
+  <div class="vista grande" id="v-axial">
+    <div class="vista-topo"><b>Axial</b><span class="pos"></span>
+      <select class="wl"><option value="400,40">Tecidos moles</option><option value="1500,-600">Pulmão</option><option value="2000,400">Osso</option></select>
+      <label class="check"><input type="checkbox" class="t-iso" checked> isodoses</label>
+    </div>
+    <canvas></canvas>
+  </div>
+  <div class="vista" id="v-bev">
+    <div class="vista-topo"><b>BEV</b><select id="bev-campo"></select>
+      <label class="check"><input type="checkbox" id="t-drr"> DRR</label>
+      <span id="bev-seg" class="oculto">segmento <input type="range" id="bev-seg-r" min="0" max="0" value="0"> <span id="bev-seg-t"></span></span>
+      <span class="dica">arraste a ponta da lâmina para editar</span>
+    </div>
+    <canvas></canvas>
+  </div>
+  <div class="vista" id="v-coronal">
+    <div class="vista-topo"><b>Coronal</b><span class="pos"></span></div>
+    <canvas></canvas>
+  </div>
+  <div class="vista" id="v-sagital">
+    <div class="vista-topo"><b>Sagital</b><span class="pos"></span></div>
+    <canvas></canvas>
+  </div>
+</section>
+
+<aside id="direita">
+  <h3>Estruturas</h3>
+  <ul id="lista-estruturas"></ul>
+  <h3>Histograma dose-volume</h3>
+  <canvas id="dvh" width="320" height="220"></canvas>
+  <h3>Dose</h3>
+  <div id="resumo-dose" class="pequeno-txt">—</div>
+  <table id="tab-estat"><thead><tr><th>Estrutura</th><th>Dméd</th><th>D95</th><th>D2</th><th>Dmax</th></tr></thead><tbody></tbody></table>
+  <h3>UM e conferência independente</h3>
+  <table id="tab-um"><thead><tr><th>Campo</th><th>UM</th><th>SSD</th><th>Tabela</th></tr></thead><tbody></tbody></table>
+  <h3>Avisos</h3>
+  <ul id="avisos"></ul>
+  <details class="sub"><summary>Registro</summary><ul id="log" class="pequeno-txt"></ul></details>
+</aside>
+</main>
+<div id="ocupado" class="oculto"><div class="girando"></div><span id="ocupado-txt">Calculando…</span></div>
+<div id="toast" class="oculto"></div>
+<script src="/estatico/app.js"></script>
+</body>
+</html>

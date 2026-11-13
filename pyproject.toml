@@ -1,6 +1,6 @@
 [project]
 name = "tps"
-version = "0.1.0"
+version = "0.2.0"
 description = "Sistema de planejamento de radioterapia (nome provisório) — em desenvolvimento, não clínico"
 requires-python = ">=3.12"
 

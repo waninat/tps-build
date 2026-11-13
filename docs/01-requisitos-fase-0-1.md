@@ -72,6 +72,34 @@ Situação de cada requisito: **I** = implementado com teste automático · **H*
 | SRS-PLN-050 | Otimização dos pesos dos campos (homogeneidade do alvo; penalidade de dose média em OAR) | I | otimizacao3d.otimizar_pesos | test_field_in_field_* (indireto) |
 | SRS-PLN-052 | Field-in-field automático: sub-campos bloqueiam a projeção das regiões > 107/105/103%, pesos otimizados, UM mínima por sub-campo, campo aberto mantém ≥ 60% do peso | I | otimizacao3d.field_in_field | test_field_in_field_compensa_separacao_variavel |
 
+## 3b2. Compensador de fluência
+| ID | Requisito | Sit. | Módulo | Verificação |
+|---|---|---|---|---|
+| SRS-PLN-060 | Fluência por campo na grade do MLC corrigida iterativamente pela dose média no alvo ao longo de cada raio (γ = 0,6, limites 0,5–1,5, melhor iteração mantida) | I | planejamento/compensador | test_compensador_homogeneiza_o_alvo |
+| SRS-PLN-061 | Sequenciamento: segmento-base + N níveis acima do mínimo, maior trecho contíguo por par | I | compensador.sequenciar | test_segmentos_respeitam_a_mecanica_e_a_um_minima |
+| SRS-PLN-062 | Todo segmento passa pela mecânica do MLC (gap, não-interdigitação, pares fechados) | I | compensador | idem |
+| SRS-PLN-063 | UM mínima por segmento (fusão dos menores) | I | compensador | idem |
+| SRS-PLN-064 | Sem ganho de homogeneidade: campos voltam a abertos, com aviso | I | compensador | teste de interface (laterais no cilindro) |
+| SRS-PLN-065 | Exportação: um campo por segmento (padrão) ou step-and-shoot (Elekta, pares de pontos de controle) | I | exportacao/rtplan | test_exportacao_e_releitura_reproduzem_a_dose |
+| SRS-PLN-066 | Conferência por tabela de campo compensado soma os segmentos (ponto coberto → transmissão) | I | um_tabela | teste de interface (±0,2%) |
+| SRS-PLN-067 | Step-and-shoot aceito e entregue pelo Mosaiq 2.83 / Precise | P/M | — | Mosaiq de teste |
+
+## 3d. Interface (servidor local + navegador)
+| ID | Requisito | Sit. | Módulo | Verificação |
+|---|---|---|---|---|
+| SRS-UI-001 | Abrir CT + RTSTRUCT de uma pasta ou enviados pelo navegador; recusar não-HFS e RTSTRUCT de outro referencial | I | app/sessao | test_fluxo_3d_completo_pela_api |
+| SRS-UI-002 | Fantoma virtual (2D) | I | app/sessao | test_plano_2d_com_compensador_e_envio_dicom |
+| SRS-UI-003 | Cortes axial/coronal/sagital com janela, contornos, isodoses (30–110%), feixes, isocentro, cruz | I | app | teste de navegador (Playwright) |
+| SRS-UI-004 | BEV com lâminas, jaws, projeções das estruturas, segmentos e DRR | I | app | idem |
+| SRS-UI-005 | Edição de lâminas por arrasto, com conferência mecânica no servidor | I | app | test_fluxo_3d_* (recusa) |
+| SRS-UI-006 | Campos: conformado (opções do ajuste) ou retangular; arranjos AP/PA, laterais, caixa, 3 campos | I | app | idem |
+| SRS-UI-007 | Cálculo com pesos, field-in-field e compensador; DVH; estatísticas; UM e conferência | I | app | idem |
+| SRS-UI-008 | Aprovação bloqueia edição; exportação só de plano aprovado; download restrito à pasta do TPS | I | app/servidor | test_fluxo_3d_* |
+| SRS-UI-009 | Envio C-STORE a um destino DICOM (Mosaiq) | I | app/sessao | test_plano_2d_* (SCP de teste) |
+| SRS-UI-010 | Relatório do plano (HTML imprimível) | I | app/relatorio | test_fluxo_3d_* |
+| SRS-UI-011 | Salvar e reabrir plano | I | app/sessao | test_fluxo_3d_* |
+| SRS-UI-012 | Usuários com senha, papéis e trilha de auditoria persistente | P | — | — |
+
 ## 3c. Planejamento 2D (sem CT)
 | ID | Requisito | Sit. | Módulo | Verificação |
 |---|---|---|---|---|

@@ -70,6 +70,20 @@ def segmento_do_campo(c: Campo, colim: Colimacao, mu: float = 1.0, sad_mm: float
                    leaf_boundaries=np.asarray(colim.limites_laminas, float), sad=sad_mm)
 
 
+def segmentos_do_campo(c: Campo, colim: Colimacao, sad_mm: float = 1000.0) -> list[Segment]:
+    """Segmentos do campo para o motor, com mu = fração da UM do campo (campo simples: um segmento, mu = 1)."""
+    if not c.segmentos:
+        return [segmento_do_campo(c, colim, 1.0, sad_mm)]
+    out = []
+    for s in c.segmentos:
+        out.append(Segment(gantry=c.gantry, collimator=c.colimador, couch=c.mesa,
+                           isocenter=np.asarray(c.isocentro_mm, float), mu=float(s["peso"]),
+                           jaw_x=tuple(s["jaw_x"]) if s.get("jaw_x") else None, jaw_y=tuple(s["jaw_y"]),
+                           mlc_a=np.asarray(s["mlc_a"], float), mlc_b=np.asarray(s["mlc_b"], float),
+                           leaf_boundaries=np.asarray(colim.limites_laminas, float), sad=sad_mm))
+    return out
+
+
 def dose_por_um(grade: GradeDose, campos: list[Campo], colim: Colimacao, modelo: BeamModelParams,
                 kernels: str | Path | None = None, posicao: str = "HFS",
                 permitir_demonstracao: bool = False) -> dict[str, np.ndarray]:
@@ -79,7 +93,7 @@ def dose_por_um(grade: GradeDose, campos: list[Campo], colim: Colimacao, modelo:
     from tps import paths
     cones = cones_do_modelo(load_mono(kernels or paths.kernels_file()), modelo)
     g = grade.para_motor()
-    return {c.nome: compute_dose(g, [segmento_do_campo(c, colim)], modelo, cones, patient_position=posicao)
+    return {c.nome: compute_dose(g, segmentos_do_campo(c, colim), modelo, cones, patient_position=posicao)
             for c in campos}
 
 

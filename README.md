@@ -15,6 +15,10 @@ Desenvolvimento sob IEC 62304 classe C. **Não é dispositivo liberado para uso 
 - **Segurança:** conferência independente de UM por tabela (TMR/Sc/Sp/OAR) em todo plano; aprovação com hash;
   checagem mecânica de todo campo; RTPLAN conferido e relido.
 
+## Interface (0.2.0)
+Windows: dois cliques em `iniciar.bat` (instala na primeira vez e abre o navegador). Linux: `./iniciar.sh`.
+Roteiro de teste em `docs/08-guia-de-teste-da-interface.md`; casos de teste: `python -m tps.casos_teste casos_teste`.
+
 ## Documentos (`docs/`)
 | Arquivo | Conteúdo |
 |---|---|
@@ -26,6 +30,7 @@ Desenvolvimento sob IEC 62304 classe C. **Não é dispositivo liberado para uso 
 | 05-soup.md | componentes de terceiros |
 | 06-dados-recebidos-e-pendencias.md | o que foi recebido, o que o modelo mostrou e o que falta |
 | 07-planejamento-3d-comparado.md | recursos 3D × Eclipse × Monaco, e o que falta |
+| 08-guia-de-teste-da-interface.md | instalação, roteiro de teste, Mosaiq 2.83 |
 | adr/ | decisões de arquitetura (reuso do SecDose, independência, linguagem) |
 
 ## Uso

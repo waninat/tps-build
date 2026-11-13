@@ -123,8 +123,7 @@ Resolvidas em 8/11/2026: MLC do Synergy = **Agility**; calibração = **1,000 cG
    profundidades), no formato do software do tanque (.mcc, .asc/.opax, .w2CAD, .csv), mais o relatório de validação
    do modelo Monaco do Agility (equivalente ao do MLCi2 de 2018).
 2. Condição de referência da calibração de 1,000 cGy/UM (dmax a SSD 100 ou 10 cm, SSD/SAD).
-3. **Versão do Mosaiq** (não foi informada nas conversas do QualiRT: o pedido à TI ficou com o campo em branco) e o
-   DICOM Conformance Statement dessa versão.
+3. Versão do Mosaiq: **2.83** (informada em 13/11/2026). Falta o DICOM Conformance Statement dessa versão.
 4. **RTPLANs 3D do Monaco já aceitos pelo Mosaiq** (2–3 planos), exportados como vão para o Mosaiq.
 5. Medidas de MLC pelo protocolo de Roche et al. (transmissão, tongue-and-groove, ponta de lâmina).
 6. Campos pequenos (1×1, 2×2) com detector adequado e fatores de correção do TRS-483.

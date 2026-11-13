@@ -8,3 +8,4 @@ pacientes/
 casos/
 *.dcm
 !tests/dados/**/*.dcm
+casos_teste/

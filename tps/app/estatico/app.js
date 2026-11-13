@@ -1,0 +1,559 @@
+"use strict";
+// TPS — interface. Toda a física roda no servidor; aqui só desenho e interação.
+
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+const E = {
+  sid: null, resumo: null, info: null,
+  idx: { axial: 0, coronal: 0, sagital: 0 }, cruz: null,
+  wl: { janela: 400, nivel: 40 },
+  imgs: {}, sobre: {}, campoSel: null, bev: null, bevSeg: 0, drrImg: null,
+  ocultas: new Set(), dvh: null, arrasto: null,
+};
+const ISO_CORES = { 30: "#3355ff", 50: "#00b7ff", 70: "#00e08a", 80: "#9be000", 90: "#ffe100", 95: "#ffae00",
+                    100: "#ff7a00", 105: "#ff2d55", 107: "#ff00c8", 110: "#ffffff" };
+
+// ------------------------------------------------------------------ comunicação
+async function api(metodo, url, corpo, msg) {
+  if (msg) ocupado(msg);
+  try {
+    const op = { method: metodo, headers: {} };
+    if (corpo instanceof FormData) op.body = corpo;
+    else if (corpo !== undefined) { op.body = JSON.stringify(corpo); op.headers["Content-Type"] = "application/json"; }
+    const r = await fetch(url, op);
+    const j = await r.json().catch(() => ({ erro: `Resposta inválida (${r.status})` }));
+    if (!r.ok) throw new Error(j.erro || `Erro ${r.status}`);
+    return j;
+  } finally { if (msg) ocupado(null); }
+}
+function ocupado(msg) { $("#ocupado").classList.toggle("oculto", !msg); if (msg) $("#ocupado-txt").textContent = msg; }
+let toastT = null;
+function aviso(msg, info = false) {
+  const t = $("#toast"); t.textContent = msg; t.className = info ? "info" : "";
+  clearTimeout(toastT); toastT = setTimeout(() => t.classList.add("oculto"), info ? 3500 : 8000);
+}
+async function tentar(fn) { try { await fn(); } catch (e) { aviso(e.message); } }
+
+// ------------------------------------------------------------------ início
+async function iniciar() {
+  E.info = await api("GET", "/api/info");
+  $("#versao").textContent = E.info.versao;
+  $("#maquina").innerHTML = E.info.maquinas.map(m => `<option value="${m.id}">${m.nome}</option>`).join("");
+  const pm = E.info.maquinas.find(m => m.id === "radioserra_precise"); if (pm) $("#maquina").value = pm.id;
+  $("#planos-salvos").innerHTML = E.info.planos_salvos.map(p => `<option value="${p}">${p.split(/[\\/]/).pop()}</option>`).join("");
+  try { $("#a-usuario").value = localStorage.getItem("tps_usuario") || ""; } catch (e) { /* sem storage */ }
+  ligar();
+  window.addEventListener("resize", () => desenharTudo());
+}
+
+function ligar() {
+  $$(".aba").forEach(b => b.onclick = () => {
+    $$(".aba").forEach(x => x.classList.toggle("ativa", x === b));
+    $$(".painel-aba").forEach(p => p.classList.toggle("oculto", p.id !== "aba-" + b.dataset.aba));
+  });
+  $("#b-ct").onclick = () => tentar(async () => abrirCaso(await api("POST", "/api/caso/ct", { pasta: $("#ct-pasta").value.trim() }, "Lendo CT e estruturas…")));
+  $("#ct-upload").onchange = (ev) => tentar(async () => {
+    const fd = new FormData(); for (const f of ev.target.files) fd.append("arquivos", f, f.name);
+    abrirCaso(await api("POST", "/api/caso/upload", fd, `Enviando ${ev.target.files.length} arquivos…`));
+  });
+  $("#b-fantoma").onclick = () => tentar(async () => abrirCaso(await api("POST", "/api/caso/fantoma", {
+    tipo: $("#f-tipo").value, largura: +$("#f-larg").value * 10, espessura: +$("#f-esp").value * 10,
+    comprimento: +$("#f-comp").value * 10, paciente_id: $("#f-id").value, paciente_nome: $("#f-nome").value }, "Criando fantoma…")));
+  $("#b-abrir").onclick = () => tentar(async () => abrirCaso(await api("POST", "/api/caso/abrir", { arquivo: $("#planos-salvos").value }, "Abrindo plano…")));
+  $("#maquina").onchange = () => tentar(async () => { if (E.sid) atualizar(await api("POST", `/api/${E.sid}/maquina`, { id: $("#maquina").value })); });
+  $("#p-metodo").onchange = mostrarPonto; mostrarPonto();
+  $("#b-plano").onclick = () => tentar(criarPlano);
+  $("#b-iso").onclick = () => tentar(async () => {
+    if (!E.cruz) throw new Error("Clique no corte axial para posicionar a cruz");
+    atualizar(await api("POST", `/api/${E.sid}/isocentro`, { xyz: E.cruz }));
+  });
+  $("#c-modo").onchange = () => {
+    const r = $("#c-modo").value === "retangular";
+    $("#c-conformado").classList.toggle("oculto", r); $("#c-retangular").classList.toggle("oculto", !r);
+  };
+  $("#b-campo").onclick = () => tentar(salvarCampo);
+  $("#b-campo-novo").onclick = () => { E.campoSel = null; preencherForm(null); listarCampos(); };
+  $("#b-campo-rem").onclick = () => tentar(async () => {
+    if (!E.campoSel) return;
+    atualizar(await api("DELETE", `/api/${E.sid}/campo/${encodeURIComponent(E.campoSel)}`));
+    E.campoSel = null; preencherForm(null);
+  });
+  $$("[data-arranjo]").forEach(b => b.onclick = () => tentar(() => arranjo(b.dataset.arranjo)));
+  $("#b-calc").onclick = () => tentar(calcular);
+  $("#b-aprovar").onclick = () => tentar(async () => {
+    try { localStorage.setItem("tps_usuario", $("#a-usuario").value); } catch (e) { /* ok */ }
+    atualizar(await api("POST", `/api/${E.sid}/aprovar`, { usuario: $("#a-usuario").value, papel: $("#a-papel").value }));
+    aviso("Plano aprovado e bloqueado para edição", true);
+  });
+  $("#b-desaprovar").onclick = () => tentar(async () => {
+    const motivo = prompt("Motivo para desaprovar (fica no histórico):"); if (!motivo) return;
+    atualizar(await api("POST", `/api/${E.sid}/desaprovar`, { usuario: $("#a-usuario").value, motivo }));
+  });
+  $("#b-exportar").onclick = () => tentar(exportar);
+  $("#b-salvar").onclick = () => tentar(async () => aviso("Salvo em " + (await api("POST", `/api/${E.sid}/salvar`)).arquivo, true));
+  $("#b-relatorio").onclick = () => window.open(`/api/${E.sid}/relatorio`, "_blank");
+  $("#v-axial .wl").onchange = (e) => { const [j, n] = e.target.value.split(",").map(Number); E.wl = { janela: j, nivel: n }; E.imgs = {}; carregarCortes(); };
+  $("#v-axial .t-iso").onchange = () => desenharTudo();
+  $("#bev-campo").onchange = () => tentar(() => carregarBev($("#bev-campo").value));
+  $("#t-drr").onchange = () => tentar(() => carregarBev(E.bev && E.bev.campo.nome));
+  $("#bev-seg-r").oninput = (e) => { E.bevSeg = +e.target.value; desenharBev(); };
+  for (const v of ["axial", "coronal", "sagital"]) {
+    const cv = $(`#v-${v} canvas`);
+    cv.addEventListener("wheel", (ev) => { ev.preventDefault(); mudarCorte(v, ev.deltaY > 0 ? 1 : -1); }, { passive: false });
+    cv.addEventListener("click", (ev) => clicarCorte(v, ev));
+  }
+  const bc = $("#v-bev canvas");
+  bc.addEventListener("mousedown", bevBaixo); bc.addEventListener("mousemove", bevMove);
+  window.addEventListener("mouseup", bevSolta);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return;
+    if (ev.key === "ArrowUp" || ev.key === "PageUp") mudarCorte("axial", -1);
+    if (ev.key === "ArrowDown" || ev.key === "PageDown") mudarCorte("axial", 1);
+  });
+}
+
+function mostrarPonto() { $("#p-ponto-linha").classList.toggle("oculto", $("#p-metodo").value !== "ponto"); }
+
+// ------------------------------------------------------------------ caso e plano
+async function abrirCaso(r) {
+  E.sid = r.id; E.imgs = {}; E.sobre = {}; E.campoSel = null; E.bev = null; E.dvh = null; E.ocultas = new Set();
+  const ct = r.ct;
+  E.idx = { axial: Math.floor(ct.z[2] / 2), coronal: Math.floor(ct.y[2] / 2), sagital: Math.floor(ct.x[2] / 2) };
+  if (r.tipo === "fantoma") { $("#p-metodo").value = "ponto"; mostrarPonto(); }
+  if (!r.maquina) atualizar(await api("POST", `/api/${E.sid}/maquina`, { id: $("#maquina").value }));
+  else atualizar(r);
+  if (r.isocentro) irPara(r.isocentro);
+  carregarCortes();
+}
+
+async function criarPlano() {
+  const metodo = $("#p-metodo").value;
+  atualizar(await api("POST", `/api/${E.sid}/plano`, {
+    rotulo: $("#p-rotulo").value, dose_total: +$("#p-dose").value, fracoes: +$("#p-fx").value,
+    alvo: $("#p-alvo").value, metodo, ponto: metodo === "ponto" ? [+$("#p-px").value, +$("#p-py").value, +$("#p-pz").value] : null,
+  }));
+  if (E.resumo.isocentro) irPara(E.resumo.isocentro);
+}
+
+function atualizar(r) {
+  E.resumo = r;
+  const p = r.plano;
+  $("#caso-nome").textContent = r.nome ? `${r.nome} ${r.paciente && r.paciente.id ? "(" + r.paciente.id + ")" : ""}` : "Caso";
+  $("#estado").textContent = p ? `${p.rotulo} · ${p.estado}${r.dose_atualizada ? "" : " · dose desatualizada"}` : "sem plano";
+  $("#estado").className = "selo " + (p ? p.estado : "");
+  if (r.maquina) $("#maquina").value = r.maquina.id;
+  // estruturas
+  const alvos = r.estruturas.map(e => e.nome);
+  const preferido = alvos.find(n => /ptv/i.test(n)) || alvos[0] || "";
+  for (const sel of ["#p-alvo", "#c-alvo"]) {
+    const atual = $(sel).value;
+    $(sel).innerHTML = (sel === "#p-alvo" && r.tipo === "fantoma" ? `<option value="">(ponto)</option>` : "") +
+      alvos.map(n => `<option>${n}</option>`).join("");
+    $(sel).value = alvos.includes(atual) ? atual : (sel === "#p-alvo" && r.tipo === "fantoma" ? "" : preferido);
+  }
+  $("#c-blind").innerHTML = alvos.map(n => `<option>${n}</option>`).join("");
+  $("#lista-estruturas").innerHTML = r.estruturas.map(e => `<li><input type="checkbox" data-est="${e.nome}" ${E.ocultas.has(e.nome) ? "" : "checked"}>
+    <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span></li>`).join("");
+  $$("[data-est]").forEach(c => c.onchange = () => { c.checked ? E.ocultas.delete(c.dataset.est) : E.ocultas.add(c.dataset.est); desenharTudo(); desenharDvh(); });
+  $("#iso-txt").textContent = r.isocentro ? r.isocentro.map(v => v.toFixed(1)).join(", ") : "—";
+  // estados dos botões
+  const temPlano = !!p, aprovado = p && p.estado === "APROVADO";
+  $("#b-plano").disabled = !E.sid;
+  $("#b-plano").textContent = temPlano ? "Recriar plano (apaga os campos)" : "Criar plano";
+  $("#form-campo").disabled = !temPlano || aprovado;
+  $("#b-iso").disabled = !temPlano || aprovado;
+  $("#b-calc").disabled = !temPlano || aprovado || !p.campos.length;
+  $("#b-aprovar").disabled = !temPlano || aprovado || !r.dose_atualizada;
+  $("#b-desaprovar").disabled = !aprovado;
+  $("#b-exportar").disabled = !aprovado;
+  $("#b-salvar").disabled = !temPlano; $("#b-relatorio").disabled = !temPlano;
+  $$("[data-arranjo]").forEach(b => b.disabled = !temPlano || aprovado);
+  listarCampos(); tabelas();
+  $("#avisos").innerHTML = (r.avisos || []).map(a => `<li>${a}</li>`).join("");
+  $("#log").innerHTML = (r.log || []).slice().reverse().map(a => `<li>${a}</li>`).join("");
+  // BEV
+  const nomes = p ? p.campos.map(c => c.nome) : [];
+  const bsel = $("#bev-campo").value;
+  $("#bev-campo").innerHTML = nomes.map(n => `<option>${n}</option>`).join("");
+  if (nomes.length) {
+    const alvo = nomes.includes(E.campoSel) ? E.campoSel : (nomes.includes(bsel) ? bsel : nomes[0]);
+    $("#bev-campo").value = alvo; carregarBev(alvo).catch(e => aviso(e.message));
+  } else { E.bev = null; desenharBev(); }
+  E.sobre = {}; carregarSobre();
+  if (r.dose_atualizada) carregarDvh(); else { E.dvh = null; desenharDvh(); }
+}
+
+function listarCampos() {
+  const p = E.resumo && E.resumo.plano;
+  $("#tab-campos tbody").innerHTML = !p ? "" : p.campos.map(c => `<tr data-campo="${c.nome}" class="${c.campo_pai ? "sub" : ""} ${c.nome === E.campoSel ? "sel" : ""}">
+    <td>${c.nome}</td><td>${c.gantry.toFixed(0)}</td><td>${c.colimador.toFixed(0)}</td><td>${c.mu != null ? c.mu.toFixed(1) : "—"}</td>
+    <td>${c.n_segmentos || (c.campo_pai ? "sub" : 1)}</td></tr>`).join("");
+  $$("#tab-campos tbody tr").forEach(tr => tr.onclick = () => {
+    E.campoSel = tr.dataset.campo; const c = p.campos.find(x => x.nome === E.campoSel);
+    preencherForm(c); listarCampos(); $("#bev-campo").value = c.nome; carregarBev(c.nome).catch(e => aviso(e.message));
+  });
+  $("#b-campo").textContent = E.campoSel ? "Atualizar campo" : "Adicionar campo";
+}
+
+function preencherForm(c) {
+  const s = c && c.spec ? c.spec : {};
+  $("#c-nome").value = c ? c.nome : "";
+  $("#c-gantry").value = c ? c.gantry : 0; $("#c-col").value = c ? c.colimador : 0; $("#c-mesa").value = c ? c.mesa : 0;
+  $("#c-peso").value = c ? c.peso : 1;
+  $("#c-modo").value = s.modo || "conformado"; $("#c-modo").onchange();
+  if (s.alvo) $("#c-alvo").value = s.alvo;
+  const m = s.margem && typeof s.margem === "object" ? s.margem : { x1: 7, x2: 7, y1: 7, y2: 7 };
+  $("#c-x1m").value = m.x1; $("#c-x2m").value = m.x2; $("#c-y1m").value = m.y1; $("#c-y2m").value = m.y2;
+  $("#c-encontro").value = s.ponto_encontro || "fora";
+  $("#c-otcol").checked = !!s.otimizar_colimador;
+  const bl = (s.blindagens || []).map(b => b.nome);
+  Array.from($("#c-blind").options).forEach(o => o.selected = bl.includes(o.value));
+  if (s.blindagens && s.blindagens[0]) $("#c-blind-m").value = s.blindagens[0].margem;
+  if (s.modo === "retangular") { $("#c-x1").value = s.x1 / 10; $("#c-x2").value = s.x2 / 10; $("#c-y1").value = s.y1 / 10; $("#c-y2").value = s.y2 / 10; }
+}
+
+function specDoForm(extra = {}) {
+  const blind = Array.from($("#c-blind").selectedOptions).map(o => ({ nome: o.value, margem: +$("#c-blind-m").value }));
+  const s = {
+    nome: $("#c-nome").value.trim() || undefined, gantry: +$("#c-gantry").value, colimador: +$("#c-col").value,
+    mesa: +$("#c-mesa").value, peso: +$("#c-peso").value, modo: $("#c-modo").value, alvo: $("#c-alvo").value,
+    margem: { x1: +$("#c-x1m").value, x2: +$("#c-x2m").value, y1: +$("#c-y1m").value, y2: +$("#c-y2m").value },
+    ponto_encontro: $("#c-encontro").value, blindagens: blind, otimizar_colimador: $("#c-otcol").checked,
+    x1: +$("#c-x1").value * 10, x2: +$("#c-x2").value * 10, y1: +$("#c-y1").value * 10, y2: +$("#c-y2").value * 10,
+  };
+  if (E.campoSel) s.nome_antigo = E.campoSel;
+  return Object.assign(s, extra);
+}
+
+async function salvarCampo() {
+  const r = await api("POST", `/api/${E.sid}/campo`, specDoForm(), "Ajustando o campo…");
+  E.campoSel = r.campo_salvo.campo.nome;
+  atualizar(r);
+  (r.campo_salvo.avisos || []).forEach(a => aviso(a, true));
+}
+
+async function arranjo(tipo) {
+  const angulos = { appa: [0, 180], lat: [90, 270], caixa: [0, 90, 180, 270], tres: [0, 90, 270] }[tipo];
+  const p = E.resumo.plano;
+  for (const c of p.campos.filter(c => !c.campo_pai)) await api("DELETE", `/api/${E.sid}/campo/${encodeURIComponent(c.nome)}`);
+  E.campoSel = null;
+  let r;
+  for (const g of angulos) {
+    const s = specDoForm({ nome: undefined, gantry: g, colimador: 0 }); delete s.nome_antigo;
+    r = await api("POST", `/api/${E.sid}/campo`, s, `Ajustando campos (${g}°)…`);
+  }
+  atualizar(r);
+}
+
+async function calcular() {
+  const comp = $("#o-comp").checked ? { niveis: +$("#o-niveis").value, um_min: +$("#o-ummin").value } : null;
+  const corpo = { otimizar_pesos: $("#o-pesos").checked, field_in_field: $("#o-fif").checked, compensador: comp,
+                  metodo: $("#p-metodo").value };
+  if (corpo.metodo === "ponto") corpo.ponto = [+$("#p-px").value, +$("#p-py").value, +$("#p-pz").value];
+  const r = await api("POST", `/api/${E.sid}/calcular`, corpo, "Calculando a dose (collapsed cone)…");
+  atualizar(r);
+  const i = r.resultado.info || {};
+  if (i.compensador) aviso(`Compensador: HI ${i.compensador.hi_antes.toFixed(3)} → ${i.compensador.hi_depois.toFixed(3)}`, true);
+  if (i.field_in_field) aviso(`Field-in-field: HI ${i.field_in_field.hi_antes.toFixed(3)} → ${i.field_in_field.hi_depois.toFixed(3)}`, true);
+}
+
+async function exportar() {
+  const corpo = { modo_segmentos: $("#e-modo").value, pasta: $("#e-pasta").value.trim() || null };
+  if ($("#m-enviar").checked) corpo.enviar = { host: $("#m-host").value, porta: +$("#m-porta").value, ae_destino: $("#m-ae").value };
+  const r = await api("POST", `/api/${E.sid}/exportar`, corpo, "Exportando…");
+  $("#exportados").innerHTML = r.arquivos.map(a => `<div><a href="/api/${E.sid}/arquivo?caminho=${encodeURIComponent(a)}">${a.split(/[\\/]/).pop()}</a></div>`).join("") +
+    (r.envio ? `<div class="ok">Enviado: ${r.envio.enviados.length} arquivo(s)</div>` : "") + `<div class="pequeno-txt">${r.pasta}</div>`;
+  aviso("RTPLAN exportado e conferido", true);
+}
+
+// ------------------------------------------------------------------ tabelas
+const f1 = (v, n = 1) => v == null || isNaN(v) ? "—" : (+v).toFixed(n);
+function tabelas() {
+  const r = E.resumo, res = r && r.resultado;
+  if (!res) {
+    $("#tab-estat tbody").innerHTML = ""; $("#resumo-dose").textContent = r && r.plano ? "Dose ainda não calculada" : "—";
+  } else {
+    const rx = r.plano.prescricao;
+    $("#resumo-dose").innerHTML = `Prescrição ${rx.dose_total_gy} Gy / ${rx.fracoes} fx · Dmax ${f1(res.dmax_gy, 2)} Gy (${f1(res.dmax_gy / rx.dose_total_gy * 100)}%)` +
+      (res.hi != null ? ` · HI ${f1(res.hi, 3)}` : "");
+    $("#tab-estat tbody").innerHTML = Object.entries(res.estatisticas).map(([n, h]) =>
+      `<tr><td>${n}</td><td>${f1(h.Dmean, 2)}</td><td>${f1(h.D95, 2)}</td><td>${f1(h.D2, 2)}</td><td>${f1(h.Dmax, 2)}</td></tr>`).join("");
+  }
+  const p = r && r.plano;
+  const conf = res ? Object.fromEntries(res.conferencia_um.map(k => [k.campo, k])) : {};
+  $("#tab-um tbody").innerHTML = !p ? "" : p.campos.map(c => {
+    const k = conf[c.nome];
+    const t = !k ? "—" : `<span class="${k.ok ? "ok" : (k.compensado ? "avisotxt" : "falha")}" title="motor ${f1(k.motor_cgy_um, 4)} × tabela ${f1(k.tabela_cgy_um, 4)} cGy/UM">${k.dif_pct >= 0 ? "+" : ""}${f1(k.dif_pct, 2)}%</span>`;
+    return `<tr class="${c.campo_pai ? "sub" : ""}"><td>${c.nome}</td><td>${f1(c.mu)}</td><td>${c.ssd_mm ? f1(c.ssd_mm / 10) : "—"}</td><td>${t}</td></tr>`;
+  }).join("");
+}
+
+// ------------------------------------------------------------------ cortes
+const VISTAS = {
+  axial:   { h: "x", v: "y", invV: false },
+  coronal: { h: "x", v: "z", invV: true },
+  sagital: { h: "y", v: "z", invV: true },
+};
+const EIXO_IDX = { axial: "z", coronal: "y", sagital: "x" };
+function eixo(k) { const [a, b, n] = E.resumo.ct[k]; return { a, b, n, d: n > 1 ? (b - a) / (n - 1) : 1 }; }
+function posDoIdx(vista, i) { const e = eixo(EIXO_IDX[vista]); return e.a + i * e.d; }
+function idxDaPos(vista, mm) { const e = eixo(EIXO_IDX[vista]); return Math.max(0, Math.min(e.n - 1, Math.round((mm - e.a) / e.d))); }
+
+function mudarCorte(vista, d) {
+  if (!E.resumo) return;
+  const n = eixo(EIXO_IDX[vista]).n;
+  E.idx[vista] = Math.max(0, Math.min(n - 1, E.idx[vista] + d));
+  carregarCorte(vista);
+}
+function irPara(xyz) {
+  E.cruz = xyz.slice();
+  E.idx.axial = idxDaPos("axial", xyz[2]); E.idx.coronal = idxDaPos("coronal", xyz[1]); E.idx.sagital = idxDaPos("sagital", xyz[0]);
+  carregarCortes();
+}
+function carregarCortes() { for (const v of Object.keys(VISTAS)) carregarCorte(v); }
+function carregarCorte(vista) {
+  if (!E.sid) return;
+  const i = E.idx[vista], chave = `${vista}:${i}`;
+  if (!E.imgs[chave]) {
+    const img = new Image();
+    img.onload = () => desenharCorte(vista);
+    img.src = `/api/${E.sid}/corte/${vista}/${i}.png?janela=${E.wl.janela}&nivel=${E.wl.nivel}`;
+    E.imgs[chave] = img;
+  }
+  carregarSobreVista(vista);
+  desenharCorte(vista);
+}
+function carregarSobre() { for (const v of Object.keys(VISTAS)) carregarSobreVista(v); }
+async function carregarSobreVista(vista) {
+  if (!E.sid) return;
+  const i = E.idx[vista], chave = `${vista}:${i}`;
+  if (E.sobre[chave]) return desenharCorte(vista);
+  E.sobre[chave] = "carregando";
+  try { E.sobre[chave] = await api("GET", `/api/${E.sid}/sobreposicao/${vista}/${i}`); }
+  catch (e) { delete E.sobre[chave]; return; }
+  desenharCorte(vista);
+}
+
+function prepararCanvas(cv) {
+  const dpr = window.devicePixelRatio || 1, r = cv.getBoundingClientRect();
+  if (cv.width !== Math.round(r.width * dpr) || cv.height !== Math.round(r.height * dpr)) {
+    cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  }
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { g, w: r.width, h: r.height };
+}
+
+function transf(vista, w, h) {
+  // mm → px preservando proporção; a imagem cobre [a − d/2, b + d/2] em cada eixo
+  const V = VISTAS[vista], eh = eixo(V.h), ev = eixo(V.v);
+  const H0 = eh.a - eh.d / 2, H1 = eh.b + eh.d / 2, V0 = ev.a - ev.d / 2, V1 = ev.b + ev.d / 2;
+  const s = Math.min(w / (H1 - H0), h / (V1 - V0));
+  const ox = (w - (H1 - H0) * s) / 2, oy = (h - (V1 - V0) * s) / 2;
+  return {
+    s, ox, oy, H0, H1, V0, V1,
+    px: (hh, vv) => [ox + (hh - H0) * s, V.invV ? oy + (V1 - vv) * s : oy + (vv - V0) * s],
+    mm: (x, y) => [H0 + (x - ox) / s, V.invV ? V1 - (y - oy) / s : V0 + (y - oy) / s],
+  };
+}
+
+function desenharTudo() { for (const v of Object.keys(VISTAS)) desenharCorte(v); desenharBev(); desenharDvh(); }
+
+function desenharCorte(vista) {
+  const cv = $(`#v-${vista} canvas`), { g, w, h } = prepararCanvas(cv);
+  g.fillStyle = "#000"; g.fillRect(0, 0, w, h);
+  if (!E.resumo || !E.resumo.ct) return;
+  const T = transf(vista, w, h), i = E.idx[vista];
+  const img = E.imgs[`${vista}:${i}`];
+  if (img && img.complete && img.naturalWidth) {
+    g.imageSmoothingEnabled = true;
+    g.drawImage(img, T.ox, T.oy, (T.H1 - T.H0) * T.s, (T.V1 - T.V0) * T.s);
+  }
+  const pos = posDoIdx(vista, i);
+  $(`#v-${vista} .pos`).textContent = `${EIXO_IDX[vista]} = ${pos.toFixed(1)} mm (${i + 1}/${eixo(EIXO_IDX[vista]).n})`;
+  const sob = E.sobre[`${vista}:${i}`];
+  const linha = (pts, fechar) => { g.beginPath(); pts.forEach(([a, b], k) => { const [x, y] = T.px(a, b); k ? g.lineTo(x, y) : g.moveTo(x, y); }); if (fechar) g.closePath(); g.stroke(); };
+  if (sob && sob !== "carregando") {
+    g.lineWidth = 1.4;
+    for (const c of sob.contornos) {
+      if (E.ocultas.has(c.nome)) continue;
+      g.strokeStyle = `rgb(${c.cor})`; c.linhas.forEach(l => linha(l, true));
+    }
+    if ($("#v-axial .t-iso").checked) {
+      g.lineWidth = 1.2;
+      for (const iso of sob.isodoses) { g.strokeStyle = ISO_CORES[iso.nivel] || "#fff"; iso.linhas.forEach(l => linha(l, false)); }
+    }
+    if (vista === "axial") {
+      g.setLineDash([5, 4]);
+      for (const f of sob.feixes) {
+        g.strokeStyle = f.nome === E.campoSel ? "#ffd84d" : "rgba(120,200,255,.75)"; g.lineWidth = 1;
+        for (const b of f.bordas) linha([f.fonte, b], false);
+        g.strokeStyle = "rgba(255,255,255,.45)"; linha([f.fonte, f.cax_fim], false);
+        // rótulo do lado da entrada do feixe (entre o isocentro e a fonte)
+        const ent = [f.iso[0] + (f.fonte[0] - f.iso[0]) * 0.17, f.iso[1] + (f.fonte[1] - f.iso[1]) * 0.17];
+        const [lx, ly] = T.px(...ent); g.fillStyle = f.nome === E.campoSel ? "#ffd84d" : "#9fd3ff"; g.font = "11px system-ui";
+        g.fillText(f.nome, Math.min(Math.max(lx + 4, 4), w - 50), Math.min(Math.max(ly - 4, 12), h - 4));
+      }
+      g.setLineDash([]);
+    }
+  }
+  // isocentro e cruz
+  const iso = E.resumo.isocentro;
+  if (iso) {
+    const V = VISTAS[vista], k = { x: 0, y: 1, z: 2 };
+    const [x, y] = T.px(iso[k[V.h]], iso[k[V.v]]);
+    g.strokeStyle = "#ff4d4d"; g.lineWidth = 1.5; g.beginPath(); g.arc(x, y, 5, 0, 2 * Math.PI);
+    g.moveTo(x - 9, y); g.lineTo(x + 9, y); g.moveTo(x, y - 9); g.lineTo(x, y + 9); g.stroke();
+  }
+  if (E.cruz) {
+    const V = VISTAS[vista], k = { x: 0, y: 1, z: 2 };
+    const [x, y] = T.px(E.cruz[k[V.h]], E.cruz[k[V.v]]);
+    g.strokeStyle = "rgba(255,230,0,.5)"; g.lineWidth = 1; g.beginPath();
+    g.moveTo(x, 0); g.lineTo(x, h); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
+  }
+  // legenda de isodoses
+  if (vista === "axial" && sob && sob.isodoses && sob.isodoses.length && $("#v-axial .t-iso").checked) {
+    g.font = "11px system-ui"; let yy = 16;
+    for (const n of Object.keys(ISO_CORES).map(Number).reverse()) { g.fillStyle = ISO_CORES[n]; g.fillText(`${n}%`, w - 40, yy); yy += 13; }
+  }
+}
+
+function clicarCorte(vista, ev) {
+  if (!E.resumo || !E.resumo.ct) return;
+  const cv = $(`#v-${vista} canvas`), r = cv.getBoundingClientRect();
+  const T = transf(vista, r.width, r.height), [a, b] = T.mm(ev.clientX - r.left, ev.clientY - r.top);
+  const V = VISTAS[vista], k = { x: 0, y: 1, z: 2 };
+  const c = E.cruz ? E.cruz.slice() : [0, 0, posDoIdx("axial", E.idx.axial)];
+  c[k[V.h]] = a; c[k[V.v]] = b;
+  c[k[EIXO_IDX[vista]]] = posDoIdx(vista, E.idx[vista]);
+  E.cruz = c.map(v => Math.round(v * 10) / 10);
+  for (const outra of Object.keys(VISTAS)) if (outra !== vista) E.idx[outra] = idxDaPos(outra, E.cruz[k[EIXO_IDX[outra]]]);
+  carregarCortes();
+  if ($("#p-metodo").value === "ponto" && ev.shiftKey) { $("#p-px").value = E.cruz[0]; $("#p-py").value = E.cruz[1]; $("#p-pz").value = E.cruz[2]; }
+}
+
+// ------------------------------------------------------------------ BEV
+async function carregarBev(nome) {
+  if (!nome || !E.sid) return;
+  E.bev = await api("GET", `/api/${E.sid}/bev/${encodeURIComponent(nome)}`);
+  E.bevSeg = 0;
+  const ns = E.bev.segmentos.length;
+  $("#bev-seg").classList.toggle("oculto", ns === 0);
+  $("#bev-seg-r").max = Math.max(0, ns); $("#bev-seg-r").value = 0;
+  if ($("#t-drr").checked) {
+    const img = new Image(); img.onload = () => desenharBev(); img.src = `/api/${E.sid}/drr/${encodeURIComponent(nome)}.png?t=${Date.now()}`; E.drrImg = img;
+  } else E.drrImg = null;
+  desenharBev();
+}
+
+function bevT(w, h) {
+  const ext = 110; // mm mostrados em volta do isocentro (ajustado ao campo abaixo)
+  let r = ext;
+  if (E.bev) { const c = E.bev.campo; const m = Math.max(Math.abs(c.jaw_y[0]), Math.abs(c.jaw_y[1]), ...(c.jaw_x || [Math.min(...c.mlc_a.filter(isFinite)), Math.max(...c.mlc_b)]).map(Math.abs)); r = Math.min(200, Math.max(60, m * 1.35)); }
+  const s = Math.min(w, h) / (2 * r);
+  return { s, r, px: (u, v) => [w / 2 + u * s, h / 2 - v * s], mm: (x, y) => [(x - w / 2) / s, (h / 2 - y) / s] };
+}
+
+function formaAtual() {
+  const c = E.bev.campo;
+  if (E.bevSeg > 0 && E.bev.segmentos[E.bevSeg - 1]) { const s = E.bev.segmentos[E.bevSeg - 1]; return { a: s.mlc_a, b: s.mlc_b, peso: s.peso }; }
+  return { a: c.mlc_a, b: c.mlc_b };
+}
+
+function desenharBev() {
+  const cv = $("#v-bev canvas"), { g, w, h } = prepararCanvas(cv);
+  g.fillStyle = "#05070a"; g.fillRect(0, 0, w, h);
+  if (!E.bev) return;
+  const T = bevT(w, h), B = E.bev, c = B.campo, lim = B.limites, F = formaAtual();
+  if (E.drrImg && E.drrImg.complete && E.drrImg.naturalWidth) {
+    const [x0, y0] = T.px(-200, 200), [x1, y1] = T.px(200, -200);
+    g.globalAlpha = 0.85; g.drawImage(E.drrImg, x0, y0, x1 - x0, y1 - y0); g.globalAlpha = 1;
+  }
+  // lâminas
+  const L = T.r * 1.1;
+  for (let i = 0; i < lim.length - 1; i++) {
+    const [, ya] = T.px(0, lim[i + 1]), [, yb] = T.px(0, lim[i]);
+    if (yb < 0 || ya > h) continue;
+    const [xa] = T.px(F.a[i], 0), [xb] = T.px(F.b[i], 0), [xe] = T.px(-L, 0), [xd] = T.px(L, 0);
+    const sel = E.arrasto && E.arrasto.par === i;
+    g.fillStyle = sel ? "rgba(255,216,77,.55)" : "rgba(92,108,124,.62)";
+    g.fillRect(xe, ya, xa - xe, yb - ya); g.fillRect(xb, ya, xd - xb, yb - ya);
+    g.strokeStyle = "rgba(10,14,18,.9)"; g.lineWidth = 0.6; g.strokeRect(xe, ya, xa - xe, yb - ya); g.strokeRect(xb, ya, xd - xb, yb - ya);
+  }
+  // jaws
+  g.strokeStyle = "#ffa62b"; g.lineWidth = 2;
+  for (const v of c.jaw_y) { const [, y] = T.px(0, v); g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
+  if (c.jaw_x) { g.strokeStyle = "#4db8ff"; g.setLineDash([6, 4]); for (const u of c.jaw_x) { const [x] = T.px(u, 0); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); } g.setLineDash([]); }
+  // projeções
+  g.lineWidth = 1.6;
+  for (const p of B.projecoes) {
+    if (E.ocultas.has(p.nome)) continue;
+    g.strokeStyle = `rgb(${p.cor})`;
+    for (const l of p.linhas) { g.beginPath(); l.forEach(([u, v], k) => { const [x, y] = T.px(u, v); k ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); }
+  }
+  // eixo central
+  const [cx, cy] = T.px(0, 0); g.strokeStyle = "rgba(255,255,255,.5)"; g.lineWidth = 1;
+  g.beginPath(); g.moveTo(cx - 10, cy); g.lineTo(cx + 10, cy); g.moveTo(cx, cy - 10); g.lineTo(cx, cy + 10); g.stroke();
+  g.fillStyle = "#cfd8e3"; g.font = "11px system-ui";
+  g.fillText(`${c.nome} · G${c.gantry.toFixed(0)} C${c.colimador.toFixed(0)} M${c.mesa.toFixed(0)} · ${c.mu != null ? c.mu.toFixed(1) + " UM" : "UM —"}` +
+    (F.peso ? ` · segmento ${E.bevSeg}/${B.segmentos.length} (${(F.peso * 100).toFixed(0)}%)` : ""), 8, 14);
+  g.fillText("A ←   → B", 8, h - 8);
+  $("#bev-seg-t").textContent = E.bevSeg ? `${E.bevSeg}/${B.segmentos.length}` : "envelope";
+}
+
+function bevBaixo(ev) {
+  if (!E.bev || E.bevSeg > 0 || (E.resumo.plano && E.resumo.plano.estado !== "RASCUNHO")) return;
+  const cv = $("#v-bev canvas"), r = cv.getBoundingClientRect(), T = bevT(r.width, r.height);
+  const [u, v] = T.mm(ev.clientX - r.left, ev.clientY - r.top), lim = E.bev.limites, c = E.bev.campo;
+  let par = -1; for (let i = 0; i < lim.length - 1; i++) if (v >= lim[i] && v < lim[i + 1]) par = i;
+  if (par < 0) return;
+  const tol = 6 / T.s, da = Math.abs(u - c.mlc_a[par]), db = Math.abs(u - c.mlc_b[par]);
+  if (Math.min(da, db) > tol) return;
+  E.arrasto = { par, banco: da < db ? "a" : "b", a: c.mlc_a.slice(), b: c.mlc_b.slice() };
+  ev.preventDefault();
+}
+function bevMove(ev) {
+  if (!E.arrasto) return;
+  const cv = $("#v-bev canvas"), r = cv.getBoundingClientRect(), T = bevT(r.width, r.height);
+  const [u] = T.mm(ev.clientX - r.left, ev.clientY - r.top), A = E.arrasto, gap = E.bev.gap;
+  const uu = Math.round(u * 2) / 2;
+  if (A.banco === "a") E.bev.campo.mlc_a[A.par] = Math.min(uu, E.bev.campo.mlc_b[A.par] - gap);
+  else E.bev.campo.mlc_b[A.par] = Math.max(uu, E.bev.campo.mlc_a[A.par] + gap);
+  desenharBev();
+}
+function bevSolta() {
+  if (!E.arrasto) return;
+  const A = E.arrasto; E.arrasto = null;
+  const c = E.bev.campo;
+  tentar(async () => {
+    try { atualizar(await api("POST", `/api/${E.sid}/campo/${encodeURIComponent(c.nome)}/laminas`, { mlc_a: c.mlc_a, mlc_b: c.mlc_b })); }
+    catch (e) { c.mlc_a = A.a; c.mlc_b = A.b; desenharBev(); throw e; }
+  });
+}
+
+// ------------------------------------------------------------------ DVH
+async function carregarDvh() { E.dvh = await api("GET", `/api/${E.sid}/dvh`); desenharDvh(); }
+function desenharDvh() {
+  const cv = $("#dvh"), { g, w, h } = prepararCanvas(cv);
+  g.fillStyle = "#0c0f13"; g.fillRect(0, 0, w, h);
+  const m = { l: 34, r: 8, t: 8, b: 24 }, W = w - m.l - m.r, H = h - m.t - m.b;
+  g.strokeStyle = "#2b323c"; g.fillStyle = "#8b95a3"; g.font = "10px system-ui"; g.lineWidth = 1;
+  if (!E.dvh) { g.fillText("Calcule a dose para ver o DVH", m.l + 8, m.t + 20); return; }
+  const rx = E.resumo.plano.prescricao.dose_total_gy;
+  const dmax = Math.max(rx * 1.15, ...Object.values(E.dvh).map(d => d.dose[d.dose.length - 1] || 0));
+  for (let k = 0; k <= 5; k++) {
+    const y = m.t + H - k / 5 * H; g.beginPath(); g.moveTo(m.l, y); g.lineTo(m.l + W, y); g.stroke(); g.fillText(`${k * 20}`, 6, y + 3);
+  }
+  const passo = dmax > 60 ? 20 : 10;
+  for (let d = 0; d <= dmax; d += passo) { const x = m.l + d / dmax * W; g.beginPath(); g.moveTo(x, m.t); g.lineTo(x, m.t + H); g.stroke(); g.fillText(`${d}`, x - 6, h - 8); }
+  const xr = m.l + rx / dmax * W; g.strokeStyle = "rgba(255,255,255,.35)"; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(xr, m.t); g.lineTo(xr, m.t + H); g.stroke(); g.setLineDash([]);
+  g.lineWidth = 1.6;
+  for (const [n, d] of Object.entries(E.dvh)) {
+    if (E.ocultas.has(n)) continue;
+    g.strokeStyle = `rgb(${d.cor})`; g.beginPath();
+    d.dose.forEach((x, k) => { const px = m.l + x / dmax * W, py = m.t + H - d.volume[k] / 100 * H; k ? g.lineTo(px, py) : g.moveTo(px, py); });
+    g.stroke();
+  }
+  g.fillStyle = "#8b95a3"; g.fillText("Gy", w - 18, h - 8); g.fillText("%", 4, 10);
+}
+
+iniciar().catch(e => aviso(e.message));

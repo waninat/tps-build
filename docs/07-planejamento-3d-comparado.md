@@ -12,15 +12,15 @@ seguir o Eclipse no 3D, e ir além dos dois onde der.
 | Restrição mecânica do MLCi (sem interdigitação) | respeita na entrega, conforme o MLC | respeita | resolvida no ajuste por propagação; recua o mínimo e avisa |
 | Ângulo de colimador | manual | manual | **otimização automática** (menor erro de conformação) |
 | Pesos dos campos | manual | manual | **otimização automática** (homogeneidade do alvo, penalidade em OAR) |
-| Compensação sem cunha | field-in-field manual; compensador eletrônico (fluência pintada) | field-in-field manual | **field-in-field automático**: sub-campos a 107/105/103%, pesos otimizados, UM mínima, campo aberto ≥ 60% |
+| Compensação sem cunha | field-in-field manual; compensador eletrônico (fluência pintada) | field-in-field manual | **field-in-field automático** e **compensador de fluência automático** (referência: dose no próprio alvo; segmentos MLCi; HI 0,20 → 0,12 no caso de separação variável) |
 | Segunda conta de UM | aplicativo à parte | aplicativo à parte | **embutida**: TMR/Sc/Sp/OAR com profundidade radiológica, em todo plano |
 | Plano 2D sem CT | possível com fantoma/contorno | limitado | fantoma virtual (caixa, elipse, contorno), SAD/SSD, exportação sem CT |
 | Integridade do plano aprovado | aprovação com estados | aprovação | aprovação com **hash SHA-256 conferido antes de exportar** |
 
 ## O que ainda falta para o 3D ficar completo (backlog da Fase 1/1b)
-- Interface: visualizador axial/coronal/sagital, BEV com DRR, edição de lâminas com o mouse, régua, isodoses.
-- Compensador eletrônico (fluência pintada, como o do Eclipse) para mama: é a evolução natural do field-in-field e
-  precisa de sequenciador step-and-shoot, que a Fase 3 vai trazer.
+- Interface 0.2.0 já tem cortes, BEV/DRR, edição de lâminas, isodoses, DVH; faltam régua, edição de jaws com o
+  mouse, contorno e registro.
+- Pintura manual da fluência do compensador (o automático já existe).
 - Pontos de referência com dose acumulada, campos de setup (kV/MV), soma de planos, bolus.
-- Relatório do plano em PDF e envio DICOM ao Mosaiq.
+- Relatório em PDF nativo (hoje: HTML imprimível) e teste real do envio ao Mosaiq 2.83.
 - Elétrons, se o Precise tiver (a confirmar).

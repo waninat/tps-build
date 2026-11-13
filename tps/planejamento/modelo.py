@@ -76,6 +76,7 @@ class Campo:
     alvo_conformado: str | None = None   # estrutura usada na conformação (rastreabilidade)
     margem_mm: float | None = None
     campo_pai: str | None = None         # sub-campo (field-in-field) de qual campo
+    segmentos: list | None = None        # compensador: [{"mlc_a","mlc_b","jaw_x","jaw_y","peso"}], Σ peso = 1
 
     def abertura_definida(self) -> bool:
         return self.jaw_y is not None and self.mlc_a is not None and self.mlc_b is not None

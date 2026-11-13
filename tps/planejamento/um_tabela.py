@@ -159,6 +159,33 @@ def dose_por_um_tabela(c: Campo, colim: Colimacao, tab: TabelasFeixe, ponto_mm, 
             "prof_rad_mm": prof_rad, "dist_mm": dist, "isq": isq, "sc": sc, "sp": sp, "tmr": tmr, "oar": oar}
 
 
+def _ponto_aberto(c: Campo, colim: Colimacao, u: float, v: float) -> bool:
+    lim = colim.limites_laminas
+    if not (c.jaw_y[0] <= v <= c.jaw_y[1]) or (c.jaw_x and not (c.jaw_x[0] <= u <= c.jaw_x[1])):
+        return False
+    i = int(np.searchsorted(lim, v, side="right") - 1)
+    return 0 <= i < colim.n_pares and c.mlc_a[i] < u < c.mlc_b[i]
+
+
+def dose_por_um_tabela_segmentos(c: Campo, colim: Colimacao, tab: TabelasFeixe, ponto_mm, eta=None, eixos=None,
+                                 transmissao: float = 0.01, posicao: str = "HFS") -> dict:
+    """Campo com segmentos (compensador): soma, com os pesos, a dose/UM de cada segmento que deixa o ponto
+    descoberto; segmentos que cobrem o ponto contribuem só com a transmissão do MLC."""
+    total, eq = 0.0, []
+    for s in c.segmentos:
+        sc = Campo(c.nome, c.gantry, c.colimador, c.mesa, c.isocentro_mm, jaw_x=s.get("jaw_x"), jaw_y=s["jaw_y"],
+                   mlc_a=s["mlc_a"], mlc_b=s["mlc_b"])
+        t = dose_por_um_tabela(sc, colim, tab, ponto_mm, eta, eixos, posicao=posicao)
+        fr = beam_frame(c.gantry, c.colimador, c.mesa, c.isocentro_mm, 1000.0, posicao)
+        r = np.asarray(ponto_mm, float) - fr.source
+        u, v = 1000.0 * (r @ fr.u) / (r @ fr.w), 1000.0 * (r @ fr.v) / (r @ fr.w)
+        f = 1.0 if _ponto_aberto(sc, colim, u, v) else transmissao
+        total += s["peso"] * f * t["cgy_por_um"]
+        eq.append(t["eq_abertura_cm"])
+    t["cgy_por_um"], t["eq_abertura_cm"] = total, float(np.mean(eq))
+    return t
+
+
 def conferir_plano(plano, colim: Colimacao, tab: TabelasFeixe, doses_um: dict, grade, ponto_mm=None,
                    tolerancia_pct: float = 3.0) -> list[dict]:
     """Compara, campo a campo, a dose/UM do motor com a das tabelas no ponto (padrão: isocentro de cada campo)."""
@@ -166,9 +193,15 @@ def conferir_plano(plano, colim: Colimacao, tab: TabelasFeixe, doses_um: dict, g
     out = []
     for c in plano.campos:
         p = np.asarray(ponto_mm if ponto_mm is not None else c.isocentro_mm, float)
-        t = dose_por_um_tabela(c, colim, tab, p, grade.eta, (grade.x, grade.y, grade.z), posicao=plano.posicao_paciente)
+        if c.segmentos:
+            t = dose_por_um_tabela_segmentos(c, colim, tab, p, grade.eta, (grade.x, grade.y, grade.z),
+                                             posicao=plano.posicao_paciente)
+        else:
+            t = dose_por_um_tabela(c, colim, tab, p, grade.eta, (grade.x, grade.y, grade.z),
+                                   posicao=plano.posicao_paciente)
         motor = valor_em_ponto(doses_um[c.nome], grade, p) * 100.0
         dif = 100 * (motor / t["cgy_por_um"] - 1) if t["cgy_por_um"] > 0 else float("nan")
-        out.append({"campo": c.nome, "motor_cgy_um": motor, "tabela_cgy_um": t["cgy_por_um"], "dif_pct": dif,
-                    "ok": abs(dif) <= tolerancia_pct, **{k: t[k] for k in ("eq_abertura_cm", "prof_rad_mm", "tmr")}})
+        out.append({"campo": c.nome, "motor_cgy_um": float(motor), "tabela_cgy_um": float(t["cgy_por_um"]),
+                    "dif_pct": float(dif), "ok": bool(abs(dif) <= tolerancia_pct),
+                    **{k: float(t[k]) for k in ("eq_abertura_cm", "prof_rad_mm", "tmr")}})
     return out

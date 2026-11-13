@@ -43,9 +43,33 @@ def _ds(**kw) -> Dataset:
     return d
 
 
+def _feixes_para_exportar(plano: Plano, modo_segmentos: str) -> list[tuple]:
+    """[(nome, campo, mu, formas)] — formas: [(jaw_x, jaw_y, mlc_a, mlc_b, peso)].
+
+    Campos com segmentos (compensador): "campos_separados" vira um campo estático por segmento (nome + c1, c2…;
+    UM do campo × peso, 0,1 UM); "step_and_shoot" vira um único campo com pares de pontos de controle."""
+    out = []
+    for c in plano.campos:
+        if not c.segmentos:
+            out.append((c.nome, c, float(c.mu), [(c.jaw_x, c.jaw_y, c.mlc_a, c.mlc_b, 1.0)]))
+        elif modo_segmentos == "step_and_shoot":
+            out.append((c.nome, c, float(c.mu), [(s.get("jaw_x"), s["jaw_y"], s["mlc_a"], s["mlc_b"], s["peso"])
+                                                 for s in c.segmentos]))
+        elif modo_segmentos == "campos_separados":
+            for k, s in enumerate(c.segmentos, start=1):
+                out.append((f"{c.nome[:13]}c{k}", c, round(float(c.mu) * s["peso"], 1),
+                            [(s.get("jaw_x"), s["jaw_y"], s["mlc_a"], s["mlc_b"], 1.0)]))
+        else:
+            raise ValueError(f"Modo de segmentos desconhecido: {modo_segmentos}")
+    return out
+
+
 def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm: float = 1000.0,
-                    exigir_aprovado: bool = True) -> Dataset:
-    """Grava o RTPLAN e devolve o Dataset. Por padrão, só exporta plano aprovado e íntegro."""
+                    exigir_aprovado: bool = True, modo_segmentos: str = "campos_separados") -> Dataset:
+    """Grava o RTPLAN e devolve o Dataset. Por padrão, só exporta plano aprovado e íntegro.
+
+    modo_segmentos (campos com compensador): "campos_separados" (padrão, entrega garantida em qualquer R&V) ou
+    "step_and_shoot" (um campo com segmentos — PENDENTE de teste no Mosaiq 2.83)."""
     if exigir_aprovado:
         plano.conferir_integridade()
     erros = plano.validar()
@@ -115,7 +139,7 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
                                             SetupTechnique="ISOCENTRIC")])
 
     # ---------------------------------------------------------------- fração
-    fg = _ds(FractionGroupNumber=1, NumberOfFractionsPlanned=pr.fracoes, NumberOfBeams=len(plano.campos),
+    fg = _ds(FractionGroupNumber=1, NumberOfFractionsPlanned=pr.fracoes, NumberOfBeams=0,
              NumberOfBrachyApplicationSetups=0)
     fg.ReferencedDoseReferenceSequence = Sequence([_ds(ReferencedDoseReferenceNumber=1)])
     fg.ReferencedBeamSequence = Sequence()
@@ -123,10 +147,24 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     # ---------------------------------------------------------------- feixes
     ds.BeamSequence = Sequence()
     n = colim.n_pares
-    for nb, c in enumerate(plano.campos, start=1):
-        fg.ReferencedBeamSequence.append(_ds(ReferencedBeamNumber=nb, BeamMeterset=round(float(c.mu), 1)))
+    feixes = _feixes_para_exportar(plano, modo_segmentos)
+    fg.NumberOfBeams = len(feixes)
+
+    def posicoes(jx, jy, ma, mb):
+        out = []
+        if colim.tem_jaw_x:
+            out.append(_ds(RTBeamLimitingDeviceType="ASYMX", LeafJawPositions=[float(v) for v in jx]))
+        out.append(_ds(RTBeamLimitingDeviceType="ASYMY", LeafJawPositions=[float(v) for v in jy]))
+        out.append(_ds(RTBeamLimitingDeviceType=colim.tipo_mlc,
+                       LeafJawPositions=[float(v) for v in ma] + [float(v) for v in mb]))
+        return Sequence(out)
+
+    for nb, (nome, c, mu, formas) in enumerate(feixes, start=1):
+        if mu < 0.1:
+            raise ValueError(f"{nome}: UM abaixo de 0,1")
+        fg.ReferencedBeamSequence.append(_ds(ReferencedBeamNumber=nb, BeamMeterset=round(mu, 1)))
         b = Dataset()
-        b.BeamNumber, b.BeamName, b.BeamDescription = nb, c.nome, c.nome
+        b.BeamNumber, b.BeamName, b.BeamDescription = nb, nome[:16], nome
         b.TreatmentMachineName = plano.nome_dicom_maquina
         b.PrimaryDosimeterUnit = "MU"
         b.SourceAxisDistance = float(sad_mm)
@@ -143,19 +181,12 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
         b.ReferencedPatientSetupNumber = 1
         b.NumberOfWedges = b.NumberOfCompensators = b.NumberOfBoli = b.NumberOfBlocks = 0
         b.FinalCumulativeMetersetWeight = 1.0
-        b.NumberOfControlPoints = 2
 
         cp0 = Dataset()
         cp0.ControlPointIndex = 0
         cp0.NominalBeamEnergy = float(c.energia_mv)
         cp0.DoseRateSet = float(c.taxa_dose)
-        posicoes = []
-        if colim.tem_jaw_x:
-            posicoes.append(_ds(RTBeamLimitingDeviceType="ASYMX", LeafJawPositions=[float(v) for v in c.jaw_x]))
-        posicoes.append(_ds(RTBeamLimitingDeviceType="ASYMY", LeafJawPositions=[float(v) for v in c.jaw_y]))
-        posicoes.append(_ds(RTBeamLimitingDeviceType=colim.tipo_mlc,
-                            LeafJawPositions=[float(v) for v in c.mlc_a] + [float(v) for v in c.mlc_b]))
-        cp0.BeamLimitingDevicePositionSequence = Sequence(posicoes)
+        cp0.BeamLimitingDevicePositionSequence = posicoes(*formas[0][:4])
         cp0.GantryAngle = float(c.gantry) % 360
         cp0.GantryRotationDirection = "NONE"
         cp0.BeamLimitingDeviceAngle = float(c.colimador) % 360
@@ -171,10 +202,24 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
         cp0.CumulativeMetersetWeight = 0.0
         cp0.ReferencedDoseReferenceSequence = Sequence([_ds(ReferencedDoseReferenceNumber=1,
                                                             CumulativeDoseReferenceCoefficient=0.0)])
-        cp1 = _ds(ControlPointIndex=1, CumulativeMetersetWeight=1.0)
-        cp1.ReferencedDoseReferenceSequence = Sequence([_ds(ReferencedDoseReferenceNumber=1,
-                                                            CumulativeDoseReferenceCoefficient=1.0)])
-        b.ControlPointSequence = Sequence([cp0, cp1])
+        cps = [cp0]
+        acum = 0.0
+        for k, (jx, jy, ma, mb, peso) in enumerate(formas):
+            if k > 0:                                    # início do segmento k: mesma UM acumulada, nova forma
+                cpi = _ds(ControlPointIndex=len(cps), CumulativeMetersetWeight=round(acum, 6))
+                cpi.BeamLimitingDevicePositionSequence = posicoes(jx, jy, ma, mb)
+                cpi.ReferencedDoseReferenceSequence = Sequence([_ds(ReferencedDoseReferenceNumber=1,
+                                                                    CumulativeDoseReferenceCoefficient=round(acum, 6))])
+                cps.append(cpi)
+            acum = 1.0 if k == len(formas) - 1 else acum + float(peso)
+            cpf = _ds(ControlPointIndex=len(cps), CumulativeMetersetWeight=round(acum, 6))
+            if len(formas) > 1:
+                cpf.BeamLimitingDevicePositionSequence = posicoes(jx, jy, ma, mb)
+            cpf.ReferencedDoseReferenceSequence = Sequence([_ds(ReferencedDoseReferenceNumber=1,
+                                                                CumulativeDoseReferenceCoefficient=round(acum, 6))])
+            cps.append(cpf)
+        b.NumberOfControlPoints = len(cps)
+        b.ControlPointSequence = Sequence(cps)
         ds.BeamSequence.append(b)
     ds.FractionGroupSequence = Sequence([fg])
 
