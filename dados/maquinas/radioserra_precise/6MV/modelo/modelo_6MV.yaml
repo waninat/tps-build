@@ -1,6 +1,8 @@
 energy_mv: 6.0
 spectrum_hardening_k: 23.51029407680404
 sigma_src_mm: 1.5
+sigma_src_x_mm: 2.24
+sigma_src_y_mm: 1.08
 w_extrafocal: 0.09960891575259972
 sigma_extrafocal_mm: 45.28695731018158
 mlc_transmission: 0.01

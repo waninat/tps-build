@@ -22,6 +22,8 @@ class BeamModelParams:
     energy_mv: float = 6.0
     spectrum_hardening_k: float = 0.0       # ver physics/spectrum.py
     sigma_src_mm: float = 1.5               # borramento primário no isocentro
+    sigma_src_x_mm: float | None = None     # anisotropia: X = direção das lâminas (ponta arredondada), Y = jaws
+    sigma_src_y_mm: float | None = None
     w_extrafocal: float = 0.06
     sigma_extrafocal_mm: float = 25.0
     mlc_transmission: float = 0.005
@@ -152,9 +154,10 @@ def aperture_rapida(grid: FluenceGrid, jaw_x, jaw_y, mlc_a, mlc_b, leaf_boundari
 
 
 def energy_fluence(apert: np.ndarray, grid: FluenceGrid, p: BeamModelParams) -> np.ndarray:
-    s1 = p.sigma_src_mm / grid.du
+    sx = (p.sigma_src_x_mm if p.sigma_src_x_mm is not None else p.sigma_src_mm) / grid.du
+    sy = (p.sigma_src_y_mm if p.sigma_src_y_mm is not None else p.sigma_src_mm) / grid.dv
     s2 = p.sigma_extrafocal_mm / grid.du
-    prim = gaussian_filter(apert, s1, mode="constant")
+    prim = gaussian_filter(apert, (sy, sx), mode="constant")      # apert [nv, nu]: v = Y, u = X
     ef = gaussian_filter(apert, s2, mode="constant")
     psi = (1 - p.w_extrafocal) * prim + p.w_extrafocal * ef
     U, V = np.meshgrid(grid.u, grid.v)
