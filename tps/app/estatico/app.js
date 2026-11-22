@@ -194,8 +194,9 @@ function ligar() {
   for (const v of ["axial", "coronal", "sagital"]) {
     const cv = $(`#v-${v} canvas`);
     cv.addEventListener("wheel", (ev) => { ev.preventDefault(); mudarCorte(v, ev.deltaY > 0 ? 1 : -1); }, { passive: false });
-    cv.addEventListener("click", (ev) => clicarCorte(v, ev));
+    cv.addEventListener("click", (ev) => { if (v === "axial" && contornoAtivo()) return; clicarCorte(v, ev); });
   }
+  iniciarContorno();
   const bc = $("#v-bev canvas");
   bc.addEventListener("mousedown", bevBaixo); bc.addEventListener("mousemove", bevMove);
   window.addEventListener("mouseup", bevSolta);
@@ -246,11 +247,14 @@ function atualizar(r) {
     $(sel).value = alvos.includes(atual) ? atual : (sel === "#p-alvo" && r.tipo === "fantoma" ? "" : preferido);
   }
   $("#c-blind").innerHTML = alvos.map(n => `<option>${n}</option>`).join("");
+  { const atual = $("#k-est").value, nomes = r.estruturas.filter(e => e.tipo !== "BOLUS").map(e => e.nome);
+    $("#k-est").innerHTML = nomes.map(n => `<option>${n}</option>`).join("");
+    if (nomes.includes(atual)) $("#k-est").value = atual; }
   for (const sel of ["#ne-a", "#ne-b"]) { const atual = $(sel).value; $(sel).innerHTML = alvos.map(n => `<option>${n}</option>`).join(""); if (alvos.includes(atual)) $(sel).value = atual; }
   $("#b-nova-est").disabled = !r.estruturas.length;
   const dens = (p && p.densidades) || {};
   $("#lista-estruturas").innerHTML = r.estruturas.map(e => `<li><input type="checkbox" data-est="${e.nome}" ${E.ocultas.has(e.nome) ? "" : "checked"}>
-    <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span>${e.tipo === "DERIVADA" ? `<button class="pequeno" data-rem-est="${e.nome}" title="remover estrutura criada no TPS">×</button>` : ""}
+    <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span>${(e.tipo === "DERIVADA" || e.editada) ? `<button class="pequeno" data-rem-est="${e.nome}" title="remover estrutura criada/editada no TPS">×</button>` : ""}
     <input class="dens ${dens[e.nome] != null ? "ativa" : ""}" data-dens="${e.nome}" title="densidade eletrônica relativa forçada (vazio = do CT)"
       placeholder="ρe" value="${dens[e.nome] != null ? dens[e.nome] : ""}" ${p && p.estado === "RASCUNHO" ? "" : "disabled"}></li>`).join("");
   $$("[data-dens]").forEach(c => c.onchange = () => tentar(async () =>
@@ -270,6 +274,25 @@ function atualizar(r) {
   $("#b-exportar").disabled = !aprovado;
   $("#b-salvar").disabled = !temPlano; $("#b-relatorio").disabled = !temPlano;
   $("#b-checkfilm").disabled = !(temPlano && E.resumo.plano.campos.length);
+  const pd = r.planos_dicom || [];
+  $("#planos-dicom").classList.toggle("oculto", !pd.length);
+  $("#lista-planos-dicom").innerHTML = pd.map(q => `<li><b>${q.rotulo}</b> · ${q.campos} campo(s) · ${q.maquina} · ${q.fabricante}
+    ${q.dose ? "· com dose" : ""} <button class="pequeno" data-imp="${q.arquivo}">importar</button></li>`).join("");
+  $$("[data-imp]").forEach(b => b.onclick = () => tentar(async () => {
+    if (temPlano && !confirm("Importar substitui o plano atual desta sessão (salve-o antes, se precisar). Continuar?")) return;
+    const r2 = await api("POST", `/api/${E.sid}/importar_plano`, { arquivo: b.dataset.imp }, "Importando o plano…");
+    atualizar(r2); $("#p-metodo").value = "um_fixas"; mostrarPonto();
+    if (r2.isocentro) irPara(r2.isocentro);
+  }));
+  if (p && p.prescricao && p.prescricao.metodo === "um_fixas") $("#p-metodo").value = "um_fixas";
+  const cmp = r.resultado && r.resultado.comparacao;
+  $("#comparacao").classList.toggle("oculto", !cmp);
+  if (cmp) {
+    $("#cmp-fonte").textContent = cmp.fonte;
+    $("#cmp-resumo").textContent = `Gama 3%/3 mm (global, limiar 10%): ${f1(cmp.gama_3_3, 1)}% · Dmax do outro: ${f1(cmp.dmax_ref, 2)} Gy · DVH do outro tracejado`;
+    $("#tab-cmp tbody").innerHTML = Object.entries(cmp.estatisticas).map(([n, q]) =>
+      `<tr><td>${n}</td><td>${f1(q.Dmean_ref, 2)}</td><td>${f1(q.Dmean_tps, 2)}</td><td class="${Math.abs(q.dif_pct) > 3 ? "avisotxt" : ""}">${q.dif_pct > 0 ? "+" : ""}${f1(q.dif_pct, 1)}%</td></tr>`).join("");
+  }
   $$("[data-arranjo]").forEach(b => b.disabled = !temPlano || aprovado);
   $("#b-ponto").disabled = !temPlano; $("#b-bolus").disabled = !temPlano || aprovado;
   $("#bo-campos").innerHTML = p ? p.campos.filter(c => !c.campo_pai).map(c => `<option>${c.nome}</option>`).join("") : "";
@@ -372,7 +395,7 @@ async function calcular() {
 }
 
 async function exportar() {
-  const corpo = { modo_segmentos: $("#e-modo").value, pasta: $("#e-pasta").value.trim() || null };
+  const corpo = { modo_segmentos: $("#e-modo").value, pasta: $("#e-pasta").value.trim() || null, rtstruct: $("#e-rs").checked };
   if ($("#m-enviar").checked) corpo.enviar = { host: $("#m-host").value, porta: +$("#m-porta").value, ae_destino: $("#m-ae").value };
   corpo.senha = await assinatura("exportar o plano");
   if ($("#e-imagens").checked) corpo.incluir_imagens = true;
@@ -558,6 +581,7 @@ function desenharCorte(vista) {
     g.strokeStyle = "rgba(255,230,0,.5)"; g.lineWidth = 1; g.beginPath();
     g.moveTo(x, 0); g.lineTo(x, h); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
   }
+  if (vista === "axial") desenharContornoPreview(g, T);
   // legenda de isodoses
   if (vista === "axial" && sob && sob.isodoses && sob.isodoses.length && $("#v-axial .t-iso").checked) {
     g.font = "11px system-ui"; let yy = 16;
@@ -700,6 +724,11 @@ function desenharDvh() {
     g.strokeStyle = `rgb(${d.cor})`; g.beginPath();
     d.dose.forEach((x, k) => { const px = m.l + x / dmax * W, py = m.t + H - d.volume[k] / 100 * H; k ? g.lineTo(px, py) : g.moveTo(px, py); });
     g.stroke();
+    if (d.ref) {
+      g.setLineDash([4, 3]); g.beginPath();
+      d.ref.dose.forEach((x, k) => { const px = m.l + x / dmax * W, py = m.t + H - d.ref.volume[k] / 100 * H; k ? g.lineTo(px, py) : g.moveTo(px, py); });
+      g.stroke(); g.setLineDash([]);
+    }
   }
   g.fillStyle = "#8b95a3"; g.fillText("Gy", w - 18, h - 8); g.fillText("%", 4, 10);
 }
@@ -743,3 +772,88 @@ async function verAuditoria() {
 }
 
 iniciar().catch(e => aviso(e.message));
+
+
+// ------------------------------------------------------------------ ferramentas de contorno (corte axial)
+E.k = { traco: null, poli: [], mouse: null };
+function contornoAtivo() { return E.sid && $("#k-ativo").checked && $("#k-est").value; }
+function ferramentaK() { return document.querySelector("input[name=k-f]:checked").value; }
+function mmAxial(ev) {
+  const cv = $("#v-axial canvas"), r = cv.getBoundingClientRect();
+  const T = transf("axial", r.width, r.height);
+  return T.mm(ev.clientX - r.left, ev.clientY - r.top).map(v => Math.round(v * 10) / 10);
+}
+async function enviarContorno(corpo) {
+  const r = await api("POST", `/api/${E.sid}/contorno/editar`, { nome: $("#k-est").value, idx: E.idx.axial, ...corpo });
+  atualizar(r);
+}
+function iniciarContorno() {
+  const cv = $("#v-axial canvas");
+  $("#k-raio").oninput = () => { $("#k-raio-t").textContent = $("#k-raio").value; desenharCorte("axial"); };
+  cv.addEventListener("mousedown", (ev) => {
+    if (!contornoAtivo() || ev.button !== 0) return;
+    const f = ferramentaK();
+    if (f === "pincel" || f === "borracha") { E.k.traco = [mmAxial(ev)]; ev.preventDefault(); }
+  });
+  cv.addEventListener("mousemove", (ev) => {
+    if (!contornoAtivo()) { if (E.k.mouse) { E.k.mouse = null; desenharCorte("axial"); } return; }
+    E.k.mouse = mmAxial(ev);
+    if (E.k.traco) E.k.traco.push(E.k.mouse);
+    desenharCorte("axial");
+  });
+  cv.addEventListener("mouseleave", () => { E.k.mouse = null; desenharCorte("axial"); });
+  window.addEventListener("mouseup", () => {
+    if (!E.k.traco) return;
+    const pts = E.k.traco; E.k.traco = null;
+    tentar(() => enviarContorno({ ferramenta: "pincel", pontos: pts, raio_mm: +$("#k-raio").value, apagar: ferramentaK() === "borracha" }));
+  });
+  cv.addEventListener("click", (ev) => {
+    if (!contornoAtivo() || !ferramentaK().startsWith("poligono")) return;
+    E.k.poli.push(mmAxial(ev)); desenharCorte("axial");
+  });
+  cv.addEventListener("dblclick", (ev) => {
+    if (!contornoAtivo() || !ferramentaK().startsWith("poligono")) return;
+    ev.preventDefault();
+    const pts = E.k.poli.slice(); E.k.poli = [];
+    if (pts.length >= 3) tentar(() => enviarContorno({ ferramenta: "poligono", pontos: pts, apagar: ferramentaK() === "poligono-" }));
+    desenharCorte("axial");
+  });
+  window.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && E.k.poli.length) { E.k.poli = []; desenharCorte("axial"); } });
+  $("#b-k-nova").onclick = () => tentar(async () => {
+    const nome = $("#k-nova").value.trim();
+    const r = await api("POST", `/api/${E.sid}/contorno/nova`, { nome, tipo: nome.toUpperCase().startsWith("PTV") ? "PTV" : "ORGAN" });
+    $("#k-nova").value = ""; atualizar(r); $("#k-est").value = nome; $("#k-ativo").checked = true;
+  });
+  $("#b-k-ant").onclick = () => tentar(() => enviarContorno({ ferramenta: "copiar", origem: E.idx.axial - 1 }));
+  $("#b-k-seg").onclick = () => tentar(() => enviarContorno({ ferramenta: "copiar", origem: E.idx.axial + 1 }));
+  $("#b-k-limpar").onclick = () => tentar(() => enviarContorno({ ferramenta: "limpar" }));
+  $("#b-k-interp").onclick = () => tentar(async () => {
+    const r = await api("POST", `/api/${E.sid}/contorno/interpolar`, { nome: $("#k-est").value }, "Interpolando…");
+    atualizar(r); aviso(`${r.resultado.novos_cortes} corte(s) preenchido(s)`);
+  });
+  $("#b-k-desf").onclick = () => tentar(async () => atualizar(await api("POST", `/api/${E.sid}/contorno/desfazer`, {})));
+  $("#b-k-corpo").onclick = () => tentar(async () => {
+    const nome = E.resumo.estruturas.some(e => e.nome === "BODY") ? "BODY_AUTO" : "BODY";
+    atualizar(await api("POST", `/api/${E.sid}/contorno/corpo`, { nome }, "Contornando o corpo…"));
+  });
+}
+function desenharContornoPreview(g, T) {
+  if (!contornoAtivo()) return;
+  const f = ferramentaK();
+  g.save(); g.strokeStyle = "#ffef5a"; g.lineWidth = 1.2;
+  if ((f === "pincel" || f === "borracha") && E.k.mouse) {
+    const [x, y] = T.px(...E.k.mouse), r = +$("#k-raio").value * T.s;
+    g.setLineDash(f === "borracha" ? [3, 3] : []); g.beginPath(); g.arc(x, y, r, 0, 2 * Math.PI); g.stroke();
+  }
+  if (E.k.traco && E.k.traco.length > 1) {
+    g.globalAlpha = 0.5; g.lineWidth = 2 * +$("#k-raio").value * T.s; g.lineCap = "round"; g.lineJoin = "round";
+    g.strokeStyle = f === "borracha" ? "#ff5050" : "#ffef5a"; g.beginPath();
+    E.k.traco.forEach((p, i) => { const [x, y] = T.px(...p); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
+  }
+  if (f.startsWith("poligono") && E.k.poli.length) {
+    g.setLineDash([]); g.globalAlpha = 1; g.lineWidth = 1.2; g.beginPath();
+    [...E.k.poli, ...(E.k.mouse ? [E.k.mouse] : [])].forEach((p, i) => { const [x, y] = T.px(...p); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.stroke();
+  }
+  g.restore();
+}

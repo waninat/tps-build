@@ -130,3 +130,8 @@ tr.sub td:first-child { padding-left: 14px; color: var(--fraco); }
 #modal h2 { margin: 0 0 10px; font-size: 16px; }
 #modal table td { font-size: 11px; }
 .selo-ok { color: var(--ok); } .selo-falha { color: var(--perigo); }
+.linha-inline { display: flex; gap: 4px; }
+.linha-inline input { flex: 1; min-width: 0; }
+#k-ferr { flex-wrap: wrap; gap: 6px; }
+.caixa-import { border: 1px dashed #3a4656; border-radius: 6px; padding: 6px 8px; margin-top: 8px; }
+.caixa-import ul { margin: 4px 0 0; padding-left: 16px; }

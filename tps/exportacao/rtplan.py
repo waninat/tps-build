@@ -65,11 +65,16 @@ def _feixes_para_exportar(plano: Plano, modo_segmentos: str) -> list[tuple]:
 
 
 def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm: float = 1000.0,
-                    exigir_aprovado: bool = True, modo_segmentos: str = "campos_separados") -> Dataset:
+                    exigir_aprovado: bool = True, modo_segmentos: str = "campos_separados",
+                    extras: dict | None = None) -> Dataset:
     """Grava o RTPLAN e devolve o Dataset. Por padrão, só exporta plano aprovado e íntegro.
 
-    modo_segmentos (campos com compensador): "campos_separados" (padrão, entrega garantida em qualquer R&V) ou
-    "step_and_shoot" (um campo com segmentos — PENDENTE de teste no Mosaiq 2.83)."""
+    modo_segmentos (campos com compensador): "campos_separados" (entrega garantida em qualquer R&V) ou
+    "step_and_shoot" (um campo STATIC com pares de pontos de controle — como o Monaco grava o field-in-field).
+    extras (da máquina e do cálculo, como o Monaco 6.1 grava para o Mosaiq): distancia_fonte_mm {ASYMX, ASYMY, MLCX},
+    tolerancia (rótulo), departamento, ponto_ref {"nome", "xyz"} e dose_feixe {nome do feixe: Gy/fração no ponto},
+    rtstruct (SOPInstanceUID do RTSTRUCT exportado junto)."""
+    ex = extras or {}
     if exigir_aprovado:
         plano.conferir_integridade()
     erros = plano.validar()
@@ -88,7 +93,7 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     ds.file_meta.MediaStorageSOPInstanceUID = ds.SOPInstanceUID
     ds.file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
     ds.SOPClassUID = RTPLAN_SOP
-    ds.SpecificCharacterSet = "ISO_IR 192"
+    ds.SpecificCharacterSet = "ISO_IR 100"        # Latin-1, como o Monaco (o Mosaiq 2.83 lê assim)
     ds.InstanceCreationDate, ds.InstanceCreationTime = agora.strftime("%Y%m%d"), agora.strftime("%H%M%S")
 
     # ---------------------------------------------------------------- paciente / estudo / série / equipamento
@@ -102,6 +107,9 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     ds.Modality = "RTPLAN"
     ds.SeriesInstanceUID = generate_uid()
     ds.SeriesNumber = 1
+    ds.InstanceNumber = 1
+    ds.SeriesDate = ds.ContentDate = agora.strftime("%Y%m%d")
+    ds.SeriesTime = ds.ContentTime = agora.strftime("%H%M%S")
     if not sem_imagem:
         ds.FrameOfReferenceUID = ref["FrameOfReferenceUID"]
         ds.PositionReferenceIndicator = ""
@@ -114,10 +122,13 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     ds.RTPlanLabel = plano.rotulo
     ds.RTPlanName = plano.rotulo
     ds.RTPlanDate, ds.RTPlanTime = agora.strftime("%Y%m%d"), agora.strftime("%H%M%S")
+    ds.RTPlanDescription = ""
+    ds.PlanIntent = str(ex.get("intencao") or "CURATIVE")
     ds.RTPlanGeometry = "TREATMENT_DEVICE" if sem_imagem else "PATIENT"
-    if plano.referencia_rtstruct:
+    rs_uid = ex.get("rtstruct") or plano.referencia_rtstruct
+    if rs_uid:
         ds.ReferencedStructureSetSequence = Sequence([_ds(ReferencedSOPClassUID=RTSTRUCT_SOP,
-                                                          ReferencedSOPInstanceUID=plano.referencia_rtstruct)])
+                                                          ReferencedSOPInstanceUID=rs_uid)])
     if plano.aprovacao:
         q = dt.datetime.fromisoformat(plano.aprovacao["quando"])
         ds.ApprovalStatus = "APPROVED"
@@ -132,7 +143,17 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     dref = _ds(DoseReferenceNumber=1, DoseReferenceUID=generate_uid(), DoseReferenceStructureType="SITE",
                DoseReferenceDescription=pr.estrutura_alvo[:64], DoseReferenceType="TARGET",
                TargetPrescriptionDose=round(pr.dose_total_gy, 4))
-    ds.DoseReferenceSequence = Sequence([dref])
+    refs = [dref]
+    pref = ex.get("ponto_ref")
+    if pref and not sem_imagem:
+        refs.append(_ds(DoseReferenceNumber=2, DoseReferenceUID=generate_uid(),
+                        DoseReferenceStructureType="COORDINATES",
+                        DoseReferenceDescription=str(pref.get("nome", "REF"))[:64],
+                        DoseReferencePointCoordinates=[round(float(v), 1) for v in pref["xyz"]],
+                        DoseReferenceType="TARGET"))
+    ds.DoseReferenceSequence = Sequence(refs)
+    if ex.get("tolerancia"):
+        ds.ToleranceTableSequence = Sequence([_ds(ToleranceTableNumber=1, ToleranceTableLabel=str(ex["tolerancia"])[:16])])
 
     # ---------------------------------------------------------------- setup do paciente
     ds.PatientSetupSequence = Sequence([_ds(PatientSetupNumber=1, PatientPosition=plano.posicao_paciente,
@@ -162,25 +183,43 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     for nb, (nome, c, mu, formas) in enumerate(feixes, start=1):
         if mu < 0.1:
             raise ValueError(f"{nome}: UM abaixo de 0,1")
-        fg.ReferencedBeamSequence.append(_ds(ReferencedBeamNumber=nb, BeamMeterset=round(mu, 1)))
+        rb = _ds(ReferencedBeamNumber=nb, BeamMeterset=round(mu, 1))
+        dfx = (ex.get("dose_feixe") or {}).get(nome)
+        if pref and not sem_imagem and dfx is not None:
+            rb.BeamDoseSpecificationPoint = [round(float(v), 1) for v in pref["xyz"]]
+            rb.BeamDose = round(float(dfx), 4)
+        fg.ReferencedBeamSequence.append(rb)
         b = Dataset()
         bol = [x for x in plano.bolus if not x.get("campos") or c.nome in x["campos"] or (c.campo_pai or "") in x["campos"]]
         b.BeamNumber, b.BeamName = nb, nome[:16]
-        b.BeamDescription = (nome + "".join(f" BOLUS {x['espessura_mm']:g}mm" for x in bol))[:64]
+        b.BeamDescription = ((getattr(c, "descricao", "") or nome)
+                             + "".join(f" BOLUS {x['espessura_mm']:g}mm" for x in bol))[:64]
+        if ex.get("departamento"):
+            b.InstitutionalDepartmentName = str(ex["departamento"])[:64]
         b.TreatmentMachineName = plano.nome_dicom_maquina
         b.PrimaryDosimeterUnit = "MU"
         b.SourceAxisDistance = float(sad_mm)
         b.BeamType, b.RadiationType, b.TreatmentDeliveryType = "STATIC", "PHOTON", "TREATMENT"
         b.PrimaryFluenceModeSequence = Sequence([_ds(FluenceMode="STANDARD")])
+        dist = ex.get("distancia_fonte_mm") or {}
+
+        def disp(tipo, npar):
+            d = _ds(RTBeamLimitingDeviceType=tipo)
+            if tipo in dist:
+                d.SourceToBeamLimitingDeviceDistance = float(dist[tipo])
+            d.NumberOfLeafJawPairs = npar
+            return d
         dispositivos = []
         if colim.tem_jaw_x:
-            dispositivos.append(_ds(RTBeamLimitingDeviceType="ASYMX", NumberOfLeafJawPairs=1))
-        dispositivos.append(_ds(RTBeamLimitingDeviceType="ASYMY", NumberOfLeafJawPairs=1))
-        mlc = _ds(RTBeamLimitingDeviceType=colim.tipo_mlc, NumberOfLeafJawPairs=n)
+            dispositivos.append(disp("ASYMX", 1))
+        dispositivos.append(disp("ASYMY", 1))
+        mlc = disp(colim.tipo_mlc, n)
         mlc.LeafPositionBoundaries = [round(float(v), 2) for v in colim.limites_laminas]
         dispositivos.append(mlc)
         b.BeamLimitingDeviceSequence = Sequence(dispositivos)
         b.ReferencedPatientSetupNumber = 1
+        if ex.get("tolerancia"):
+            b.ReferencedToleranceTableNumber = 1
         b.NumberOfWedges = b.NumberOfCompensators = b.NumberOfBoli = b.NumberOfBlocks = 0
         b.FinalCumulativeMetersetWeight = 1.0
 
@@ -201,24 +240,34 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
         cp0.IsocenterPosition = None if sem_imagem else [round(float(v), 2) for v in c.isocentro_mm]
         if c.ssd_mm is not None:
             cp0.SourceToSurfaceDistance = round(float(c.ssd_mm), 1)
+            if not sem_imagem:
+                from tps.engine.geometry import beam_frame
+                fr = beam_frame(c.gantry, c.colimador, c.mesa, c.isocentro_mm, sad_mm, plano.posicao_paciente)
+                cp0.SurfaceEntryPoint = [round(float(v), 1) for v in fr.source + float(c.ssd_mm) * fr.w]
         cp0.CumulativeMetersetWeight = 0.0
-        cp0.ReferencedDoseReferenceSequence = Sequence([_ds(ReferencedDoseReferenceNumber=1,
-                                                            CumulativeDoseReferenceCoefficient=0.0)])
+
+        def refdose(w):
+            out = [_ds(ReferencedDoseReferenceNumber=1, CumulativeDoseReferenceCoefficient=round(w, 6))]
+            if len(refs) > 1:
+                out.append(_ds(ReferencedDoseReferenceNumber=2, CumulativeDoseReferenceCoefficient=round(w, 6)))
+            return Sequence(out)
+        cp0.ReferencedDoseReferenceSequence = refdose(0.0)
         cps = [cp0]
         acum = 0.0
         for k, (jx, jy, ma, mb, peso) in enumerate(formas):
             if k > 0:                                    # início do segmento k: mesma UM acumulada, nova forma
                 cpi = _ds(ControlPointIndex=len(cps), CumulativeMetersetWeight=round(acum, 6))
                 cpi.BeamLimitingDevicePositionSequence = posicoes(jx, jy, ma, mb)
-                cpi.ReferencedDoseReferenceSequence = Sequence([_ds(ReferencedDoseReferenceNumber=1,
-                                                                    CumulativeDoseReferenceCoefficient=round(acum, 6))])
+                cpi.ReferencedDoseReferenceSequence = refdose(acum)
                 cps.append(cpi)
             acum = 1.0 if k == len(formas) - 1 else acum + float(peso)
-            cpf = _ds(ControlPointIndex=len(cps), CumulativeMetersetWeight=round(acum, 6))
-            if len(formas) > 1:
-                cpf.BeamLimitingDevicePositionSequence = posicoes(jx, jy, ma, mb)
-            cpf.ReferencedDoseReferenceSequence = Sequence([_ds(ReferencedDoseReferenceNumber=1,
-                                                                CumulativeDoseReferenceCoefficient=round(acum, 6))])
+            cpf = _ds(ControlPointIndex=len(cps))
+            # como o Monaco: o fim de cada segmento repete a forma (e o 1º fim repete o gantry)
+            cpf.BeamLimitingDevicePositionSequence = posicoes(jx, jy, ma, mb)
+            if len(cps) == 1:
+                cpf.GantryAngle = cp0.GantryAngle
+            cpf.CumulativeMetersetWeight = round(acum, 6)
+            cpf.ReferencedDoseReferenceSequence = refdose(acum)
             cps.append(cpf)
         b.NumberOfControlPoints = len(cps)
         b.ControlPointSequence = Sequence(cps)

@@ -4,7 +4,7 @@ id: radioserra_precise
 vendor: Elekta
 model: Precise
 serial: CONFIRMAR
-dicom_machine_names: ["CONFIRMAR"]   # TreatmentMachineName EXATO cadastrado no Mosaiq
+dicom_machine_names: ["Precise"]     # TreatmentMachineName no Mosaiq/Monaco (visto no RTPLAN do Monaco, 22/11/2026)
 sad_mm: 1000.0
 energies_mv: [6]                     # CONFIRMAR outras energias de fótons (e elétrons)
 fff: false
@@ -22,6 +22,11 @@ collimation:
     min_gap_mm: 5.0                   # CONFIRMAR (gap mínimo entre A e B, e entre vizinhos opostos)
     interdigitation: false            # MLCi: a lâmina A não pode passar a B dos pares vizinhos
     max_bank_span_mm: null            # CONFIRMAR, se houver limite de extensão do banco
+dicom_exportacao:                     # como o Monaco 6.1 grava para o Mosaiq (RTPLAN de referência, 22/11/2026)
+  distancia_fonte_mm: {ASYMX: 426.0, ASYMY: 509.0, MLCX: 377.0}   # SourceToBeamLimitingDeviceDistance
+  tolerancia: "1 Fótons"              # ToleranceTableLabel
+  departamento: "0~RadioSerra"        # InstitutionalDepartmentName nos feixes
+  segmentos: step_and_shoot           # campo dentro do campo num único feixe STATIC (como o Monaco)
 cunha_motorizada: null                # fora do escopo: o serviço não usa cunha (field-in-field automático)
 dados_de_feixe:
   "6MV":

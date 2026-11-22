@@ -48,7 +48,7 @@ class Prescricao:
             erros.append(f"Número de frações fora da faixa aceita (1–60): {self.fracoes}")
         if self.dose_fracao_gy > 25:
             erros.append(f"Dose por fração acima de 25 Gy: {self.dose_fracao_gy:.2f}")
-        if self.metodo not in ("media_alvo", "isocentro", "ponto"):
+        if self.metodo not in ("media_alvo", "isocentro", "ponto", "um_fixas"):
             erros.append(f"Método de normalização desconhecido: {self.metodo}")
         if self.metodo == "ponto" and self.ponto_mm is None:
             erros.append("Normalização em ponto sem coordenada")
@@ -77,6 +77,7 @@ class Campo:
     margem_mm: float | None = None
     campo_pai: str | None = None         # sub-campo (field-in-field) de qual campo
     segmentos: list | None = None        # compensador: [{"mlc_a","mlc_b","jaw_x","jaw_y","peso"}], Σ peso = 1
+    descricao: str = ""                  # BeamDescription (ex.: "LD", "ANT" — como o Monaco grava)
 
     def abertura_definida(self) -> bool:
         return self.jaw_y is not None and self.mlc_a is not None and self.mlc_b is not None
@@ -127,6 +128,9 @@ class Plano:
         d = asdict(self)
         for k in ("estado", "aprovacao", "historico", "pontos"):
             d.pop(k)
+        for c in d.get("campos", []):           # campo sem descrição: mesmo hash das versões anteriores
+            if not c.get("descricao"):
+                c.pop("descricao", None)
         return _normalizar(d)
 
     def hash_conteudo(self) -> str:

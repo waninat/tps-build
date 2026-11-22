@@ -69,6 +69,7 @@
         <option value="media_alvo">Média do alvo = 100%</option>
         <option value="isocentro">Isocentro = 100%</option>
         <option value="ponto">Ponto (x, y, z)</option>
+        <option value="um_fixas">UM fixas (plano importado)</option>
       </select></label>
     <div class="linha3" id="p-ponto-linha">
       <label>x<input id="p-px" type="number" value="0"></label>
@@ -76,6 +77,11 @@
       <label>z<input id="p-pz" type="number" value="0"></label>
     </div>
     <button id="b-plano" class="primario" disabled>Criar plano</button>
+    <div id="planos-dicom" class="oculto caixa-import">
+      <div class="pequeno-txt"><b>Planos DICOM nesta pasta</b> — importe para editar/recalcular no TPS (a dose
+        do outro sistema fica para comparação), ou crie um plano novo acima.</div>
+      <ul id="lista-planos-dicom"></ul>
+    </div>
     <div class="isocentro">Isocentro (mm): <span id="iso-txt">—</span>
       <button id="b-iso" class="pequeno" title="Usar a posição da cruz no corte axial" disabled>usar cruz</button></div>
   </details>
@@ -163,8 +169,9 @@
       <button id="b-desaprovar" disabled>Desaprovar…</button>
     </div>
     <label>Campos com segmentos exportados como
-      <select id="e-modo"><option value="campos_separados">um campo por segmento (seguro)</option>
-        <option value="step_and_shoot">step-and-shoot (testar no Mosaiq)</option></select></label>
+      <select id="e-modo"><option value="step_and_shoot" selected>step-and-shoot num campo (como o Monaco)</option>
+        <option value="campos_separados">um campo por segmento</option></select></label>
+    <label class="check"><input type="checkbox" id="e-rs" checked> exportar também as estruturas (RTSTRUCT)</label>
     <label>Pasta de destino (vazio = pasta do TPS)<input id="e-pasta"></label>
     <details class="sub"><summary>Enviar ao Mosaiq (DICOM)</summary>
       <div class="linha3">
@@ -211,6 +218,29 @@
 <aside id="direita">
   <h3>Estruturas</h3>
   <ul id="lista-estruturas"></ul>
+  <details class="sub" id="sec-contorno"><summary>Contorno (desenhar/editar)</summary>
+    <div class="linha2">
+      <label>Estrutura<select id="k-est"></select></label>
+      <label>Nova<span class="linha-inline"><input id="k-nova" placeholder="nome"><button id="b-k-nova" class="pequeno">+</button></span></label>
+    </div>
+    <label class="check"><input type="checkbox" id="k-ativo"> editar no corte axial (o clique deixa de mover a cruz)</label>
+    <div class="botoes pequeno-txt" id="k-ferr">
+      <label class="check"><input type="radio" name="k-f" value="pincel" checked> pincel</label>
+      <label class="check"><input type="radio" name="k-f" value="borracha"> borracha</label>
+      <label class="check"><input type="radio" name="k-f" value="poligono"> polígono</label>
+      <label class="check"><input type="radio" name="k-f" value="poligono-"> polígono (apagar)</label>
+    </div>
+    <label>Raio do pincel <span id="k-raio-t">5</span> mm<input type="range" id="k-raio" min="1" max="30" value="5"></label>
+    <div class="botoes">
+      <button id="b-k-ant" class="pequeno" title="copia o contorno do corte anterior para este">copiar ↑</button>
+      <button id="b-k-seg" class="pequeno" title="copia o contorno do corte seguinte para este">copiar ↓</button>
+      <button id="b-k-limpar" class="pequeno">limpar corte</button>
+      <button id="b-k-interp" class="pequeno" title="preenche os cortes vazios entre cortes contornados">interpolar</button>
+      <button id="b-k-desf" class="pequeno">desfazer</button>
+      <button id="b-k-corpo" class="pequeno" title="contorno externo automático (limiar −350 HU) em todos os cortes">BODY automático</button>
+    </div>
+    <div class="pequeno-txt">Polígono: clique os pontos e dê duplo clique para fechar (Esc cancela). Pincel: arraste. Roda do mouse: muda o corte.</div>
+  </details>
   <details class="sub" id="sec-nova-est"><summary>Nova estrutura</summary>
     <div class="linha2">
       <label>Operação<select id="ne-op">
@@ -244,6 +274,11 @@
   <table id="tab-estat"><thead><tr><th>Estrutura</th><th>Dméd</th><th>D95</th><th>D2</th><th>Dmax</th></tr></thead><tbody></tbody></table>
   <h3>Restrições <span id="rest-prot" class="pequeno-txt"></span></h3>
   <div id="rest-avisos" class="pequeno-txt avisotxt"></div>
+  <div id="comparacao" class="oculto">
+    <h3>Comparação com <span id="cmp-fonte"></span></h3>
+    <div id="cmp-resumo" class="pequeno-txt"></div>
+    <table id="tab-cmp"><thead><tr><th>Estrutura</th><th>Dméd outro</th><th>Dméd TPS</th><th>Dif.</th></tr></thead><tbody></tbody></table>
+  </div>
   <table id="tab-rest"><thead><tr><th>Estrutura</th><th>Métrica</th><th>Limite</th><th>Valor</th></tr></thead><tbody></tbody></table>
   <h3>Cruz</h3>
   <div id="dose-cruz" class="pequeno-txt">Clique num corte</div>

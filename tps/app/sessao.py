@@ -10,6 +10,7 @@ import datetime as dt
 import io
 import json
 import shutil
+import re
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -102,6 +103,10 @@ class Sessao:
         self.tipo = ""                        # ct | fantoma
         self.ct: CTVolume | None = None
         self.derivadas: dict = {}
+        self.editadas: set = set()               # estruturas com contorno criado/alterado no TPS
+        self.desfazer_pilha: list = []           # (nome, contornos anteriores) para desfazer
+        self.planos_dicom: list = []
+        self.dose_ref: dict | None = None        # dose de outro TPS (RTDOSE importado), na grade de dose
         self.pasta_ct: Path | None = None
         self.arquivo_rs: Path | None = None
         self.curva: HUtoED | None = None
@@ -155,7 +160,16 @@ class Sessao:
             cor = tuple(int(c) for c in s.color) if s.color else PALETA[k % len(PALETA)]
             self.estruturas[s.name] = Estrutura(s.name, s.rt_type or "", cor, m, s.contours)
         self.nome = self.paciente["nome"] or pasta.name
-        self._registrar(f"CT carregado: {pasta} ({self.ct.hu.shape[0]} cortes), RTSTRUCT {rs.name}")
+        self.eta_ct = self.grade.eta.copy()
+        self._mascarar_fora_do_corpo()
+        from tps.importacao.rtplan import listar_planos
+        try:
+            self.planos_dicom = [q for q in listar_planos(pasta)
+                                 if q["frame_of_reference"] in ("", self.ct.frame_of_reference)]
+        except Exception:  # noqa: BLE001
+            self.planos_dicom = []
+        self._registrar(f"CT carregado: {pasta} ({self.ct.hu.shape[0]} cortes), RTSTRUCT {rs.name}"
+                        + (f"; {len(self.planos_dicom)} plano(s) DICOM na pasta" if self.planos_dicom else ""))
 
     def criar_fantoma(self, tipo: str, largura: float, espessura: float, comprimento: float,
                       contorno: list | None = None, voxel_mm: float = 3.0, paciente_id: str = "",
@@ -199,6 +213,104 @@ class Sessao:
             self.dose_atualizada = False
 
     # ================================================================== plano e campos
+    def importar_plano(self, arquivo: str) -> dict:
+        """Importa um RTPLAN da pasta do CT (ex.: plano do Monaco) como plano novo, editável, com as UM originais.
+        A dose do RTDOSE correspondente fica como referência para comparação (DVH e gama)."""
+        from tps.importacao.rtplan import ler_dose, ler_plano
+        if self.tipo != "ct" or self.pasta_ct is None:
+            raise ErroUsuario("Carregue o CT do paciente antes de importar o plano")
+        info = next((q for q in self.planos_dicom if q["arquivo"] == arquivo), None)
+        if info is None:
+            raise ErroUsuario(f"Plano {arquivo} não está na pasta do CT (ou é de outro referencial)")
+        try:
+            r = ler_plano(self.pasta_ct / arquivo)
+        except (ValueError, AttributeError, KeyError, IndexError) as e:
+            raise ErroUsuario(f"Não consegui ler o plano: {e}") from e
+        if not r["campos"]:
+            raise ErroUsuario("O plano não tem campos de tratamento importáveis")
+        # máquina pelo TreatmentMachineName
+        alvo_maq = None
+        for mq in maquinas_disponiveis():
+            raw = yaml.safe_load((RAIZ / "dados/maquinas" / mq["id"] / "maquina.yaml").read_text(encoding="utf-8"))
+            if r["maquina"] in (raw.get("dicom_machine_names") or []):
+                alvo_maq = mq["id"]
+                break
+        if alvo_maq is None:
+            raise ErroUsuario(f"Máquina \"{r['maquina']}\" do plano não está cadastrada no TPS "
+                              "(dicom_machine_names em maquina.yaml)")
+        energia = f"{int(round(r['campos'][0].energia_mv))}MV"
+        self.definir_maquina(alvo_maq, energia)
+        # alvo: estrutura com o nome da descrição da prescrição; senão o PTV de maior dose no nome
+        nomes = list(self.estruturas)
+        alvo = next((n for n in nomes if n.upper() == (r["alvo_descricao"] or "").upper()), None)
+        if alvo is None:
+            ptvs = [n for n in nomes if n.upper().startswith("PTV")]
+            num = lambda n: float((re.findall(r"[\d.]+", n) or ["0"])[0] or 0)  # noqa: E731
+            alvo = max(ptvs, key=num) if ptvs else None
+        if alvo is None:
+            raise ErroUsuario("Nenhuma estrutura alvo (PTV) para a prescrição do plano importado")
+        rot = (r["rotulo"] or "IMPORTADO")[:16]
+        self.novo_plano(rot, float(r["dose_total"] or 0), int(r["fracoes"]), alvo, metodo="um_fixas")
+        p = self.plano
+        p.referencia_rtstruct = r["rtstruct"] or p.referencia_rtstruct
+        for c in r["campos"]:
+            if c.jaw_x is None and self.maquina.colim.tem_jaw_x:
+                c.jaw_x = [float(min(c.mlc_a)), float(max(c.mlc_b))]
+            p.campos.append(c)
+        for pt in r["pontos"]:
+            nome = pt["nome"][:16]
+            if not any(q["nome"] == nome for q in p.pontos):
+                p.pontos.append({"nome": nome, "xyz": [round(v, 1) for v in pt["xyz"]]})
+        self.isocentro = tuple(r["campos"][0].isocentro_mm)
+        self.doses_um = {}
+        self.dose_atualizada = False
+        # dose de referência (Monaco) na grade de dose, por fração
+        self.dose_ref = None
+        avisos = list(r["avisos"])
+        if info.get("dose"):
+            try:
+                from scipy.interpolate import RegularGridInterpolator
+                arr, (z, y, x), tipo = ler_dose(self.pasta_ct / info["dose"])
+                g = self.grade
+                it = RegularGridInterpolator((z, y, x), arr, bounds_error=False, fill_value=0.0)
+                Z, Y, X = np.meshgrid(g.z, g.y, g.x, indexing="ij")
+                total = it(np.stack([Z, Y, X], -1).reshape(-1, 3)).reshape(Z.shape)
+                self.dose_ref = {"fx": total / max(int(r["fracoes"]), 1), "fonte": r["fabricante"] or "outro TPS",
+                                 "arquivo": info["dose"]}
+            except Exception as e:  # noqa: BLE001
+                avisos.append(f"RTDOSE não importado: {e}")
+        self.avisos = avisos + [f"Plano importado de {r['fabricante'] or 'outro TPS'} "
+                                           f"com as UM originais. Calcule para comparar a dose do TPS com a importada; "
+                                           f"para replanejar, troque a normalização."]
+        self._registrar(f"Plano {rot} importado de {arquivo} ({len(p.campos)} campos, máquina {alvo_maq}, "
+                        f"{r['dose_total']:g} Gy/{r['fracoes']} fx, alvo {alvo})")
+        return self.resumo()
+
+    def comparacao_ref(self, total) -> dict | None:
+        """DVH e gama 3%/3 mm (global, limiar 10%) da dose do TPS contra a dose importada."""
+        if not self.dose_ref:
+            return None
+        from tps.compare.gamma import gamma_3d
+        g = self.grade
+        fr = self.plano.prescricao.fracoes
+        ref = self.dose_ref["fx"] * fr
+        hist = {n: dvh(ref, e.mascara, g.voxel_cc) for n, e in self.estruturas.items() if e.mascara.any()}
+        corpo = self._corpo()
+        estat = {}
+        for n, h in hist.items():
+            m = self.estruturas[n].mascara
+            estat[n] = {"Dmean_ref": round(float(ref[m].mean()), 2), "Dmean_tps": round(float(total[m].mean()), 2),
+                        "dif_pct": round(float(total[m].mean() / max(ref[m].mean(), 1e-6) * 100 - 100), 2)}
+        try:
+            ax = (g.z, g.y, g.x)
+            rr = gamma_3d(ax, np.where(corpo, ref, 0), ax, np.where(corpo, total, 0), dose_pct=3.0, dta_mm=3.0,
+                          cutoff_pct=10.0)
+            gam = float(getattr(rr, "pass_rate", getattr(rr, "taxa_aprovacao", float("nan"))))
+        except Exception:  # noqa: BLE001
+            gam = float("nan")
+        return {"fonte": self.dose_ref["fonte"], "dvh": hist, "estatisticas": estat, "gama_3_3": round(gam, 1),
+                "dmax_ref": round(float(ref[corpo].max()), 2) if corpo.any() else None}
+
     def novo_plano(self, rotulo: str, dose_total: float, fracoes: int, alvo: str, metodo: str = "media_alvo",
                    ponto=None, isodose: float = 100.0):
         self._exigir(self.grade is not None, "Abra um CT ou crie um fantoma antes")
@@ -496,15 +608,164 @@ class Sessao:
         paleta = [(255, 0, 255), (0, 220, 220), (255, 140, 0), (150, 120, 255), (120, 220, 60), (255, 90, 140),
                   (80, 160, 255), (230, 200, 60)]
         cor = tuple(cor) if cor else ((255, 255, 0) if operacao == "isodose" else paleta[len(self.derivadas) % len(paleta)])
-        self.estruturas[nome] = Estrutura(nome, "DERIVADA", cor, m)
+        self.estruturas[nome] = Estrutura(nome, "DERIVADA", cor, m,
+                                          self._contornos_de_mascara(m) if self.tipo == "ct" else [])
         self.derivadas[nome] = {"operacao": operacao, "a": a, "b": b, "margens": margens, "contrair": contrair,
                                 "interno_mm": interno_mm, "externo_mm": externo_mm, "nivel_gy": nivel_gy}
         self._atualizar_avaliacao()
         self._registrar(f"Estrutura {nome} criada ({operacao} de {a}{' e ' + b if b else ''})")
         return {"nome": nome, "volume_cc": round(float(m.sum()) * g.voxel_cc, 1)}
 
+    # ---------------------------------------------------------------- ferramentas de contorno
+    def _contornos_de_mascara(self, mascara: np.ndarray) -> list:
+        """Polígonos em cada corte do CT a partir de uma máscara na grade de dose (estruturas derivadas)."""
+        from scipy.interpolate import RegularGridInterpolator
+        from tps.planejamento.contorno import poligonos_de_mascara
+        g = self.grade
+        _cx, _cy, cz = self.ct.axes()
+        xs = np.arange(g.x[0], g.x[-1] + 1e-6, min(1.0, float(g.x[1] - g.x[0]) / 2))
+        ys = np.arange(g.y[0], g.y[-1] + 1e-6, min(1.0, float(g.y[1] - g.y[0]) / 2))
+        it = RegularGridInterpolator((g.z, g.y, g.x), mascara.astype(np.float32), bounds_error=False, fill_value=0.0)
+        Y, X = np.meshgrid(ys, xs, indexing="ij")
+        out = []
+        dz = abs(float(g.z[1] - g.z[0])) / 2
+        for z in cz:
+            if z < g.z[0] - dz or z > g.z[-1] + dz:
+                continue
+            f = it(np.stack([np.full_like(X, z), Y, X], -1)) >= 0.5
+            if f.any():
+                out += poligonos_de_mascara(f, xs, ys, float(z))
+        return out
+
+    def _rasterizar(self, e: Estrutura):
+        from tps.dicom_io.rtstruct import Structure
+        g = self.grade
+        e.mascara = rasterize(Structure(0, e.nome, e.tipo, list(e.contornos), e.cor), g.x, g.y, g.z) \
+            if e.contornos else np.zeros(g.eta.shape, bool)
+
+    def nova_estrutura(self, nome: str, tipo: str = "ORGAN", cor=None) -> dict:
+        self._exigir(self.tipo == "ct", "Contorno só em CT de paciente")
+        nome = (nome or "").strip()[:32]
+        if not nome:
+            raise ErroUsuario("Dê um nome à estrutura")
+        if nome in self.estruturas:
+            raise ErroUsuario(f"Já existe a estrutura {nome}")
+        cor = tuple(cor) if cor else PALETA[len(self.estruturas) % len(PALETA)]
+        self.estruturas[nome] = Estrutura(nome, (tipo or "ORGAN").upper(), cor, np.zeros(self.grade.eta.shape, bool), [])
+        self.editadas.add(nome)
+        self._registrar(f"Estrutura nova {nome} ({tipo})")
+        return {"nome": nome}
+
+    def _editavel(self, nome: str) -> Estrutura:
+        e = self.estruturas.get(nome)
+        if e is None:
+            raise ErroUsuario(f"Estrutura {nome} não existe")
+        if e.tipo == "BOLUS":
+            raise ErroUsuario("O bolus é editado na seção Bolus")
+        if not e.contornos and e.mascara.any():
+            e.contornos = self._contornos_de_mascara(e.mascara)   # derivada: passa a ter contorno editável
+        return e
+
+    def editar_contorno(self, nome: str, idx: int, ferramenta: str, pontos=None, raio_mm: float = 5.0,
+                        apagar: bool = False, origem: int | None = None) -> dict:
+        """Edita o contorno no corte axial idx do CT: pincel, poligono, limpar (o corte) ou copiar (de outro corte)."""
+        from tps.planejamento import contorno as K
+        e = self._editavel(nome)
+        cx, cy, cz = self.ct.axes()
+        if not 0 <= int(idx) < len(cz):
+            raise ErroUsuario("Corte fora do CT")
+        z = float(cz[int(idx)])
+        tol = float(self.ct.spacing[2]) / 2 + 0.01
+        atuais = K.poligonos_do_corte(e.contornos, z, tol)
+        m = K.mascara_de_poligonos(atuais, cx, cy)
+        try:
+            if ferramenta == "pincel":
+                m = K.pincel(m, cx, cy, pontos or [], float(raio_mm), bool(apagar))
+            elif ferramenta == "poligono":
+                m = K.poligono(m, cx, cy, pontos or [], bool(apagar))
+            elif ferramenta == "limpar":
+                m = np.zeros_like(m)
+            elif ferramenta == "copiar":
+                if origem is None or not 0 <= int(origem) < len(cz):
+                    raise ErroUsuario("Corte de origem inválido")
+                m = K.mascara_de_poligonos(K.poligonos_do_corte(e.contornos, float(cz[int(origem)]), tol), cx, cy)
+            else:
+                raise ErroUsuario(f"Ferramenta desconhecida: {ferramenta}")
+        except ValueError as ex:
+            raise ErroUsuario(str(ex)) from ex
+        self._guardar_desfazer(e)
+        e.contornos = [c for c in e.contornos if abs(float(c[0, 2]) - z) > tol] + K.poligonos_de_mascara(m, cx, cy, z)
+        self._depois_de_editar(e)
+        return {"nome": nome, "corte": int(idx), "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1)}
+
+    def interpolar_contorno(self, nome: str) -> dict:
+        """Preenche os cortes sem contorno entre cortes contornados (distância com sinal)."""
+        from tps.planejamento import contorno as K
+        e = self._editavel(nome)
+        cx, cy, cz = self.ct.axes()
+        tol = float(self.ct.spacing[2]) / 2 + 0.01
+        cortes = {}
+        for k, z in enumerate(cz):
+            pol = K.poligonos_do_corte(e.contornos, float(z), tol)
+            if pol:
+                cortes[k] = K.mascara_de_poligonos(pol, cx, cy)
+        if len(cortes) < 2:
+            raise ErroUsuario("Contorne pelo menos dois cortes para interpolar")
+        novos = K.interpolar(cortes, cz)
+        if not novos:
+            return {"nome": nome, "novos_cortes": 0}
+        self._guardar_desfazer(e)
+        for k, m in novos.items():
+            e.contornos += K.poligonos_de_mascara(m, cx, cy, float(cz[k]))
+        self._depois_de_editar(e)
+        return {"nome": nome, "novos_cortes": len(novos)}
+
+    def corpo_automatico(self, nome: str = "BODY", limiar_hu: float = -350.0) -> dict:
+        """Contorno externo automático em todos os cortes (limiar de HU + maior componente + buracos preenchidos)."""
+        from tps.planejamento import contorno as K
+        self._exigir(self.tipo == "ct", "Contorno só em CT de paciente")
+        if nome not in self.estruturas:
+            self.nova_estrutura(nome, "EXTERNAL", (0, 200, 0))
+        e = self._editavel(nome)
+        cx, cy, cz = self.ct.axes()
+        self._guardar_desfazer(e)
+        polys = []
+        for k, z in enumerate(cz):
+            polys += K.poligonos_de_mascara(K.corpo_automatico(self.ct.hu[k], float(limiar_hu)), cx, cy, float(z),
+                                            suavizar=0.7, min_pontos=8)
+        e.contornos = polys
+        self._depois_de_editar(e)
+        return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1)}
+
+    def desfazer_contorno(self) -> dict:
+        if not self.desfazer_pilha:
+            raise ErroUsuario("Nada para desfazer")
+        nome, antes = self.desfazer_pilha.pop()
+        e = self.estruturas.get(nome)
+        if e is None:
+            raise ErroUsuario(f"Estrutura {nome} não existe mais")
+        e.contornos = antes
+        self._depois_de_editar(e, registrar=False)
+        return {"nome": nome}
+
+    def _guardar_desfazer(self, e: Estrutura):
+        self.desfazer_pilha.append((e.nome, [c.copy() for c in e.contornos]))
+        del self.desfazer_pilha[:-30]
+
+    def _depois_de_editar(self, e: Estrutura, registrar: bool = True):
+        self._rasterizar(e)
+        self.editadas.add(e.nome)
+        if e.nome in self.derivadas:                   # editada à mão: deixa de ser derivada
+            self.derivadas.pop(e.nome)
+            e.tipo = "ORGAN" if not e.nome.upper().startswith("PTV") else "PTV"
+        if e.tipo.upper() == "EXTERNAL":
+            self._mascarar_fora_do_corpo()
+        elif self.plano and e.nome in (self.plano.densidades or {}):
+            self._aplicar_eta()
+        self._atualizar_avaliacao()
+
     def remover_estrutura(self, nome: str):
-        if nome not in self.derivadas:
+        if nome not in self.derivadas and nome not in self.editadas:
             raise ErroUsuario("Só estruturas criadas no TPS podem ser removidas")
         if self.plano:
             usos = [c.nome for c in self.plano.campos if (c.__dict__.get("_spec") or {}).get("alvo") == nome]
@@ -512,6 +773,7 @@ class Sessao:
                 raise ErroUsuario(f"A estrutura {nome} é usada pelo plano ({', '.join(usos) or 'prescrição'})")
         self.estruturas.pop(nome, None)
         self.derivadas.pop(nome, None)
+        self.editadas.discard(nome)
         if self.dose_atualizada and self.resultado:
             self.resultado["dvh"].pop(nome, None)
             self._atualizar_avaliacao()
@@ -525,6 +787,21 @@ class Sessao:
         self.resultado["dvh"] = {n: dvh(total, e.mascara, g.voxel_cc) for n, e in self.estruturas.items()
                                  if e.mascara.any()}
         self.resultado["restricoes"] = self._avaliar_restricoes(total)
+
+    def _mascarar_fora_do_corpo(self):
+        """Como o Monaco e o Eclipse: fora do contorno externo é ar (tira a mesa do tomógrafo, travesseiros…).
+        A mesa de tratamento, quando modelada, entra como estrutura com densidade."""
+        if self.plano is not None and self.plano.estado != "RASCUNHO":
+            return                                   # plano aprovado: a densidade usada fica como estava
+        ext = next((e for e in self.estruturas.values() if e.tipo.upper() == "EXTERNAL"), None)
+        if ext is None or not ext.mascara.any() or getattr(self, "eta_ct", None) is None:
+            self.fora_do_corpo = False
+            return
+        self.grade.eta = np.where(ext.mascara, self.eta_ct, 0.0).astype(self.eta_ct.dtype)
+        self.fora_do_corpo = ext.nome
+        if self.plano is not None and self.plano.estado == "RASCUNHO":
+            self.eta_original = self.grade.eta.copy()
+            self._aplicar_eta()
 
     def _corpo(self) -> np.ndarray:
         g = self.grade
@@ -574,7 +851,8 @@ class Sessao:
         alvo = self.estruturas[pr.estrutura_alvo].mascara if pr.estrutura_alvo in self.estruturas else None
         if pr.metodo == "media_alvo" and alvo is None:
             raise ErroUsuario("Normalização pela média do alvo sem estrutura alvo")
-        self._remover_derivados()
+        if pr.metodo != "um_fixas":          # plano importado: segmentos e UM são os do plano original
+            self._remover_derivados()
         p.modelo_feixe = self._info_modelo()
         self.avisos = []
         try:
@@ -605,7 +883,16 @@ class Sessao:
                 info["compensador"] = {"segmentos": r.n_segmentos, "hi_antes": r.hi_antes, "hi_depois": r.hi_depois,
                                        "historico": r.historico, "avisos": r.avisos}
                 self.avisos = list(r.avisos)
-            self.dose_fx = calculo.normalizar(p, self.doses_um, g, alvo)
+            if pr.metodo == "um_fixas":
+                if opcoes.get("otimizar_pesos") or opcoes.get("field_in_field") or opcoes.get("compensador"):
+                    raise ErroUsuario("Plano com UM fixas (importado): troque a normalização antes de otimizar, "
+                                      "fazer field-in-field ou compensador")
+                faltam_um = [c.nome for c in p.campos if not c.mu]
+                if faltam_um:
+                    raise ErroUsuario(f"Campos sem UM: {', '.join(faltam_um)}")
+                self.dose_fx = sum(float(c.mu) * self.doses_um[c.nome] for c in p.campos)
+            else:
+                self.dose_fx = calculo.normalizar(p, self.doses_um, g, alvo)
         except ValueError as e:
             raise ErroUsuario(str(e)) from e
         total = self.dose_fx * pr.fracoes
@@ -618,6 +905,7 @@ class Sessao:
         hi = indice_homogeneidade(total, alvo) if alvo is not None and alvo.any() else None
         self.resultado = {"dvh": hist, "conferencia_um": conf, "info": info, "hi": hi,
                           "restricoes": self._avaliar_restricoes(total),
+                          "comparacao": self.comparacao_ref(total),
                           "dmax_gy": float(total[corpo].max()) if corpo.any() else float(total.max()),
                           "quando": dt.datetime.now().isoformat(timespec="seconds")}
         self.dose_atualizada = True
@@ -691,22 +979,62 @@ class Sessao:
             raise ErroUsuario(str(e)) from e
         self._registrar(f"Desaprovado por {usuario}: {motivo}")
 
-    def exportar(self, destino: str | Path, modo_segmentos: str = "campos_separados",
-                 incluir_imagens: bool | None = None) -> dict:
+    def _extras_exportacao(self, modo_segmentos: str) -> dict:
+        """Atributos que o Monaco grava para o Mosaiq: distâncias dos colimadores, tabela de tolerância,
+        departamento, ponto de referência de dose e dose de cada feixe nesse ponto (Gy/fração)."""
+        from tps.exportacao.rtplan import _feixes_para_exportar
+        cfg = dict(self.maquina.raw.get("dicom_exportacao") or {})
+        p = self.plano
+        pr = p.prescricao
+        ponto = None
+        if pr.metodo == "ponto" and pr.ponto_mm:
+            ponto = {"nome": "PRESCRICAO", "xyz": list(pr.ponto_mm)}
+        elif p.campos:
+            iso = list(p.campos[0].isocentro_mm)
+            d = self.dose_em(iso)
+            if d.get("pct") is not None and d["pct"] >= 80:
+                ponto = {"nome": "ISOCENTRO", "xyz": iso}
+            elif p.pontos:
+                ponto = {"nome": p.pontos[0]["nome"], "xyz": list(p.pontos[0]["xyz"])}
+        dose_feixe = {}
+        if ponto and self.tipo == "ct":
+            from scipy.ndimage import map_coordinates
+            g = self.grade
+            idx = [[(ponto["xyz"][2] - g.z[0]) / (g.z[1] - g.z[0])], [(ponto["xyz"][1] - g.y[0]) / (g.y[1] - g.y[0])],
+                   [(ponto["xyz"][0] - g.x[0]) / (g.x[1] - g.x[0])]]
+            for nome, c, mu, formas in _feixes_para_exportar(p, modo_segmentos):
+                if c.nome in self.doses_um:
+                    d1 = float(map_coordinates(self.doses_um[c.nome], idx, order=1)[0])
+                    dose_feixe[nome] = d1 * float(mu)
+        return {"distancia_fonte_mm": cfg.get("distancia_fonte_mm"), "tolerancia": cfg.get("tolerancia"),
+                "departamento": cfg.get("departamento"), "ponto_ref": ponto, "dose_feixe": dose_feixe}
+
+    def exportar(self, destino: str | Path, modo_segmentos: str | None = None,
+                 incluir_imagens: bool | None = None, incluir_rtstruct: bool = True) -> dict:
         self._exigir_plano()
         self._exigir(self.dose_atualizada and self.dose_fx is not None, "Calcule a dose antes de exportar")
         destino = Path(destino)
         destino.mkdir(parents=True, exist_ok=True)
         p = self.plano
+        modo_segmentos = modo_segmentos or (self.maquina.raw.get("dicom_exportacao") or {}).get("segmentos",
+                                                                                               "step_and_shoot")
         base = f"{p.rotulo}_{dt.datetime.now():%Y%m%d_%H%M%S}"
+        extras = self._extras_exportacao(modo_segmentos)
+        arq_rs = None
+        if incluir_rtstruct and self.tipo == "ct":
+            from tps.exportacao.rtstruct import exportar_rtstruct
+            arq_rs = destino / f"RS_{base}.dcm"
+            rs = exportar_rtstruct(self, arq_rs)
+            extras["rtstruct"] = str(rs.SOPInstanceUID)
         try:
-            rp = exportar_rtplan(p, self.maquina.colim, destino / f"RP_{base}.dcm", modo_segmentos=modo_segmentos)
+            rp = exportar_rtplan(p, self.maquina.colim, destino / f"RP_{base}.dcm", modo_segmentos=modo_segmentos,
+                                 extras=extras)
         except (ValueError, PermissionError) as e:
             raise ErroUsuario(str(e)) from e
         problemas = conferir_rtplan(pydicom.dcmread(destino / f"RP_{base}.dcm"))
         if problemas:
             raise ErroUsuario("RTPLAN reprovado na conferência: " + "; ".join(problemas))
-        arquivos = [destino / f"RP_{base}.dcm"]
+        arquivos = [destino / f"RP_{base}.dcm"] + ([arq_rs] if arq_rs else [])
         g = self.grade
         exportar_rtdose(self.dose_fx * p.prescricao.fracoes, g.x, g.y, g.z, rp, destino / f"RD_{base}.dcm")
         arquivos.append(destino / f"RD_{base}.dcm")
@@ -716,7 +1044,7 @@ class Sessao:
             img = destino / f"imagens_{base}"
             img.mkdir(exist_ok=True)
             for f in sorted(self.pasta_ct.iterdir()):
-                if f.is_file() and (self._e_ct(f) or f == self.arquivo_rs):
+                if f.is_file() and (self._e_ct(f) or (f == self.arquivo_rs and not arq_rs)):
                     shutil.copy2(f, img / f.name)
                     arquivos.append(img / f.name)
         self._registrar(f"Exportado para {destino} ({modo_segmentos})")
@@ -755,7 +1083,10 @@ class Sessao:
                                     for b in self.plano.bolus if b["nome"] in self.estruturas},
                  "derivadas": {n: {**d, "cor": list(self.estruturas[n].cor),
                                    "mascara": _empacotar(self.estruturas[n].mascara)}
-                               for n, d in self.derivadas.items() if n in self.estruturas}}
+                               for n, d in self.derivadas.items() if n in self.estruturas},
+                 "editadas": {n: {"tipo": self.estruturas[n].tipo, "cor": list(self.estruturas[n].cor),
+                                  "contornos": [np.round(c, 2).tolist() for c in self.estruturas[n].contornos]}
+                              for n in self.editadas if n in self.estruturas}}
         f = d / f"{self.paciente['id'] or 'sem_id'}_{self.plano.rotulo}.json"
         f.write_text(json.dumps(dados, indent=1, default=str), encoding="utf-8")
         self._registrar(f"Plano salvo em {f}")
@@ -786,6 +1117,13 @@ class Sessao:
             self.estruturas[nome] = Estrutura(nome, "DERIVADA", tuple(d.pop("cor")),
                                               _desempacotar(d.pop("mascara"), self.grade.eta.shape))
             self.derivadas[nome] = d
+        for nome, d in (dados.get("editadas") or {}).items():
+            e = Estrutura(nome, d["tipo"], tuple(d["cor"]), np.zeros(self.grade.eta.shape, bool),
+                          [np.asarray(c, float) for c in d["contornos"]])
+            self._rasterizar(e)
+            self.estruturas[nome] = e
+            self.editadas.add(nome)
+            self.derivadas.pop(nome, None)
         self._aplicar_eta()
         for c in self.plano.campos:
             c.__dict__["_spec"] = (dados.get("specs") or {}).get(c.nome)
@@ -807,7 +1145,7 @@ class Sessao:
     def resumo(self) -> dict:
         p = self.plano
         out = {"id": self.id, "nome": self.nome, "tipo": self.tipo, "paciente": self.paciente,
-               "estruturas": [{"nome": e.nome, "tipo": e.tipo, "cor": e.cor,
+               "estruturas": [{"nome": e.nome, "tipo": e.tipo, "cor": e.cor, "editada": e.nome in self.editadas,
                                "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1)}
                               for e in self.estruturas.values()] if self.grade is not None else [],
                "maquina": {"id": self.maquina.id, "energia": self.maquina.energia, "nome_dicom": self.maquina.nome_dicom,
@@ -817,7 +1155,8 @@ class Sessao:
                            "comissionamento": (self.maquina.modelo.ref or {}).get("comissionamento", "v1")}
                if self.maquina else None,
                "isocentro": self.isocentro, "dose_atualizada": self.dose_atualizada, "avisos": self.avisos,
-               "log": self.log[-30:]}
+               "log": self.log[-30:], "planos_dicom": self.planos_dicom,
+               "dose_ref": {"fonte": self.dose_ref["fonte"], "arquivo": self.dose_ref["arquivo"]} if self.dose_ref else None}
         if self.grade is not None:
             g = self.grade
             out["grade"] = {"x": [float(g.x[0]), float(g.x[-1]), len(g.x)], "y": [float(g.y[0]), float(g.y[-1]), len(g.y)],
@@ -838,6 +1177,8 @@ class Sessao:
                 r = self.resultado
                 out["resultado"] = {"hi": r["hi"], "dmax_gy": r["dmax_gy"], "info": r["info"],
                                     "restricoes": r.get("restricoes"),
+                                    "comparacao": {k: v for k, v in (r.get("comparacao") or {}).items() if k != "dvh"}
+                                    or None,
                                     "conferencia_um": r["conferencia_um"],
                                     "estatisticas": {n: {k: h[k] for k in ("volume_cc", "Dmin", "Dmean", "Dmax", "D95",
                                                                              "D98", "D2") if k in h}
@@ -852,6 +1193,12 @@ class Sessao:
             k = np.linspace(0, len(d) - 1, min(len(d), 200)).astype(int)
             out[n] = {"dose": d[k].round(3).tolist(), "volume": v[k].round(2).tolist(),
                       "cor": self.estruturas[n].cor}
+            comp = self.resultado.get("comparacao") or {}
+            if n in (comp.get("dvh") or {}):
+                hr = comp["dvh"][n]
+                dr, vr = np.asarray(hr["dose_gy"]), np.asarray(hr["volume_pct"])
+                kr = np.linspace(0, len(dr) - 1, min(len(dr), 200)).astype(int)
+                out[n]["ref"] = {"dose": dr[kr].round(3).tolist(), "volume": vr[kr].round(2).tolist()}
         return out
 
     # ---------------------------------------------------------------- cortes

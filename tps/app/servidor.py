@@ -271,6 +271,37 @@ def remover_bolus(sid: str, nome: str, u: dict = Depends(usuario)):
     return s.resumo()
 
 
+@app.post("/api/{sid}/importar_plano")
+def importar_plano(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        r = s.importar_plano(str(d.get("arquivo", "")))
+    auditar(u, "plano_importado", s, arquivo=d.get("arquivo"))
+    return r
+
+
+@app.post("/api/{sid}/contorno/{acao}")
+def contorno(sid: str, acao: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        if acao == "nova":
+            r = s.nova_estrutura(d.get("nome", ""), d.get("tipo", "ORGAN"), d.get("cor"))
+        elif acao == "editar":
+            r = s.editar_contorno(d.get("nome", ""), int(d.get("idx", -1)), d.get("ferramenta", ""), d.get("pontos"),
+                                  float(d.get("raio_mm", 5.0)), bool(d.get("apagar", False)), d.get("origem"))
+        elif acao == "interpolar":
+            r = s.interpolar_contorno(d.get("nome", ""))
+        elif acao == "corpo":
+            r = s.corpo_automatico(d.get("nome", "BODY") or "BODY", float(d.get("limiar", -350)))
+        elif acao == "desfazer":
+            r = s.desfazer_contorno()
+        else:
+            raise ErroUsuario(f"Ação de contorno desconhecida: {acao}")
+    if acao != "editar":
+        auditar(u, f"contorno_{acao}", s, **{k: v for k, v in r.items() if k != "pontos"})
+    return {"resultado": r, **s.resumo()}
+
+
 @app.post("/api/{sid}/estrutura")
 def estrutura(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     s = _s(sid)
@@ -397,7 +428,7 @@ def exportar(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     s = _s(sid)
     banco().assinar(u, d.get("senha", ""), PODE_EXPORTAR, "exportar planos")
     destino = d.get("pasta") or str(paths.home() / "exportados" / s.id)
-    r = s.exportar(destino, d.get("modo_segmentos", "campos_separados"), d.get("incluir_imagens"))
+    r = s.exportar(destino, d.get("modo_segmentos"), d.get("incluir_imagens"), bool(d.get("rtstruct", True)))
     auditar(u, "plano_exportado", s, arquivos=r["arquivos"], hash=s.plano.aprovacao["hash"])
     if d.get("enviar"):
         e = d["enviar"]
