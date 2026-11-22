@@ -57,9 +57,19 @@ async def _bloqueado(_: Request, e: PermissionError):
 
 
 @app.exception_handler(Exception)
-async def _erro(_: Request, e: Exception):
+async def _erro(req: Request, e: Exception):
     traceback.print_exc()
-    return JSONResponse({"erro": f"Erro interno: {type(e).__name__}: {e}"}, status_code=500)
+    txt = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+    try:                                         # registro para o suporte (a janela preta pode ser fechada)
+        import datetime as _dt
+        with open(paths.home() / "erros.log", "a", encoding="utf-8") as f:
+            f.write(f"\n===== {_dt.datetime.now():%Y-%m-%d %H:%M:%S}  TPS {__version__}  {req.method} {req.url.path}\n{txt}")
+    except Exception:  # noqa: BLE001
+        pass
+    tb = traceback.extract_tb(e.__traceback__)
+    onde = next((f"{Path(q.filename).name}:{q.lineno}" for q in reversed(tb) if "tps" in q.filename), "")
+    return JSONResponse({"erro": f"Erro interno: {type(e).__name__}: {e}" + (f" [{onde}]" if onde else "")
+                         + " — detalhes em erros.log na pasta de dados do TPS"}, status_code=500)
 
 
 def _s(sid: str) -> Sessao:
