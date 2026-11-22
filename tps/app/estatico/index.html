@@ -209,6 +209,32 @@
 <aside id="direita">
   <h3>Estruturas</h3>
   <ul id="lista-estruturas"></ul>
+  <details class="sub" id="sec-nova-est"><summary>Nova estrutura</summary>
+    <div class="linha2">
+      <label>Operação<select id="ne-op">
+        <option value="margem">Margem (expandir)</option><option value="contrair">Margem (contrair)</option>
+        <option value="uniao">União A ∪ B</option><option value="intersecao">Interseção A ∩ B</option>
+        <option value="subtracao">Subtração A − B</option><option value="anel">Anel em volta de A</option>
+        <option value="isodose">Isodose (Gy)</option></select></label>
+      <label>Nome<input id="ne-nome" placeholder="ex.: PTV_menos_Medula"></label>
+    </div>
+    <div class="linha2">
+      <label>A<select id="ne-a"></select></label>
+      <label id="ne-lb">B<select id="ne-b"></select></label>
+    </div>
+    <div id="ne-margens" class="linha3 pequeno-txt">
+      <label>Dir.<input type="number" data-m="direita" value="5" min="0" max="50" step="0.5"></label>
+      <label>Esq.<input type="number" data-m="esquerda" value="5" min="0" max="50" step="0.5"></label>
+      <label>Ant.<input type="number" data-m="anterior" value="5" min="0" max="50" step="0.5"></label>
+      <label>Post.<input type="number" data-m="posterior" value="5" min="0" max="50" step="0.5"></label>
+      <label>Sup.<input type="number" data-m="superior" value="5" min="0" max="50" step="0.5"></label>
+      <label>Inf.<input type="number" data-m="inferior" value="5" min="0" max="50" step="0.5"></label>
+    </div>
+    <div id="ne-anel" class="linha2 oculto"><label>Interno (mm)<input id="ne-int" type="number" value="0" min="0"></label>
+      <label>Externo (mm)<input id="ne-ext" type="number" value="20" min="1"></label></div>
+    <div id="ne-iso" class="linha2 oculto"><label>Dose (Gy)<input id="ne-gy" type="number" value="45" step="0.5"></label></div>
+    <button id="b-nova-est" class="pequeno" disabled>Criar</button>
+  </details>
   <h3>Histograma dose-volume</h3>
   <canvas id="dvh" width="320" height="220"></canvas>
   <h3>Dose</h3>

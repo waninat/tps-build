@@ -162,6 +162,23 @@ function ligar() {
     const campos = Array.from($("#bo-campos").selectedOptions).map(o => o.value);
     atualizar(await api("POST", `/api/${E.sid}/bolus`, { espessura_mm: +$("#bo-esp").value, campos }, "Criando bolus…"));
   });
+  $("#ne-op").onchange = () => {
+    const op = $("#ne-op").value;
+    $("#ne-margens").classList.toggle("oculto", !["margem", "contrair"].includes(op));
+    $("#ne-anel").classList.toggle("oculto", op !== "anel");
+    $("#ne-iso").classList.toggle("oculto", op !== "isodose");
+    $("#ne-lb").classList.toggle("oculto", !["uniao", "intersecao", "subtracao"].includes(op));
+  };
+  $("#ne-op").onchange();
+  $("#b-nova-est").onclick = () => tentar(async () => {
+    const op = $("#ne-op").value, margens = {};
+    $$("#ne-margens [data-m]").forEach(i => margens[i.dataset.m] = +i.value || 0);
+    const corpo = { nome: $("#ne-nome").value, operacao: op === "contrair" ? "margem" : op, contrair: op === "contrair",
+      a: $("#ne-a").value, b: $("#ne-b").value, margens, interno_mm: +$("#ne-int").value, externo_mm: +$("#ne-ext").value,
+      nivel_gy: +$("#ne-gy").value };
+    atualizar(await api("POST", `/api/${E.sid}/estrutura`, corpo, "Criando estrutura…"));
+    $("#ne-nome").value = "";
+  });
   $("#b-ponto").onclick = () => tentar(async () => {
     if (!E.cruz) throw new Error("Clique num corte para posicionar a cruz");
     atualizar(await api("POST", `/api/${E.sid}/ponto`, { nome: $("#pt-nome").value, xyz: E.cruz }));
@@ -227,13 +244,16 @@ function atualizar(r) {
     $(sel).value = alvos.includes(atual) ? atual : (sel === "#p-alvo" && r.tipo === "fantoma" ? "" : preferido);
   }
   $("#c-blind").innerHTML = alvos.map(n => `<option>${n}</option>`).join("");
+  for (const sel of ["#ne-a", "#ne-b"]) { const atual = $(sel).value; $(sel).innerHTML = alvos.map(n => `<option>${n}</option>`).join(""); if (alvos.includes(atual)) $(sel).value = atual; }
+  $("#b-nova-est").disabled = !r.estruturas.length;
   const dens = (p && p.densidades) || {};
   $("#lista-estruturas").innerHTML = r.estruturas.map(e => `<li><input type="checkbox" data-est="${e.nome}" ${E.ocultas.has(e.nome) ? "" : "checked"}>
-    <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span>
+    <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span>${e.tipo === "DERIVADA" ? `<button class="pequeno" data-rem-est="${e.nome}" title="remover estrutura criada no TPS">×</button>` : ""}
     <input class="dens ${dens[e.nome] != null ? "ativa" : ""}" data-dens="${e.nome}" title="densidade eletrônica relativa forçada (vazio = do CT)"
       placeholder="ρe" value="${dens[e.nome] != null ? dens[e.nome] : ""}" ${p && p.estado === "RASCUNHO" ? "" : "disabled"}></li>`).join("");
   $$("[data-dens]").forEach(c => c.onchange = () => tentar(async () =>
     atualizar(await api("POST", `/api/${E.sid}/densidade`, { estrutura: c.dataset.dens, valor: c.value.trim() || null }))));
+  $$("[data-rem-est]").forEach(b => b.onclick = () => tentar(async () => atualizar(await api("DELETE", `/api/${E.sid}/estrutura/${encodeURIComponent(b.dataset.remEst)}`))));
   $$("[data-est]").forEach(c => c.onchange = () => { c.checked ? E.ocultas.delete(c.dataset.est) : E.ocultas.add(c.dataset.est); desenharTudo(); desenharDvh(); });
   $("#iso-txt").textContent = r.isocentro ? r.isocentro.map(v => v.toFixed(1)).join(", ") : "—";
   // estados dos botões

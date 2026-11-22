@@ -271,6 +271,25 @@ def remover_bolus(sid: str, nome: str, u: dict = Depends(usuario)):
     return s.resumo()
 
 
+@app.post("/api/{sid}/estrutura")
+def estrutura(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        r = s.criar_estrutura(d.get("nome", ""), d.get("operacao", ""), d.get("a", ""), d.get("b"),
+                              d.get("margens"), bool(d.get("contrair", False)), float(d.get("interno_mm", 0) or 0),
+                              float(d.get("externo_mm", 0) or 0), d.get("nivel_gy"), d.get("cor"))
+    auditar(u, "estrutura_criada", s, **{k: v for k, v in d.items() if k != "cor"}, volume_cc=r["volume_cc"])
+    return s.resumo()
+
+
+@app.delete("/api/{sid}/estrutura/{nome}")
+def remover_estrutura(sid: str, nome: str, u: dict = Depends(usuario)):
+    s = _s(sid)
+    s.remover_estrutura(nome)
+    auditar(u, "estrutura_removida", s, nome=nome)
+    return s.resumo()
+
+
 @app.post("/api/{sid}/ponto")
 def ponto(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     s = _s(sid)

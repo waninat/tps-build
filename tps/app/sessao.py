@@ -101,6 +101,7 @@ class Sessao:
         self.nome = ""
         self.tipo = ""                        # ct | fantoma
         self.ct: CTVolume | None = None
+        self.derivadas: dict = {}
         self.pasta_ct: Path | None = None
         self.arquivo_rs: Path | None = None
         self.curva: HUtoED | None = None
@@ -148,6 +149,7 @@ class Sessao:
         self.grade = calculo.grade_de_dose(self.ct, self.curva, voxel_mm)
         g = self.grade
         self.estruturas = {}
+        self.derivadas = {}
         for k, s in enumerate(read_rtstruct(rs)):
             m = rasterize(s, g.x, g.y, g.z)
             cor = tuple(int(c) for c in s.color) if s.color else PALETA[k % len(PALETA)]
@@ -182,6 +184,7 @@ class Sessao:
         self.fantoma = f
         self.tipo = "fantoma"
         self.estruturas = {"CORPO": Estrutura("CORPO", "EXTERNAL", (0, 200, 0), g.eta > 0.5)}
+        self.derivadas = {}
         self.nome = paciente_nome or "Plano 2D"
         self._registrar(f"Fantoma virtual {tipo} {largura}×{espessura}×{comprimento} mm")
 
@@ -453,6 +456,74 @@ class Sessao:
         self.estruturas.pop(nome, None)
         self._aplicar_eta()
 
+    # ---------------------------------------------------------------- estruturas derivadas
+    def criar_estrutura(self, nome: str, operacao: str, a: str, b: str | None = None, margens=None,
+                        contrair: bool = False, interno_mm: float = 0.0, externo_mm: float = 0.0,
+                        nivel_gy: float | None = None, cor=None) -> dict:
+        """Margem (simétrica/assimétrica, expandir ou contrair), união, interseção, subtração, anel ou isodose."""
+        from tps.planejamento import estruturas as E
+        g = self.grade
+        if g is None:
+            raise ErroUsuario("Carregue um CT primeiro")
+        nome = (nome or "").strip()[:32]
+        if not nome:
+            raise ErroUsuario("Dê um nome à estrutura")
+        if nome in self.estruturas:
+            raise ErroUsuario(f"Já existe a estrutura {nome}")
+        passo = (abs(g.z[1] - g.z[0]), abs(g.y[1] - g.y[0]), abs(g.x[1] - g.x[0]))
+        if operacao != "isodose" and a not in self.estruturas:
+            raise ErroUsuario(f"Estrutura {a} não existe")
+        try:
+            if operacao == "margem":
+                m = E.margem(self.estruturas[a].mascara, passo, margens if margens is not None else 0.0, contrair)
+            elif operacao in ("uniao", "intersecao", "subtracao", "xor"):
+                if b not in self.estruturas:
+                    raise ErroUsuario(f"Estrutura {b} não existe")
+                m = E.booleana(self.estruturas[a].mascara, self.estruturas[b].mascara, operacao)
+            elif operacao == "anel":
+                m = E.anel(self.estruturas[a].mascara, passo, float(interno_mm), float(externo_mm))
+                m &= self._corpo()
+            elif operacao == "isodose":
+                self._exigir(self.dose_atualizada, "Calcule a dose antes de criar estrutura de isodose")
+                total = self.dose_fx * self.plano.prescricao.fracoes
+                m = E.de_isodose(total, float(nivel_gy), self._corpo())
+            else:
+                raise ErroUsuario(f"Operação desconhecida: {operacao}")
+        except ValueError as e:
+            raise ErroUsuario(str(e)) from e
+        if not m.any():
+            raise ErroUsuario("A estrutura resultante ficou vazia")
+        cor = tuple(cor) if cor else ((255, 0, 255) if operacao != "isodose" else (255, 255, 0))
+        self.estruturas[nome] = Estrutura(nome, "DERIVADA", cor, m)
+        self.derivadas[nome] = {"operacao": operacao, "a": a, "b": b, "margens": margens, "contrair": contrair,
+                                "interno_mm": interno_mm, "externo_mm": externo_mm, "nivel_gy": nivel_gy}
+        self._atualizar_avaliacao()
+        self._registrar(f"Estrutura {nome} criada ({operacao} de {a}{' e ' + b if b else ''})")
+        return {"nome": nome, "volume_cc": round(float(m.sum()) * g.voxel_cc, 1)}
+
+    def remover_estrutura(self, nome: str):
+        if nome not in self.derivadas:
+            raise ErroUsuario("Só estruturas criadas no TPS podem ser removidas")
+        if self.plano:
+            usos = [c.nome for c in self.plano.campos if (c.__dict__.get("_spec") or {}).get("alvo") == nome]
+            if usos or self.plano.prescricao.estrutura_alvo == nome:
+                raise ErroUsuario(f"A estrutura {nome} é usada pelo plano ({', '.join(usos) or 'prescrição'})")
+        self.estruturas.pop(nome, None)
+        self.derivadas.pop(nome, None)
+        if self.dose_atualizada and self.resultado:
+            self.resultado["dvh"].pop(nome, None)
+            self._atualizar_avaliacao()
+
+    def _atualizar_avaliacao(self):
+        """Estrutura nova ou removida: atualiza DVH e restrições sem recalcular a dose."""
+        if not (self.dose_atualizada and self.resultado and self.plano):
+            return
+        total = self.dose_fx * self.plano.prescricao.fracoes
+        g = self.grade
+        self.resultado["dvh"] = {n: dvh(total, e.mascara, g.voxel_cc) for n, e in self.estruturas.items()
+                                 if e.mascara.any()}
+        self.resultado["restricoes"] = self._avaliar_restricoes(total)
+
     def _corpo(self) -> np.ndarray:
         g = self.grade
         for e in self.estruturas.values():
@@ -679,7 +750,10 @@ class Sessao:
                  "fantoma": dataclasses.asdict(self.fantoma) if self.tipo == "fantoma" else None,
                  "specs": {c.nome: c.__dict__.get("_spec") for c in self.plano.campos},
                  "bolus_mascaras": {b["nome"]: _empacotar(self.estruturas[b["nome"]].mascara)
-                                    for b in self.plano.bolus if b["nome"] in self.estruturas}}
+                                    for b in self.plano.bolus if b["nome"] in self.estruturas},
+                 "derivadas": {n: {**d, "cor": list(self.estruturas[n].cor),
+                                   "mascara": _empacotar(self.estruturas[n].mascara)}
+                               for n, d in self.derivadas.items() if n in self.estruturas}}
         f = d / f"{self.paciente['id'] or 'sem_id'}_{self.plano.rotulo}.json"
         f.write_text(json.dumps(dados, indent=1, default=str), encoding="utf-8")
         self._registrar(f"Plano salvo em {f}")
@@ -705,6 +779,11 @@ class Sessao:
         self.eta_original = self.grade.eta.copy()
         for nome, emp in (dados.get("bolus_mascaras") or {}).items():
             self.estruturas[nome] = Estrutura(nome, "BOLUS", (255, 170, 60), _desempacotar(emp, self.grade.eta.shape))
+        for nome, d in (dados.get("derivadas") or {}).items():
+            d = dict(d)
+            self.estruturas[nome] = Estrutura(nome, "DERIVADA", tuple(d.pop("cor")),
+                                              _desempacotar(d.pop("mascara"), self.grade.eta.shape))
+            self.derivadas[nome] = d
         self._aplicar_eta()
         for c in self.plano.campos:
             c.__dict__["_spec"] = (dados.get("specs") or {}).get(c.nome)

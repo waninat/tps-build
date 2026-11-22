@@ -57,6 +57,19 @@ def test_fluxo_3d_completo_pela_api(cli):
     assert len(_ok(c.get(f"/api/{sid}/dvh"))) >= 2
     cf = c.get(f"/api/{sid}/checkfilm.pdf")
     assert cf.status_code == 200 and cf.content[:4] == b"%PDF"
+    est = _ok(c.post(f"/api/{sid}/estrutura", json={"nome": "PTV_mais5", "operacao": "margem", "a": "PTV_fantoma",
+                                                     "margens": {"direita": 5, "esquerda": 5, "anterior": 5,
+                                                                 "posterior": 5, "superior": 10, "inferior": 0}}))
+    vols = {e["nome"]: e["volume_cc"] for e in est["estruturas"]}
+    assert vols["PTV_mais5"] > vols["PTV_fantoma"]
+    est = _ok(c.post(f"/api/{sid}/estrutura", json={"nome": "ANEL", "operacao": "anel", "a": "PTV_fantoma",
+                                                     "interno_mm": 0, "externo_mm": 15}))
+    est = _ok(c.post(f"/api/{sid}/estrutura", json={"nome": "ISO45", "operacao": "isodose", "a": "", "nivel_gy": 45}))
+    assert {"PTV_mais5", "ANEL", "ISO45"} <= set(_ok(c.get(f"/api/{sid}/dvh")))
+    r = c.post(f"/api/{sid}/estrutura", json={"nome": "ANEL", "operacao": "anel", "a": "PTV_fantoma", "externo_mm": 5})
+    assert r.status_code == 400
+    _ok(c.delete(f"/api/{sid}/estrutura/ISO45"))
+    assert c.delete(f"/api/{sid}/estrutura/PTV_fantoma").status_code == 400
     rr = _ok(c.get(f"/api/{sid}/restricoes"))
     assert any(q["tg263"] == "alvo" and q["metrica"] == "V95%" for q in rr["resultados"])
     assert s["resultado"]["restricoes"]["protocolo"]
