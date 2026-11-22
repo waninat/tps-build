@@ -176,6 +176,32 @@ def fantoma_agua(pasta, lado_mm: float = 400.0, prof_mm: float = 400.0, voxel_mm
                     descricao="Fantoma de agua 40x40x40 cm")
 
 
+def fantoma_placa(pasta, nome: str, hu_placa: float, y0_mm: float, y1_mm: float, paciente: tuple,
+                  descricao: str, lado_mm: float = 400.0, prof_mm: float = 300.0, voxel_mm: float = 2.0):
+    """Fantoma de água com uma placa heterogênea entre as profundidades y0 e y1 (validação de heterogeneidade).
+    A placa vira uma estrutura própria, para o TPS de referência poder atribuir a densidade por sobrescrita."""
+    x = np.arange(-lado_mm / 2 - 20, lado_mm / 2 + 20 + 1e-6, voxel_mm)
+    y = np.arange(-50.0, prof_mm + 20 + 1e-6, voxel_mm)
+    z = np.arange(-lado_mm / 2 - 20, lado_mm / 2 + 20 + 1e-6, voxel_mm)
+    Z, Y, X = np.meshgrid(z, y, x, indexing="ij")
+    corpo = (np.abs(X) <= lado_mm / 2) & (np.abs(Z) <= lado_mm / 2) & (Y >= 0) & (Y <= prof_mm)
+    # bordas da placa nas fronteiras dos voxels (y0, y1 múltiplos do voxel ± meio voxel)
+    placa = corpo & (Y > y0_mm - voxel_mm / 2) & (Y < y1_mm - voxel_mm / 2)
+    hu = np.where(corpo, 0.0, -1000.0)
+    hu = np.where(placa, hu_placa, hu).astype(np.float32)
+    exportar_volume(pasta, hu, x, y, z, {"BODY": (corpo, "EXTERNAL", (0, 200, 0)),
+                                         nome: (placa, "ORGAN", (200, 120, 0))}, paciente, descricao=descricao)
+
+
+def fantomas_heterogeneidade(pasta):
+    """Pulmão: água 0–3 cm, pulmão 3–13 cm, água 13–30 cm. Osso: água 0–3 cm, osso 3–6 cm, água 6–30 cm."""
+    pasta = Path(pasta)
+    fantoma_placa(pasta / "placa_pulmao", "PULMAO", -750.0, 30.0, 130.0, ("PLACA^PULMAO", "PLACAPULM"),
+                  "Fantoma agua com placa de pulmao 3-13 cm")
+    fantoma_placa(pasta / "placa_osso", "OSSO", 1000.0, 30.0, 60.0, ("PLACA^OSSO", "PLACAOSSO"),
+                  "Fantoma agua com placa de osso 3-6 cm")
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     out = Path(args[0] if args else "casos_teste")
@@ -186,6 +212,8 @@ def main():
     separacao_variavel(out / "separacao_variavel")
     if "--agua" in sys.argv:
         fantoma_agua(out / "agua_40cm")
+    if "--heterogeneidade" in sys.argv:
+        fantomas_heterogeneidade(out)
     print(f"Casos de teste em {out.resolve()}")
 
 
