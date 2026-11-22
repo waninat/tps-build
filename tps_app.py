@@ -12,7 +12,7 @@ import sys
 
 
 def _cache_numba():
-    """O numba guarda o código de máquina compilado ao lado do módulo; em C:\Program Files um usuário comum não
+    r"""O numba guarda o código de máquina compilado ao lado do módulo; em C:\Program Files um usuário comum não
     pode escrever, e no Windows o tempfile fica tentando para sempre (o TPS travava ao iniciar). Usa uma pasta do
     usuário. Precisa vir antes de qualquer import do numba."""
     if os.environ.get("NUMBA_CACHE_DIR"):
