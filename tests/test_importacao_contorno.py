@@ -21,7 +21,10 @@ def cli(tmp_path_factory):
     for f in ("RP.dcm", "RD.dcm"):
         (caso / f).unlink(missing_ok=True)
     c = TestClient(app, raise_server_exceptions=False)
-    r = c.post("/api/configurar", json={"login": "fisico.imp", "nome": "Físico", "senha": "senha-forte-1"})
+    if c.get("/api/info").json()["configurar"]:
+        r = c.post("/api/configurar", json={"login": "fisico.teste", "nome": "Físico Teste", "senha": "senha-forte-1"})
+    else:
+        r = c.post("/api/login", json={"login": "fisico.teste", "senha": "senha-forte-1"})
     c.headers["X-Token"] = r.json()["token"]
     return c, caso, home
 

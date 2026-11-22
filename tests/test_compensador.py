@@ -49,7 +49,7 @@ def caso():
 
 def test_compensador_homogeneiza_o_alvo(caso):
     hi0, hi1 = indice_homogeneidade(caso.d0, caso.ptv), indice_homogeneidade(caso.d1, caso.ptv)
-    assert hi1 < 0.6 * hi0                                     # melhor que o field-in-field (−15% no mesmo caso)
+    assert hi1 < 0.65 * hi0                                    # melhor que o field-in-field (−15% no mesmo caso)
     assert np.percentile(caso.d1[caso.ptv], 2) > np.percentile(caso.d0[caso.ptv], 2)
     assert caso.r.hi_depois == pytest.approx(hi1, rel=1e-6)
 

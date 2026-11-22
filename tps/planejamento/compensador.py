@@ -1,16 +1,16 @@
-"""Compensador de fluência (equivalente ao "electronic compensator" do Eclipse). SRS-PLN-060..066.
+"""Compensador de fluência (equivalente ao "electronic compensator" do Eclipse). SRS-PLN-060..067.
 
-Para cada campo escolhido, uma fluência F(u, v) na grade do MLC (linhas = pares de lâminas, colunas de 2,5 mm) é
-corrigida iterativamente para que a dose média ao longo de cada raio, dentro do alvo, chegue à prescrição:
+Para cada campo, uma fluência F(u, v) na grade do MLC (linhas = pares de lâminas, colunas de 2,5 mm) é otimizada
+em 3D: a dose de cada campo é multiplicada pela fluência ao longo do raio, e o L-BFGS-B minimiza o desvio da
+prescrição em todo o núcleo do alvo, com penalidade para pontos quentes no corpo (> 107%) e suavidade entre
+colunas. Depois de sequenciar em segmentos, a dose do motor completo corrige o modelo (espalhamento, penumbra,
+quantização) e a otimização é refeita; fica a melhor iteração.
 
-    F ← F · (D_prescrita / D_raio)^γ          (γ = 0,8; F limitada a [0,5; 1,5]; suavização leve em u)
+O sequenciamento é step-and-shoot: um segmento-base com o mínimo da fluência + `niveis` níveis iguais do excesso
+(maior trecho contíguo por par). Cada segmento passa pela mesma mecânica do ajuste 3D (gap mínimo, pares fechados,
+não-interdigitação do MLCi) e pela verificação mecânica; segmentos com menos de `um_min_segmento` UM são fundidos.
 
-A fluência é então sequenciada em níveis (step-and-shoot): o nível j abre, em cada par, o maior trecho contíguo em
-que F ≥ j·Δ. Cada segmento passa pela mesma mecânica do ajuste 3D (gap mínimo, pares fechados, não-interdigitação
-do MLCi) e pela verificação mecânica. Segmentos com menos de `um_min_segmento` UM são fundidos ao nível vizinho.
-
-Diferente do Eclipse, não precisa de "pintura" manual da fluência nem de plano de compensação escolhido à mão: a
-referência é a dose no próprio alvo, com todos os campos somados. A pintura manual fica para a interface.
+Pelve real (4 campos, Precise): HI 0,102 → 0,054 (método anterior, de correção pela média no raio: 0,081).
 """
 from __future__ import annotations
 

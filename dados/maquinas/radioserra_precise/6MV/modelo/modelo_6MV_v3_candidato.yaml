@@ -1,0 +1,35 @@
+energy_mv: 6.0
+spectrum_hardening_k: 15.698795542740958
+sigma_src_mm: 1.5
+sigma_src_x_mm: 2.24
+sigma_src_y_mm: 1.08
+w_extrafocal: 0.09891680394997533
+sigma_extrafocal_mm: 124.39075035408806
+mlc_transmission: 0.012031644002999435
+jaw_transmission: 0.006752526983727946
+leaf_tip_offset_mm: 0.0
+interleaf_factor: 1.0
+groove_width_mm: 0.0
+horn:
+- 0.002821679582271838
+- 0.00025956288821743793
+- 0.0
+e_contam_amp: 0.9934568528851048
+e_contam_k_cm: 2.0
+e_contam_ref_raw: 0.023272935646016218
+head_leakage: 0.0
+escala_espalhamento: 0.933828137106397
+e_contam_sigma_mm: 22.797371007966976
+norm_dose_per_mu: 0.4645668260428096
+ref:
+  campo_cm: 10
+  ssd_mm: 1000
+  prof_calibracao_dmax_mm: 15.0
+  cGy_por_MU_dmax: 1.0
+  ancora_prof_mm: 100.0
+  pdd_ancora: 67.6
+  fff: false
+  energia: 6MV
+  comissionamento: v3
+comissionado: true
+demonstracao: false

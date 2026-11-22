@@ -19,8 +19,10 @@ def cli(tmp_path_factory):
     for f in ("RP.dcm", "RD.dcm"):
         (caso / f).unlink(missing_ok=True)
     c = TestClient(app, raise_server_exceptions=False)
-    assert c.get("/api/info").json()["configurar"]
-    r = c.post("/api/configurar", json={"login": "fisico.teste", "nome": "Físico Teste", "senha": "senha-forte-1"})
+    if c.get("/api/info").json()["configurar"]:
+        r = c.post("/api/configurar", json={"login": "fisico.teste", "nome": "Físico Teste", "senha": "senha-forte-1"})
+    else:                                    # o banco é um por processo: outro módulo de teste já configurou
+        r = c.post("/api/login", json={"login": "fisico.teste", "senha": "senha-forte-1"})
     c.headers["X-Token"] = r.json()["token"]
     return c, caso, home
 
@@ -94,7 +96,7 @@ def test_fluxo_3d_completo_pela_api(cli):
     assert c.post(f"/api/{sid}/campo", json={"gantry": 45}).status_code == 400      # bloqueado
     assert c.post(f"/api/{sid}/exportar", json={}).status_code == 401                # exige senha
     ex = _ok(c.post(f"/api/{sid}/exportar", json={"senha": "senha-forte-1"}))
-    assert len(ex["arquivos"]) == 2
+    assert len(ex["arquivos"]) == 3 and any("RS_" in a for a in ex["arquivos"])   # RTPLAN + RTSTRUCT + RTDOSE
     assert pydicom.dcmread(ex["arquivos"][0]).ApprovalStatus == "APPROVED"
     assert c.get(f"/api/{sid}/arquivo", params={"caminho": ex["arquivos"][0]}).status_code == 200
     assert c.get(f"/api/{sid}/arquivo", params={"caminho": "/etc/passwd"}).status_code == 400
@@ -174,7 +176,8 @@ def test_sem_login_e_papeis(cli):
 def test_auditoria_detecta_adulteracao(cli):
     c, caso, home = cli
     import sqlite3
-    con = sqlite3.connect(home / "tps.db")
+    from tps.app.servidor import banco
+    con = sqlite3.connect(banco().arquivo)          # o banco do processo (pode ser de outro módulo de teste)
     con.execute("UPDATE auditoria SET usuario='outro' WHERE id=(SELECT MIN(id) FROM auditoria)")
     con.commit()
     con.close()
