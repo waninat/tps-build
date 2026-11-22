@@ -134,6 +134,19 @@ def relatorio_pdf(s, usuario: dict | None = None) -> bytes:
         t = Table(lin, repeatRows=1)
         t.setStyle(estilo_tab)
         el.append(t)
+        rr = r.get("restricoes") or {}
+        if rr.get("resultados"):
+            el.append(Paragraph(f"Restrições de dose — {rr.get('protocolo', '')}", sub))
+            for a in rr.get("avisos", []):
+                el.append(Paragraph(f"<font color='#b06000'>{a}</font>", normal))
+            lin = [["Estrutura", "TG-263", "Métrica", "Limite", "Valor", "Tipo", "Situação", "Fonte"]]
+            for q in rr["resultados"]:
+                sit = "ok" if q["ok"] else ("NÃO CUMPRE" if q["tipo"] == "limite" else "acima do objetivo")
+                lin.append([q["estrutura"][:22], q["tg263"], q["metrica"], f"{q['op']} {q['limite']:g} {q['unidade']}",
+                            f"{q['valor']:.2f}", q["tipo"], sit, Paragraph(f"<font size=6>{q['fonte']}</font>", normal)])
+            t = Table(lin, repeatRows=1, colWidths=[30 * mm, 22 * mm, 18 * mm, 28 * mm, 14 * mm, 14 * mm, 24 * mm, 30 * mm])
+            t.setStyle(estilo_tab)
+            el.append(t)
         pts = [x for x in (s.resumo()["plano"]["pontos"] or [])]
         if pts:
             el.append(Paragraph("Pontos de referência (dose do plano completo)", sub))

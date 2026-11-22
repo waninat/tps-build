@@ -301,6 +301,24 @@ def relatorio_pdf(sid: str, u: dict = Depends(usuario)):
     return Response(dados, media_type="application/pdf", headers={"Content-Disposition": f'inline; filename="{nome}"'})
 
 
+@app.get("/api/{sid}/checkfilm.pdf")
+def checkfilm_pdf(sid: str, u: dict = Depends(usuario)):
+    from tps.app.checkfilm import folha_pdf
+    s = _s(sid)
+    if not s.plano or not s.plano.campos:
+        raise ErroUsuario("Plano sem campos")
+    with TRAVA:
+        dados = folha_pdf(s)
+    auditar(u, "checkfilm_pdf", s)
+    return Response(dados, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="CheckFilm_{s.plano.rotulo}.pdf"'})
+
+
+@app.get("/api/{sid}/restricoes")
+def restricoes(sid: str, u: dict = Depends(usuario)):
+    return _s(sid).restricoes_json()
+
+
 @app.get("/api/{sid}/dvh")
 def dvh(sid: str, u: dict = Depends(usuario)):
     return _s(sid).dvh_json()

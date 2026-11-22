@@ -55,6 +55,11 @@ def test_fluxo_3d_completo_pela_api(cli):
     assert s["dose_atualizada"] and all(k["ok"] for k in s["resultado"]["conferencia_um"])
     assert s["resultado"]["estatisticas"]["PTV_fantoma"]["D95"] > 47.0
     assert len(_ok(c.get(f"/api/{sid}/dvh"))) >= 2
+    cf = c.get(f"/api/{sid}/checkfilm.pdf")
+    assert cf.status_code == 200 and cf.content[:4] == b"%PDF"
+    rr = _ok(c.get(f"/api/{sid}/restricoes"))
+    assert any(q["tg263"] == "alvo" and q["metrica"] == "V95%" for q in rr["resultados"])
+    assert s["resultado"]["restricoes"]["protocolo"]
     ov = _ok(c.get(f"/api/{sid}/sobreposicao/axial/{s['ct']['z'][2] // 2}"))
     assert ov["isodoses"] and ov["contornos"] and len(ov["feixes"]) == 4
     for vista in ("coronal", "sagital"):

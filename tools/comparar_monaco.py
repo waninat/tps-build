@@ -148,13 +148,19 @@ def main():
                                      fill_value=np.nan)
         dn, (zn, yn, xn) = nosso(modelo, cones, fsx, fsy, a.voxel if min(fsx, fsy) > 4 else min(a.voxel, 1.0), cache)
         dn = dn * 100.0
-        inn = RegularGridInterpolator((zn, yn, xn), dn, bounds_error=False, fill_value=np.nan)
+        inn0 = RegularGridInterpolator((zn, yn, xn), dn, bounds_error=False, fill_value=np.nan)
+        passo = float(c["rd"].PixelSpacing[0])
+        offs = np.array([(a_, b_, c_) for a_ in (-1, 0, 1) for b_ in (-1, 0, 1) for c_ in (-1, 0, 1)]) * passo / 3
+
+        def inn(q):
+            """Nossa dose com a média sobre o volume do voxel do Monaco (comparação na mesma resolução)."""
+            return np.mean([inn0(q + o) for o in offs], axis=0)
 
         # PDD
         pr = np.arange(0.0, 390.1, 1.0)
         pm = im(np.c_[np.zeros_like(pr), pr, np.zeros_like(pr)])
         pn = inn(np.c_[np.zeros_like(pr), pr, np.zeros_like(pr)])
-        ok = pr >= 5
+        ok = pr >= 10
         i10 = np.argmin(abs(pr - 100))
         pdd_m, pdd_n = pm / pm[i10] * 100, pn / pn[i10] * 100
         dif_pdd = (pdd_n - pdd_m)[ok & (pr <= 350)]

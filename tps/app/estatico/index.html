@@ -15,6 +15,7 @@
   <span class="nao-clinico">Em desenvolvimento — não usar em paciente</span>
   <button id="b-salvar" disabled>Salvar plano</button>
   <button id="b-relatorio" disabled>Relatório PDF</button>
+  <button id="b-checkfilm" disabled title="DRR de cada campo com MLC e escala, para comparar com o filme de verificação">Check film</button>
   <button id="b-auditoria" title="Trilha de auditoria e usuários">Auditoria</button>
   <span id="usuario-txt" class="usuario"></span>
   <button id="b-sair" class="pequeno">Sair</button>
@@ -213,6 +214,9 @@
   <h3>Dose</h3>
   <div id="resumo-dose" class="pequeno-txt">—</div>
   <table id="tab-estat"><thead><tr><th>Estrutura</th><th>Dméd</th><th>D95</th><th>D2</th><th>Dmax</th></tr></thead><tbody></tbody></table>
+  <h3>Restrições <span id="rest-prot" class="pequeno-txt"></span></h3>
+  <div id="rest-avisos" class="pequeno-txt avisotxt"></div>
+  <table id="tab-rest"><thead><tr><th>Estrutura</th><th>Métrica</th><th>Limite</th><th>Valor</th></tr></thead><tbody></tbody></table>
   <h3>Cruz</h3>
   <div id="dose-cruz" class="pequeno-txt">Clique num corte</div>
   <h3>Pontos de referência</h3>

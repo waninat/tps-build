@@ -544,11 +544,27 @@ class Sessao:
             k["compensado"] = bool(c.segmentos)
         hi = indice_homogeneidade(total, alvo) if alvo is not None and alvo.any() else None
         self.resultado = {"dvh": hist, "conferencia_um": conf, "info": info, "hi": hi,
+                          "restricoes": self._avaliar_restricoes(total),
                           "dmax_gy": float(total[corpo].max()) if corpo.any() else float(total.max()),
                           "quando": dt.datetime.now().isoformat(timespec="seconds")}
         self.dose_atualizada = True
         self._registrar(f"Dose calculada ({len(p.campos)} campos)")
         return self.resumo()
+
+    def _avaliar_restricoes(self, total) -> dict:
+        """Restrições QUANTEC/ICRU (ou as da clínica) com nomes TG-263. Nunca impede o cálculo."""
+        from tps.planejamento import restricoes
+        pr = self.plano.prescricao
+        try:
+            doses = {n: total[e.mascara] for n, e in self.estruturas.items() if e.mascara.any()}
+            return restricoes.avaliar(doses, self.grade.voxel_cc, pr.dose_total_gy, pr.fracoes,
+                                      pr.estrutura_alvo).json()
+        except Exception as e:  # noqa: BLE001
+            return {"erro": f"avaliação das restrições falhou: {e}", "resultados": [], "avisos": []}
+
+    def restricoes_json(self) -> dict:
+        self._exigir(self.dose_atualizada, "Dose não calculada")
+        return self.resultado.get("restricoes") or {"resultados": [], "avisos": []}
 
     def _recalcular_aprovado(self) -> dict:
         """Plano aprovado (ex.: reaberto): recalcula a dose com as UM gravadas, sem mudar nada no plano, e confere que
@@ -572,6 +588,7 @@ class Sessao:
                               ponto_mm=pr.ponto_mm if pr.metodo == "ponto" else None) if m.tabelas else []
         corpo = self._corpo()
         self.resultado = {"dvh": hist, "conferencia_um": conf, "info": {"recalculo_aprovado": True},
+                          "restricoes": self._avaliar_restricoes(total),
                           "hi": indice_homogeneidade(total, alvo) if alvo is not None and alvo.any() else None,
                           "dmax_gy": float(total[corpo].max()), "quando": dt.datetime.now().isoformat(timespec="seconds")}
         self.dose_atualizada = True
@@ -739,6 +756,7 @@ class Sessao:
             if self.dose_atualizada and self.resultado:
                 r = self.resultado
                 out["resultado"] = {"hi": r["hi"], "dmax_gy": r["dmax_gy"], "info": r["info"],
+                                    "restricoes": r.get("restricoes"),
                                     "conferencia_um": r["conferencia_um"],
                                     "estatisticas": {n: {k: h[k] for k in ("volume_cc", "Dmin", "Dmean", "Dmax", "D95",
                                                                              "D98", "D2") if k in h}

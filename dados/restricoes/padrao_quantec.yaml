@@ -1,0 +1,72 @@
+# Restrições de dose padrão (fracionamento convencional, 1,8–2,0 Gy/fração).
+# Fontes: QUANTEC (Marks et al., IJROBP 2010, suplemento 76(3)); próstata/bexiga/cabeças femorais conforme
+# os limites de protocolos RTOG citados no QUANTEC; alvo segundo ICRU 50/62/83.
+# É um ponto de partida: CADA CLÍNICA DEVE REVISAR E APROVAR os seus limites (copie este arquivo para
+# <pasta de dados>/restricoes/clinica.yaml e edite; o arquivo da clínica substitui este).
+#
+# metrica: Dmean | D0.03cc | D<n>cc | D<n>% | V<n>Gy (em % do volume) | V<n>Gy_cc (em cm³)
+# tipo: limite (precisa cumprir) | objetivo (desejável)
+nome: Padrão QUANTEC / ICRU (fracionamento convencional)
+versao: 1
+alvo:
+  - {metrica: V95%, op: ">=", valor: 95.0, unidade: "%", tipo: limite, fonte: "ICRU 50/62"}
+  - {metrica: D2%, op: "<=", valor: 107.0, unidade: "% da prescrição", tipo: limite, fonte: "ICRU 50/62/83"}
+  - {metrica: D98%, op: ">=", valor: 95.0, unidade: "% da prescrição", tipo: objetivo, fonte: "ICRU 83"}
+orgaos:
+  SpinalCord:
+    - {metrica: D0.03cc, op: "<=", valor: 45.0, tipo: objetivo, fonte: "prática clínica (margem ao QUANTEC)"}
+    - {metrica: D0.03cc, op: "<=", valor: 50.0, tipo: limite, fonte: "QUANTEC (mielopatia 0,2%)"}
+  Brainstem:
+    - {metrica: D0.03cc, op: "<=", valor: 54.0, tipo: limite, fonte: QUANTEC}
+    - {metrica: D1cc, op: "<=", valor: 59.0, tipo: limite, fonte: "QUANTEC (D1–10cc)"}
+  OpticChiasm:
+    - {metrica: D0.03cc, op: "<=", valor: 55.0, tipo: limite, fonte: QUANTEC}
+  OpticNrv_L:
+    - {metrica: D0.03cc, op: "<=", valor: 55.0, tipo: limite, fonte: QUANTEC}
+  OpticNrv_R:
+    - {metrica: D0.03cc, op: "<=", valor: 55.0, tipo: limite, fonte: QUANTEC}
+  Cochlea_L:
+    - {metrica: Dmean, op: "<=", valor: 45.0, tipo: limite, fonte: QUANTEC}
+  Cochlea_R:
+    - {metrica: Dmean, op: "<=", valor: 45.0, tipo: limite, fonte: QUANTEC}
+  Parotid_L:
+    - {metrica: Dmean, op: "<=", valor: 25.0, tipo: objetivo, fonte: "QUANTEC (ambas < 25 Gy ou uma < 20 Gy)"}
+  Parotid_R:
+    - {metrica: Dmean, op: "<=", valor: 25.0, tipo: objetivo, fonte: "QUANTEC (ambas < 25 Gy ou uma < 20 Gy)"}
+  Larynx:
+    - {metrica: Dmean, op: "<=", valor: 44.0, tipo: objetivo, fonte: "QUANTEC (edema)"}
+    - {metrica: D0.03cc, op: "<=", valor: 66.0, tipo: objetivo, fonte: QUANTEC}
+  Esophagus:
+    - {metrica: Dmean, op: "<=", valor: 34.0, tipo: objetivo, fonte: "QUANTEC (esofagite aguda)"}
+  Heart:
+    - {metrica: V25Gy, op: "<=", valor: 10.0, tipo: objetivo, fonte: "QUANTEC (mortalidade cardíaca)"}
+    - {metrica: Dmean, op: "<=", valor: 26.0, tipo: limite, fonte: "QUANTEC (pericardite)"}
+  Lungs:
+    - {metrica: V20Gy, op: "<=", valor: 30.0, tipo: limite, fonte: "QUANTEC (pneumonite)"}
+    - {metrica: Dmean, op: "<=", valor: 20.0, tipo: limite, fonte: "QUANTEC (pneumonite)"}
+  Liver:
+    - {metrica: Dmean, op: "<=", valor: 30.0, tipo: limite, fonte: "QUANTEC (fígado normal, metástases)"}
+  Kidneys:
+    - {metrica: Dmean, op: "<=", valor: 18.0, tipo: limite, fonte: "QUANTEC (bilateral)"}
+    - {metrica: V20Gy, op: "<=", valor: 32.0, tipo: objetivo, fonte: "QUANTEC (bilateral)"}
+  Bowel_Small:
+    - {metrica: V15Gy_cc, op: "<=", valor: 120.0, tipo: objetivo, fonte: "QUANTEC (alças individuais)"}
+  Bag_Bowel:
+    - {metrica: V45Gy_cc, op: "<=", valor: 195.0, tipo: objetivo, fonte: "QUANTEC (cavidade peritoneal)"}
+  Rectum:
+    - {metrica: V50Gy, op: "<=", valor: 50.0, tipo: limite, fonte: QUANTEC}
+    - {metrica: V60Gy, op: "<=", valor: 35.0, tipo: limite, fonte: QUANTEC}
+    - {metrica: V65Gy, op: "<=", valor: 25.0, tipo: limite, fonte: QUANTEC}
+    - {metrica: V70Gy, op: "<=", valor: 20.0, tipo: limite, fonte: QUANTEC}
+    - {metrica: V75Gy, op: "<=", valor: 15.0, tipo: limite, fonte: QUANTEC}
+  Bladder:
+    - {metrica: V65Gy, op: "<=", valor: 50.0, tipo: limite, fonte: "QUANTEC (RTOG 0415)"}
+    - {metrica: V70Gy, op: "<=", valor: 35.0, tipo: limite, fonte: "QUANTEC (RTOG 0415)"}
+    - {metrica: V75Gy, op: "<=", valor: 25.0, tipo: limite, fonte: "QUANTEC (RTOG 0415)"}
+    - {metrica: V80Gy, op: "<=", valor: 15.0, tipo: limite, fonte: "QUANTEC (RTOG 0415)"}
+  PenileBulb:
+    - {metrica: Dmean, op: "<=", valor: 52.5, tipo: objetivo, fonte: QUANTEC}
+  Femur_Head_L:
+    - {metrica: V50Gy, op: "<=", valor: 5.0, tipo: objetivo, fonte: "RTOG 0415"}
+  Femur_Head_R:
+    - {metrica: V50Gy, op: "<=", valor: 5.0, tipo: objetivo, fonte: "RTOG 0415"}

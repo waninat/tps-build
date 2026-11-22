@@ -151,6 +151,7 @@ function ligar() {
   $("#b-exportar").onclick = () => tentar(exportar);
   $("#b-salvar").onclick = () => tentar(async () => aviso("Salvo em " + (await api("POST", `/api/${E.sid}/salvar`)).arquivo, true));
   $("#b-relatorio").onclick = () => window.open(`/api/${E.sid}/relatorio.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
+  $("#b-checkfilm").onclick = () => window.open(`/api/${E.sid}/checkfilm.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
   $("#b-sair").onclick = () => tentar(async () => {
     await api("POST", "/api/logout"); E.token = null;
     try { sessionStorage.removeItem("tps_token"); } catch (e) { /* ok */ }
@@ -246,6 +247,7 @@ function atualizar(r) {
   $("#b-desaprovar").disabled = !aprovado;
   $("#b-exportar").disabled = !aprovado;
   $("#b-salvar").disabled = !temPlano; $("#b-relatorio").disabled = !temPlano;
+  $("#b-checkfilm").disabled = !(temPlano && E.resumo.plano.campos.length);
   $$("[data-arranjo]").forEach(b => b.disabled = !temPlano || aprovado);
   $("#b-ponto").disabled = !temPlano; $("#b-bolus").disabled = !temPlano || aprovado;
   $("#bo-campos").innerHTML = p ? p.campos.filter(c => !c.campo_pai).map(c => `<option>${c.nome}</option>`).join("") : "";
@@ -371,6 +373,14 @@ function tabelas() {
     $("#tab-estat tbody").innerHTML = Object.entries(res.estatisticas).map(([n, h]) =>
       `<tr><td>${n}</td><td>${f1(h.Dmean, 2)}</td><td>${f1(h.D95, 2)}</td><td>${f1(h.D2, 2)}</td><td>${f1(h.Dmax, 2)}</td></tr>`).join("");
   }
+  const rr = res && res.restricoes;
+  $("#rest-prot").textContent = rr && rr.protocolo ? `(${rr.protocolo})` : "";
+  $("#rest-avisos").textContent = rr ? [...(rr.avisos || []), ...(rr.erro ? [rr.erro] : [])].join(" ") : "";
+  $("#tab-rest tbody").innerHTML = !rr ? "" : (rr.resultados || []).map(q => {
+    const cls = q.ok ? "ok" : (q.tipo === "limite" ? "falha" : "avisotxt");
+    return `<tr title="${q.tg263} · ${q.tipo} · ${q.fonte}${q.obs ? " · " + q.obs : ""}"><td>${q.estrutura}</td><td>${q.metrica}</td>` +
+      `<td>${q.op} ${q.limite} ${q.unidade === "Gy" ? "" : q.unidade}</td><td class="${cls}">${f1(q.valor, 1)}</td></tr>`;
+  }).join("");
   const p = r && r.plano;
   const conf = res ? Object.fromEntries(res.conferencia_um.map(k => [k.campo, k])) : {};
   $("#tab-um tbody").innerHTML = !p ? "" : p.campos.map(c => {
