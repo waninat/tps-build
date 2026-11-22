@@ -15,7 +15,7 @@ def autoteste() -> int:
     from pathlib import Path
 
     from tps import paths
-    with tempfile.TemporaryDirectory() as tmp:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:  # Windows: tps.db ainda aberto
         paths.set_home(Path(tmp) / "home")
         paths.ensure_home()
         from fastapi.testclient import TestClient
