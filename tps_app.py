@@ -54,8 +54,25 @@ def main() -> int:
         from tps.version import __version__
         print(__version__)
         return 0
-    from tps.app.servidor import main as servidor
-    servidor()
+    try:
+        from tps.app.servidor import main as servidor
+        servidor()
+    except SystemExit:
+        raise
+    except BaseException:  # noqa: BLE001
+        # sem isto a janela fecha na hora e o erro some: mostra, grava em log e espera o usuário
+        import traceback
+        txt = traceback.format_exc()
+        print(txt, flush=True)
+        try:
+            from tps import paths
+            (paths.home() / "erro_inicializacao.log").write_text(txt, encoding="utf-8")
+            print(f"(gravado em {paths.home() / 'erro_inicializacao.log'})")
+        except Exception:  # noqa: BLE001
+            pass
+        if getattr(sys, "frozen", False) or "__compiled__" in globals():
+            input("O TPS não conseguiu iniciar. Envie esta mensagem ao suporte. Tecle Enter para fechar.")
+        return 1
     return 0
 
 

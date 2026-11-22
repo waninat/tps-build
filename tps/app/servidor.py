@@ -433,13 +433,38 @@ def main():
     if a.home:
         paths.set_home(a.home)
     paths.ensure_home()
+    import socket
+
     import uvicorn
     host = "0.0.0.0" if a.rede else "127.0.0.1"
-    if not a.sem_navegador:
-        import webbrowser
-        threading.Timer(1.5, lambda: webbrowser.open(f"http://127.0.0.1:{a.porta}")).start()
-    print(f"TPS {__version__} em http://127.0.0.1:{a.porta}  (Ctrl+C para fechar)")
-    uvicorn.run(app, host=host, port=a.porta, log_level="warning")
+    porta = a.porta
+    for _ in range(10):                      # porta ocupada (outro TPS aberto?): tenta a seguinte
+        with socket.socket() as so:
+            if so.connect_ex(("127.0.0.1", porta)) != 0:
+                break
+        print(f"A porta {porta} já está em uso; tentando {porta + 1}.", flush=True)
+        porta += 1
+    url = f"http://127.0.0.1:{porta}"
+
+    def abrir_quando_pronto():
+        """Só abre o navegador quando o servidor já aceita conexões (a 1ª execução pode demorar)."""
+        import time
+        t0 = time.time()
+        while time.time() - t0 < 300:
+            with socket.socket() as so:
+                so.settimeout(1)
+                if so.connect_ex(("127.0.0.1", porta)) == 0:
+                    print(f"Pronto: {url}  (feche esta janela para encerrar o TPS)", flush=True)
+                    if not a.sem_navegador:
+                        import webbrowser
+                        webbrowser.open(url)
+                    return
+            time.sleep(0.5)
+        print(f"O servidor não respondeu em 5 minutos. Tente abrir {url} no navegador.", flush=True)
+
+    print(f"TPS {__version__}: iniciando em {url} … (a primeira execução pode levar 1–2 minutos)", flush=True)
+    threading.Thread(target=abrir_quando_pronto, daemon=True).start()
+    uvicorn.run(app, host=host, port=porta, log_level="warning")
 
 
 if __name__ == "__main__":
