@@ -349,6 +349,14 @@ def corte(sid: str, vista: str, idx: int, janela: float = 400, nivel: float = 40
                     headers={"Cache-Control": "max-age=600"})
 
 
+@app.get("/api/{sid}/dose_corte/{vista}/{idx}.png")
+def dose_corte(sid: str, vista: str, idx: int, minimo: float = 20.0, maximo: float = 0.0, u: dict = Depends(usuario)):
+    if vista not in ("axial", "coronal", "sagital"):
+        raise ErroUsuario("vista inválida")
+    return Response(_s(sid).imagem_dose(vista, idx, minimo, maximo), media_type="image/png",
+                    headers={"Cache-Control": "no-store"})
+
+
 @app.get("/api/{sid}/sobreposicao/{vista}/{idx}")
 def sobreposicao(sid: str, vista: str, idx: int, isodoses: bool = True, u: dict = Depends(usuario)):
     return _s(sid).sobreposicao(vista, idx, None, isodoses)

@@ -151,6 +151,8 @@ function ligar() {
   $("#b-exportar").onclick = () => tentar(exportar);
   $("#b-salvar").onclick = () => tentar(async () => aviso("Salvo em " + (await api("POST", `/api/${E.sid}/salvar`)).arquivo, true));
   $("#b-relatorio").onclick = () => window.open(`/api/${E.sid}/relatorio.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
+  $("#t-wash").onchange = () => desenharTudo();
+  $("#wash-min").onchange = () => desenharTudo();
   $("#b-checkfilm").onclick = () => window.open(`/api/${E.sid}/checkfilm.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
   $("#b-sair").onclick = () => tentar(async () => {
     await api("POST", "/api/logout"); E.token = null;
@@ -291,7 +293,7 @@ function atualizar(r) {
     const alvo = nomes.includes(E.campoSel) ? E.campoSel : (nomes.includes(bsel) ? bsel : nomes[0]);
     $("#bev-campo").value = alvo; carregarBev(alvo).catch(e => aviso(e.message));
   } else { E.bev = null; desenharBev(); }
-  E.sobre = {}; carregarSobre();
+  E.sobre = {}; E.wash = {}; E.doseVer = (E.doseVer || 0) + 1; carregarSobre();
   if (r.dose_atualizada) carregarDvh(); else { E.dvh = null; desenharDvh(); }
 }
 
@@ -489,6 +491,30 @@ function desenharCorte(vista) {
   if (img && img.complete && img.naturalWidth) {
     g.imageSmoothingEnabled = true;
     g.drawImage(img, T.ox, T.oy, (T.H1 - T.H0) * T.s, (T.V1 - T.V0) * T.s);
+  }
+  const sobW = E.sobre[`${vista}:${i}`];
+  if ($("#t-wash") && $("#t-wash").checked && sobW && sobW !== "carregando" && sobW.wash) {
+    const min = $("#wash-min").value, chave = `${vista}:${i}:${min}:${E.doseVer || 0}`;
+    E.wash = E.wash || {};
+    let wi = E.wash[chave];
+    if (!wi) {
+      wi = new Image(); wi.onload = () => desenharCorte(vista);
+      wi.src = `/api/${E.sid}/dose_corte/${vista}/${i}.png?minimo=${min}&v=${E.doseVer || 0}&t=${encodeURIComponent(E.token)}`;
+      E.wash[chave] = wi;
+    }
+    if (wi.complete && wi.naturalWidth) {
+      const [xa, ya] = T.px(sobW.wash.h[0], sobW.wash.v[0]), [xb, yb] = T.px(sobW.wash.h[1], sobW.wash.v[1]);
+      g.imageSmoothingEnabled = true;
+      g.drawImage(wi, Math.min(xa, xb), Math.min(ya, yb), Math.abs(xb - xa), Math.abs(yb - ya));
+    }
+    if (vista === "axial") {          // barra de cores
+      const x0 = 10, y0 = h - 22, larg = Math.min(220, w - 20), lo = +min, hi = Math.max(sobW.wash.dmax_pct, lo + 1);
+      const grad = g.createLinearGradient(x0, 0, x0 + larg, 0);
+      ["#00008f", "#0000ff", "#00ffff", "#7fff7f", "#ffff00", "#ff0000", "#800000"].forEach((c, k, a) => grad.addColorStop(k / (a.length - 1), c));
+      g.fillStyle = grad; g.fillRect(x0, y0, larg, 8);
+      g.fillStyle = "#fff"; g.font = "10px system-ui";
+      g.fillText(`${lo}%`, x0, y0 - 3); g.fillText(`${hi.toFixed(0)}%`, x0 + larg - 26, y0 - 3);
+    }
   }
   const pos = posDoIdx(vista, i);
   $(`#v-${vista} .pos`).textContent = `${EIXO_IDX[vista]} = ${pos.toFixed(1)} mm (${i + 1}/${eixo(EIXO_IDX[vista]).n})`;

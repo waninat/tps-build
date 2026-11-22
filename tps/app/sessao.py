@@ -870,6 +870,31 @@ class Sessao:
         Image.fromarray(a).save(buf, "PNG", optimize=False, compress_level=1)
         return buf.getvalue()
 
+    def imagem_dose(self, vista: str, idx: int, minimo_pct: float = 20.0, maximo_pct: float = 0.0,
+                    opacidade: float = 0.45) -> bytes:
+        """Colorwash: dose do corte em cores (azul → vermelho), RGBA, na grade de dose, transparente abaixo do mínimo.
+        Escala em % da dose por fração prescrita; máximo 0 = dose máxima do plano. Linha 0 = topo da tela."""
+        import matplotlib
+        self._exigir(self.dose_atualizada and self.dose_fx is not None, "Dose não calculada")
+        g = self.grade
+        pos, eh, ev = self._plano_corte(vista, int(idx))
+        rel = self.dose_fx / self.plano.prescricao.dose_fracao_gy * 100.0
+        k = {"axial": (g.z, 0), "coronal": (g.y, 1), "sagital": (g.x, 2)}[vista]
+        i = int(np.argmin(np.abs(k[0] - pos)))
+        if abs(k[0][i] - pos) > abs(k[0][1] - k[0][0]):
+            img = np.zeros((2, 2))
+        else:
+            img = np.take(rel, i, axis=k[1])                   # [v, h]
+        if vista != "axial":
+            img = img[::-1]                                     # z cresce para cima na tela
+        top = float(maximo_pct) if maximo_pct and maximo_pct > minimo_pct else max(float(rel.max()), minimo_pct + 1)
+        t = np.clip((img - minimo_pct) / (top - minimo_pct), 0, 1)
+        rgba = (matplotlib.colormaps["jet"](t) * 255).astype(np.uint8)
+        rgba[..., 3] = np.where(img >= minimo_pct, int(255 * opacidade), 0).astype(np.uint8)
+        buf = io.BytesIO()
+        Image.fromarray(rgba, "RGBA").save(buf, "PNG", compress_level=1)
+        return buf.getvalue()
+
     def _plano_corte(self, vista: str, idx: int):
         """Coordenada (mm) do corte e eixos (horizontal, vertical) no sistema do paciente."""
         cx, cy, cz = self.ct.axes()
@@ -914,6 +939,11 @@ class Sessao:
                 pols = linhas(corte_grade(e.mascara.astype(np.float32)), 0.5)
             if pols:
                 out["contornos"].append({"nome": n, "cor": e.cor, "linhas": pols})
+        if self.dose_atualizada and self.dose_fx is not None:
+            pas = {k: float(abs(v[1] - v[0])) for k, v in ax.items()}
+            out["wash"] = {"h": [float(ax[eh][0]) - pas[eh] / 2, float(ax[eh][-1]) + pas[eh] / 2],
+                           "v": [float(ax[ev][0]) - pas[ev] / 2, float(ax[ev][-1]) + pas[ev] / 2],
+                           "dmax_pct": round(float(self.dose_fx.max() / self.plano.prescricao.dose_fracao_gy * 100), 1)}
         if isodoses and self.dose_atualizada and self.dose_fx is not None:
             rx = self.plano.prescricao.dose_fracao_gy
             img = corte_grade(self.dose_fx / rx * 100.0)

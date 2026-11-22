@@ -55,6 +55,11 @@ def test_fluxo_3d_completo_pela_api(cli):
     assert s["dose_atualizada"] and all(k["ok"] for k in s["resultado"]["conferencia_um"])
     assert s["resultado"]["estatisticas"]["PTV_fantoma"]["D95"] > 47.0
     assert len(_ok(c.get(f"/api/{sid}/dvh"))) >= 2
+    for vista in ("axial", "coronal", "sagital"):
+        w = c.get(f"/api/{sid}/dose_corte/{vista}/10.png?minimo=20")
+        assert w.status_code == 200 and w.content[:8] == b"\x89PNG\r\n\x1a\n"
+    sob = _ok(c.get(f"/api/{sid}/sobreposicao/axial/10"))
+    assert "wash" in sob and sob["wash"]["dmax_pct"] > 100
     cf = c.get(f"/api/{sid}/checkfilm.pdf")
     assert cf.status_code == 200 and cf.content[:4] == b"%PDF"
     est = _ok(c.post(f"/api/{sid}/estrutura", json={"nome": "PTV_mais5", "operacao": "margem", "a": "PTV_fantoma",
