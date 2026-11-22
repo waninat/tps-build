@@ -41,6 +41,32 @@ def autoteste() -> int:
         return 0 if ok else 1
 
 
+def _registro_inicio():
+    """Mostra cada etapa da inicialização e, se travar, grava a pilha a cada 30 s em <dados>/inicio.log."""
+    import faulthandler
+    import time
+    from tps import paths
+    from tps.version import __version__
+    t0 = time.time()
+    try:
+        paths.ensure_home()
+        log = open(paths.home() / "inicio.log", "w", encoding="utf-8")
+    except Exception as e:  # noqa: BLE001
+        print(f"Aviso: não consegui criar o registro em {paths.home()}: {e}", flush=True)
+        log = None
+
+    def etapa(msg):
+        linha = f"[{time.time() - t0:6.1f} s] {msg}"
+        print(linha, flush=True)
+        if log:
+            log.write(linha + "\n")
+            log.flush()
+    etapa(f"TPS {__version__} — iniciando (dados em {paths.home()})")
+    if log:
+        faulthandler.dump_traceback_later(30, repeat=True, file=log)
+    return etapa
+
+
 def main() -> int:
     if "--autoteste" in sys.argv:
         return autoteste()
@@ -55,7 +81,22 @@ def main() -> int:
         print(__version__)
         return 0
     try:
+        etapa = _registro_inicio()
+        etapa("carregando numpy/scipy…")
+        import numpy  # noqa: F401
+        import scipy.ndimage  # noqa: F401
+        etapa("carregando numba (núcleo de cálculo)…")
+        import numba  # noqa: F401
+        etapa("carregando matplotlib…")
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot  # noqa: F401
+        etapa("carregando pydicom/servidor web…")
+        import fastapi  # noqa: F401
+        import pydicom  # noqa: F401
+        etapa("carregando o TPS…")
         from tps.app.servidor import main as servidor
+        etapa("iniciando o servidor…")
         servidor()
     except SystemExit:
         raise
