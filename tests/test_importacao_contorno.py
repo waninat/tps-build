@@ -92,12 +92,12 @@ def test_ferramentas_de_contorno_pela_api(cli):
     _ok(c.post(f"/api/{sid}/contorno/nova", json={"nome": "LESAO"}))
     r = _ok(c.post(f"/api/{sid}/contorno/editar", json={"nome": "LESAO", "idx": k0, "ferramenta": "pincel",
                                                         "pontos": [[0, 0], [10, 0]], "raio_mm": 8}))
-    v1 = r["resultado"]["volume_cc"]
+    v1 = r["contorno"]["volume_cc"]
     assert v1 > 0
     _ok(c.post(f"/api/{sid}/contorno/editar", json={"nome": "LESAO", "idx": k0 + 6, "ferramenta": "poligono",
                                                     "pontos": [[-10, -10], [10, -10], [10, 10], [-10, 10]]}))
     r = _ok(c.post(f"/api/{sid}/contorno/interpolar", json={"nome": "LESAO"}))
-    assert r["resultado"]["novos_cortes"] >= 3
+    assert r["contorno"]["novos_cortes"] >= 3
     v2 = next(e["volume_cc"] for e in r["estruturas"] if e["nome"] == "LESAO")
     assert v2 > v1
     r = _ok(c.post(f"/api/{sid}/contorno/editar", json={"nome": "LESAO", "idx": k0, "ferramenta": "pincel",

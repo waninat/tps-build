@@ -299,7 +299,7 @@ def contorno(sid: str, acao: str, d: dict = Body(...), u: dict = Depends(usuario
             raise ErroUsuario(f"Ação de contorno desconhecida: {acao}")
     if acao != "editar":
         auditar(u, f"contorno_{acao}", s, **{k: v for k, v in r.items() if k != "pontos"})
-    return {"resultado": r, **s.resumo()}
+    return {**s.resumo(), "contorno": r}
 
 
 @app.post("/api/{sid}/estrutura")

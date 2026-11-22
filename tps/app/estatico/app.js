@@ -829,7 +829,7 @@ function iniciarContorno() {
   $("#b-k-limpar").onclick = () => tentar(() => enviarContorno({ ferramenta: "limpar" }));
   $("#b-k-interp").onclick = () => tentar(async () => {
     const r = await api("POST", `/api/${E.sid}/contorno/interpolar`, { nome: $("#k-est").value }, "Interpolando…");
-    atualizar(r); aviso(`${r.resultado.novos_cortes} corte(s) preenchido(s)`);
+    atualizar(r); aviso(`${r.contorno.novos_cortes} corte(s) preenchido(s)`);
   });
   $("#b-k-desf").onclick = () => tentar(async () => atualizar(await api("POST", `/api/${E.sid}/contorno/desfazer`, {})));
   $("#b-k-corpo").onclick = () => tentar(async () => {
