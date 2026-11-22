@@ -107,6 +107,9 @@ jobs:
           Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           Get-Content "$env:RUNNER_TEMP\inst_srv.txt","$env:RUNNER_TEMP\inst_srv_err.txt","$env:ProgramData\TPS\inicio.log" -ErrorAction SilentlyContinue | Select-Object -Last 60
           if (-not $ok) { Write-Error "o TPS instalado não respondeu na porta 8770"; exit 1 }
+          # o cache do numba tem de ir para a pasta do usuário (Program Files não é gravável por usuário comum)
+          if (-not (Test-Path "$env:LOCALAPPDATA\TPS\numba")) { Write-Error "cache do numba fora de LOCALAPPDATA"; exit 1 }
+          if (Get-ChildItem "$env:ProgramFiles\TPS" -Recurse -Filter "*.nbi" -ErrorAction SilentlyContinue) { Write-Error "cache do numba gravado em Program Files"; exit 1 }
 
       - uses: actions/upload-artifact@v4
         with:

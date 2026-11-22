@@ -7,7 +7,26 @@
 """
 from __future__ import annotations
 
+import os
 import sys
+
+
+def _cache_numba():
+    """O numba guarda o código de máquina compilado ao lado do módulo; em C:\Program Files um usuário comum não
+    pode escrever, e no Windows o tempfile fica tentando para sempre (o TPS travava ao iniciar). Usa uma pasta do
+    usuário. Precisa vir antes de qualquer import do numba."""
+    if os.environ.get("NUMBA_CACHE_DIR"):
+        return
+    base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), ".cache")
+    pasta = os.path.join(base, "TPS", "numba")
+    try:
+        os.makedirs(pasta, exist_ok=True)
+        os.environ["NUMBA_CACHE_DIR"] = pasta
+    except OSError:
+        pass
+
+
+_cache_numba()
 
 
 def autoteste() -> int:
@@ -61,7 +80,8 @@ def _registro_inicio():
         if log:
             log.write(linha + "\n")
             log.flush()
-    etapa(f"TPS {__version__} — iniciando (dados em {paths.home()})")
+    etapa(f"TPS {__version__} — iniciando (dados em {paths.home()}; cache do cálculo em "
+          f"{os.environ.get('NUMBA_CACHE_DIR', 'padrão')})")
     if log:
         faulthandler.dump_traceback_later(30, repeat=True, file=log)
     return etapa
