@@ -399,7 +399,7 @@ function tabelas() {
   $("#tab-rest tbody").innerHTML = !rr ? "" : (rr.resultados || []).map(q => {
     const cls = q.ok ? "ok" : (q.tipo === "limite" ? "falha" : "avisotxt");
     return `<tr title="${q.tg263} · ${q.tipo} · ${q.fonte}${q.obs ? " · " + q.obs : ""}"><td>${q.estrutura}</td><td>${q.metrica}</td>` +
-      `<td>${q.op} ${q.limite} ${q.unidade === "Gy" ? "" : q.unidade}</td><td class="${cls}">${f1(q.valor, 1)}</td></tr>`;
+      `<td>${q.op.replace(">=", "≥").replace("<=", "≤")} ${q.limite} ${q.unidade === "Gy" ? "" : q.unidade.startsWith("%") ? "%" : q.unidade}</td><td class="${cls}">${f1(q.valor, 1)}</td></tr>`;
   }).join("");
   const p = r && r.plano;
   const conf = res ? Object.fromEntries(res.conferencia_um.map(k => [k.campo, k])) : {};

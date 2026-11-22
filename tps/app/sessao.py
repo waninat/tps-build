@@ -493,7 +493,9 @@ class Sessao:
             raise ErroUsuario(str(e)) from e
         if not m.any():
             raise ErroUsuario("A estrutura resultante ficou vazia")
-        cor = tuple(cor) if cor else ((255, 0, 255) if operacao != "isodose" else (255, 255, 0))
+        paleta = [(255, 0, 255), (0, 220, 220), (255, 140, 0), (150, 120, 255), (120, 220, 60), (255, 90, 140),
+                  (80, 160, 255), (230, 200, 60)]
+        cor = tuple(cor) if cor else ((255, 255, 0) if operacao == "isodose" else paleta[len(self.derivadas) % len(paleta)])
         self.estruturas[nome] = Estrutura(nome, "DERIVADA", cor, m)
         self.derivadas[nome] = {"operacao": operacao, "a": a, "b": b, "margens": margens, "contrair": contrair,
                                 "interno_mm": interno_mm, "externo_mm": externo_mm, "nivel_gy": nivel_gy}
