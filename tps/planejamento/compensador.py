@@ -160,10 +160,16 @@ def compensar(plano: Plano, grade: calculo.GradeDose, doses_um: dict, alvo: np.n
         mapas[c.nome] = (u, v, ab, np.where(ab, 1.0, 0.0))
     avisos = []
     melhor = (hi0, None, None)
+    # o erro é medido no alvo sem a borda (1 voxel): na borda a dose cai pela penumbra dos OUTROS campos, e
+    # corrigir isso só aumenta a fluência na borda e cria anel quente fora do alvo
+    from scipy.ndimage import binary_erosion
+    nucleo = binary_erosion(alvo, iterations=1)
+    if nucleo.sum() < 0.3 * alvo.sum():
+        nucleo = alvo
     for _ in range(iteracoes):
         for c in alvos:
             u, v, ab, F = mapas[c.nome]
-            R = _dose_no_raio(dose, alvo, grade, c, u, v, posicao)
+            R = _dose_no_raio(dose, nucleo, grade, c, u, v, posicao)
             corr = np.where(np.isfinite(R) & ab, (rx / np.where(np.isfinite(R) & (R > 0), R, rx)) ** gama, 1.0)
             F = np.clip(F * corr, limites[0], limites[1]) * ab
             F = np.where(ab, gaussian_filter1d(F, 1.0, axis=1), 0.0)

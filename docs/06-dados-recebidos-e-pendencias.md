@@ -130,3 +130,31 @@ Resolvidas em 8/11/2026: MLC do Synergy = **Agility**; calibração = **1,000 cG
 7. 10–20 casos 3D anonimizados (CT + RTSTRUCT + RTPLAN + RTDOSE do Monaco).
 8. Curva HU→DE atual de cada tomógrafo.
 9. Tolerance tables e nomes exatos das máquinas no Mosaiq.
+
+## 22/11/2026 — plano 3D do Monaco (pelve, Precise) e fantomas de placa
+
+**Plano clínico (RTPLAN/RTSTRUCT/RTDOSE do Monaco 6.1.4, Precise, 4 campos 3D com field-in-field).** Convenções
+copiadas para a exportação (SRS-EXP-030..036): `TreatmentMachineName = "Precise"`; Latin-1 (`ISO_IR 100`);
+ASYMX/ASYMY/MLCX com `SourceToBeamLimitingDeviceDistance` 426/509/377 mm; field-in-field como **um feixe STATIC com
+pares de pontos de controle** (step-and-shoot); tabela de tolerância "1 Fótons"; `InstitutionalDepartmentName`
+"0~RadioSerra"; Dose Reference TARGET (SITE) + ponto (COORDINATES) com `BeamDose` por feixe; lâminas fechadas
+estacionadas em ±2,5 mm. A exportação agora inclui o RTSTRUCT do TPS (estruturas editadas/novas/derivadas).
+
+Comparação TPS × Monaco CC no plano importado (UM do Monaco, mesma geometria):
+- Fora do contorno externo o Monaco considera ar; o TPS considerava o CT inteiro (mesa do tomógrafo) → o campo PA
+  saía 8,5% baixo. Corrigido: fora do BODY = ar (SRS-ENG-050).
+- Depois da correção: gama 3%/3 mm = 95,6%; PTV −1,5%; campos laterais −1 a −2,6% no isocentro (profundidade ~21 cm,
+  passando pelas cabeças de fêmur) — **curva HU→DE usada é a do Siemens da Oncomed; o CT é GE** (pendente a curva).
+- Dose baixa fora dos campos (corpo −7%, genitália −11%): mesma tendência já vista nos campos grandes em água
+  (dose fora do campo baixa) — alvo do comissionamento v3.
+- Conferência independente por tabelas nos campos com segmentos de FiF: +8,8% (método de tabela grosseiro para
+  segmentos que bloqueiam o ponto; informativo, não bloqueia a aprovação).
+
+**Fantomas de placa (Monaco CC, sobrescrita de densidade eletrônica 0,25 pulmão / 1,6 osso / 1,0 BODY).**
+Fator de correção (heterogêneo/água) TPS ÷ Monaco:
+- Osso: antes da placa ~0%, depois −1% (TPS atenua um pouco mais). Dentro do osso o Monaco cai ~4% em degrau — dose
+  no meio (osso), não na água; o TPS dá dose na água. CONFIRMAR qual grandeza o Monaco reporta.
+- Pulmão: depois da placa ±1%; **dentro do pulmão o TPS dá +6 a +7% (3×3, 5×5 e 10×10)**: o Monaco mostra a queda
+  por desequilíbrio eletrônico na entrada do pulmão e o TPS quase não mostra. Como o próprio CC do Monaco é uma
+  aproximação, **pedido: os mesmos 6 planos em Monte Carlo** (1%, grade 2 mm) para decidir quem está certo antes de
+  mexer no núcleo (SRS-ENG-012).

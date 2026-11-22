@@ -151,11 +151,23 @@ class Sessao:
             raise ErroUsuario("Nenhum RTSTRUCT na pasta: exporte o CT junto com os contornos")
         self.tipo, self.pasta_ct, self.arquivo_rs = "ct", pasta, rs
         self.curva = HUtoED.from_csv(curva)
-        self.grade = calculo.grade_de_dose(self.ct, self.curva, voxel_mm)
+        estruturas_rs = read_rtstruct(rs)
+        # grade de dose só em volta do contorno externo (+3 cm para bolus e penumbra): o CT costuma ter 50 cm de
+        # campo de visão e a mesa; recortar deixa o cálculo 2–3× mais rápido sem mudar a dose no paciente
+        caixa = None
+        ext = next((e for e in estruturas_rs if (e.rt_type or "").upper() == "EXTERNAL" and e.contours), None)
+        if ext is not None:
+            pts = np.concatenate([np.asarray(c, float) for c in ext.contours])
+            cx, cy, cz = self.ct.axes()
+            m = 30.0
+            caixa = ((max(cx[0], pts[:, 0].min() - m), min(cx[-1], pts[:, 0].max() + m)),
+                     (max(cy[0], pts[:, 1].min() - m), min(cy[-1], pts[:, 1].max() + m)),
+                     (cz[0], cz[-1]))
+        self.grade = calculo.grade_de_dose(self.ct, self.curva, voxel_mm, caixa)
         g = self.grade
         self.estruturas = {}
         self.derivadas = {}
-        for k, s in enumerate(read_rtstruct(rs)):
+        for k, s in enumerate(estruturas_rs):
             m = rasterize(s, g.x, g.y, g.z)
             cor = tuple(int(c) for c in s.color) if s.color else PALETA[k % len(PALETA)]
             self.estruturas[s.name] = Estrutura(s.name, s.rt_type or "", cor, m, s.contours)
