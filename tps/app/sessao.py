@@ -891,7 +891,8 @@ class Sessao:
             if opcoes.get("compensador") and alvo is not None:
                 comp = opcoes["compensador"]
                 r = compensar(p, g, self.doses_um, alvo, m.colim, m.modelo, campos=comp.get("campos") or None,
-                              niveis=int(comp.get("niveis", 6)), um_min_segmento=float(comp.get("um_min", 2.0)))
+                              niveis=int(comp.get("niveis", 6)), um_min_segmento=float(comp.get("um_min", 2.0)),
+                              corpo=corpo)
                 info["compensador"] = {"segmentos": r.n_segmentos, "hi_antes": r.hi_antes, "hi_depois": r.hi_depois,
                                        "historico": r.historico, "avisos": r.avisos}
                 self.avisos = list(r.avisos)

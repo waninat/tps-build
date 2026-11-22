@@ -141,11 +141,41 @@ def _fundir_pequenos(segs: list[dict], mu_campo: float, um_min: float) -> list[d
     return segs
 
 
+def _indices_raio(grade, mascara, c: Campo, u, v, posicao):
+    """Para cada voxel da máscara: índice linear (par, coluna) do raio na grade de fluência do campo, e o peso
+    de interpolação linear em u entre a coluna e a seguinte (fluência suave entre colunas)."""
+    fr = beam_frame(c.gantry, c.colimador, c.mesa, c.isocentro_mm, 1000.0, posicao)
+    kz, ky, kx = np.nonzero(mascara)
+    pts = np.column_stack([grade.x[kx], grade.y[ky], grade.z[kz]])
+    r = pts - fr.source
+    w = r @ fr.w
+    pu = 1000.0 * (r @ fr.u) / w
+    pv = 1000.0 * (r @ fr.v) / w
+    lim = np.asarray(v)                               # centros dos pares
+    du = u[1] - u[0]
+    fu = (pu - u[0]) / du
+    j0 = np.floor(fu).astype(int)
+    t = fu - j0
+    dv = lim[1] - lim[0] if len(lim) > 1 else 10.0
+    i = np.floor((pv - (lim[0] - dv / 2)) / dv).astype(int)
+    ok = (i >= 0) & (i < len(lim)) & (j0 >= 0) & (j0 < len(u) - 1)
+    return i, j0, t, ok
+
+
 def compensar(plano: Plano, grade: calculo.GradeDose, doses_um: dict, alvo: np.ndarray, colim: Colimacao, modelo,
-              campos: list[str] | None = None, niveis: int = 6, iteracoes: int = 4, res_u_mm: float = 2.5,
-              gama: float = 0.6, limites=(0.5, 1.5), um_min_segmento: float = 2.0, kernels=None,
-              posicao: str = "HFS", permitir_demonstracao: bool = False) -> ResultadoCompensador:
-    """Aplica o compensador aos campos (padrão: todos os principais). Altera o plano e `doses_um`."""
+              campos: list[str] | None = None, niveis: int = 6, iteracoes: int = 3, res_u_mm: float = 2.5,
+              gama: float = 0.6, limites=(0.5, 1.6), um_min_segmento: float = 2.0, kernels=None,
+              posicao: str = "HFS", permitir_demonstracao: bool = False, corpo: np.ndarray | None = None,
+              peso_quente: float = 1.0, suavidade: float = 0.02) -> ResultadoCompensador:
+    """Compensador por otimização 3D da fluência (SRS-PLN-067).
+
+    Modelo: a fluência F(u, v) de cada campo multiplica a dose daquele campo ao longo do raio (aproximação de
+    compensador; o espalhamento lateral entra na correção iterativa). Minimiza, por L-BFGS-B com gradiente
+    analítico, Σ_alvo (D/Rx − 1)² + peso_quente·Σ_corpo (D/Rx − 1,07)²₊ + suavidade·Σ (ΔF entre colunas)².
+    Depois de sequenciar, a dose real (motor completo) corrige o modelo voxel a voxel e a otimização é refeita
+    (`iteracoes` vezes). Fica a melhor iteração (índice de homogeneidade)."""
+    from scipy.ndimage import binary_erosion
+    from scipy.optimize import minimize
     plano._exigir_rascunho()
     alvos = [c for c in plano.campos if c.campo_pai is None and (campos is None or c.nome in campos)]
     if not alvos:
@@ -154,48 +184,128 @@ def compensar(plano: Plano, grade: calculo.GradeDose, doses_um: dict, alvo: np.n
     dose = calculo.normalizar(plano, doses_um, grade, alvo)
     hi0 = _hi(dose, alvo)
     hist = [hi0]
-    mapas = {}
-    for c in alvos:
-        u, v, ab = _grade_u(c, colim, res_u_mm)
-        mapas[c.nome] = (u, v, ab, np.where(ab, 1.0, 0.0))
-    avisos = []
-    melhor = (hi0, None, None)
-    # o erro é medido no alvo sem a borda (1 voxel): na borda a dose cai pela penumbra dos OUTROS campos, e
-    # corrigir isso só aumenta a fluência na borda e cria anel quente fora do alvo
-    from scipy.ndimage import binary_erosion
     nucleo = binary_erosion(alvo, iterations=1)
     if nucleo.sum() < 0.3 * alvo.sum():
         nucleo = alvo
-    for _ in range(iteracoes):
+    # voxels de controle: núcleo do alvo + corpo (pontos quentes) no alcance dos campos
+    if corpo is None:
+        corpo = grade.eta > 0.3
+    fora = corpo & ~alvo
+    mapas = {}
+    for c in alvos:
+        u, v, ab = _grade_u(c, colim, res_u_mm)
+        mapas[c.nome] = (u, v, ab)
+    abertos = {c.nome: {"mu": float(c.mu), "d": doses_um[c.nome].copy(), "jaw": (c.jaw_x, c.jaw_y),
+                        "a": list(c.mlc_a), "b": list(c.mlc_b)} for c in alvos}
+    fixos = [c for c in plano.campos if c not in alvos]
+    idx_alvo = np.nonzero(nucleo.ravel())[0]
+    corr = np.ones(len(idx_alvo))
+    avisos = []
+    melhor = (hi0, None, None)
+    for it in range(iteracoes):
+        # dose de cada campo aberto (por UM do campo aberto) nos voxels de controle
+        quente = fora & (dose > 0.95 * rx)
+        idx_q = np.nonzero(quente.ravel())[0]
+        idx = np.r_[idx_alvo, idx_q]
+        n_a = len(idx_alvo)
+        cfix = sum(float(f.mu) * doses_um[f.nome].ravel()[idx] for f in fixos) if fixos else np.zeros(len(idx))
+        termos, variaveis, ofs = [], [], 0
+        mask_all = np.zeros(alvo.size, bool)
+        mask_all[idx] = True
+        mask_all = mask_all.reshape(alvo.shape)
         for c in alvos:
-            u, v, ab, F = mapas[c.nome]
-            R = _dose_no_raio(dose, nucleo, grade, c, u, v, posicao)
-            corr = np.where(np.isfinite(R) & ab, (rx / np.where(np.isfinite(R) & (R > 0), R, rx)) ** gama, 1.0)
-            F = np.clip(F * corr, limites[0], limites[1]) * ab
-            F = np.where(ab, gaussian_filter1d(F, 1.0, axis=1), 0.0)
-            media = F[ab & np.isfinite(R)].mean() if (ab & np.isfinite(R)).any() else 1.0
-            F = np.where(ab, F / media, 0.0)
-            mapas[c.nome] = (u, v, ab, F)
-            c.segmentos = sequenciar(c, colim, u, F, ab, niveis)
+            u, v, ab = mapas[c.nome]
+            i, j0, t, ok = _indices_raio(grade, mask_all, c, u, v, posicao)
+            # ordem de np.nonzero(mask_all) == ordem crescente de índice linear; reordena para a ordem de idx
+            ordem = np.argsort(np.argsort(idx))
+            i, j0, t, ok = i[ordem], j0[ordem], t[ordem], ok[ordem]
+            nu = len(u)
+            k0 = np.where(ok, i * nu + j0, 0)
+            d0 = abertos[c.nome]["mu"] * abertos[c.nome]["d"].ravel()[idx] * ok
+            termos.append((ofs, k0, t, d0, nu, ab))
+            variaveis.append(ab.ravel())
+            ofs += ab.size
+        livres = np.concatenate(variaveis)
+        F0 = np.ones(ofs)
+        if it > 0 and melhor[1] is not None:
+            F0 = melhor_F.copy()
+        fator = np.r_[corr, np.ones(len(idx_q))]
+
+        def modelo_dose(F):
+            D = cfix.copy()
+            for ofs_c, k0, t, d0, nu, ab in termos:
+                Fc = F[ofs_c:ofs_c + ab.size]
+                D += d0 * ((1 - t) * Fc[k0] + t * Fc[np.minimum(k0 + 1, ab.size - 1)])
+            return D * fator
+
+        def obj(F):
+            D = modelo_dose(F) / rx
+            ra = D[:n_a] - 1.0
+            rq = np.maximum(D[n_a:] - 1.07, 0.0)
+            f = (ra @ ra) / n_a + peso_quente * (rq @ rq) / max(n_a, 1)
+            ga = 2 * ra / n_a
+            gq = 2 * peso_quente * rq / max(n_a, 1)
+            gD = np.r_[ga, gq] * fator / rx
+            g = np.zeros_like(F)
+            for ofs_c, k0, t, d0, nu, ab in termos:
+                w = gD * d0
+                gc = np.zeros(ab.size)
+                np.add.at(gc, k0, w * (1 - t))
+                np.add.at(gc, np.minimum(k0 + 1, ab.size - 1), w * t)
+                # suavidade em u (dentro de cada par)
+                Fc = F[ofs_c:ofs_c + ab.size].reshape(ab.shape)
+                dif = np.diff(Fc, axis=1) * (ab[:, 1:] & ab[:, :-1])
+                f += suavidade * float((dif ** 2).sum()) / ab.sum()
+                gs = np.zeros_like(Fc)
+                gs[:, 1:] += 2 * suavidade * dif / ab.sum()
+                gs[:, :-1] -= 2 * suavidade * dif / ab.sum()
+                g[ofs_c:ofs_c + ab.size] = gc + gs.ravel()
+            return f, g * livres
+
+        lim_b = [(limites[0], limites[1]) if lv else (1.0, 1.0) for lv in livres]
+        res = minimize(obj, F0, jac=True, method="L-BFGS-B", bounds=lim_b, options={"maxiter": 300})
+        F = res.x
+        for (ofs_c, k0, t, d0, nu, ab), c in zip(termos, alvos):
+            u, v, _ = mapas[c.nome]
+            Fc = np.where(ab, F[ofs_c:ofs_c + ab.size].reshape(ab.shape), 0.0)
+            c.jaw_x, c.jaw_y = abertos[c.nome]["jaw"]
+            c.mlc_a, c.mlc_b = abertos[c.nome]["a"], abertos[c.nome]["b"]
+            c.segmentos = sequenciar(c, colim, u, Fc, ab, niveis)
+            mapas[c.nome] = (u, v, ab)
+        # fluência efetivamente entregue (depois do sequenciamento), na escala de UM nova de cada campo
+        Fq = np.ones_like(F)
         doses_um.update(calculo.dose_por_um(grade, alvos, colim, modelo, kernels, posicao, permitir_demonstracao))
         dose = calculo.normalizar(plano, doses_um, grade, alvo)
         hist.append(_hi(dose, alvo))
+        for (ofs_c, k0, t, d0, nu, ab), c in zip(termos, alvos):
+            u = mapas[c.nome][0]
+            fq = np.zeros(ab.shape)
+            for sg in c.segmentos:
+                for i_ in range(ab.shape[0]):
+                    if np.isnan(sg["mlc_a"][i_]):
+                        continue
+                    fq[i_] += sg["peso"] * ((u > sg["mlc_a"][i_]) & (u < sg["mlc_b"][i_]))
+            Fq[ofs_c:ofs_c + ab.size] = (fq * float(c.mu) / max(abertos[c.nome]["mu"], 1e-9)).ravel()
+        modelo_alvo = modelo_dose(Fq)[:n_a] / np.maximum(fator[:n_a], 1e-9)
         if hist[-1] < melhor[0]:
             melhor = (hist[-1], {c.nome: [dict(x) for x in c.segmentos] for c in alvos},
                       {c.nome: doses_um[c.nome] for c in alvos})
+            melhor_F = F.copy()
+        # correção do modelo: razão dose real / dose do modelo no alvo (espalhamento, penumbra, quantização)
+        real = dose.ravel()[idx_alvo]
+        razao = real / np.maximum(modelo_alvo, 1e-9)
+        corr = np.clip(razao / np.median(razao), 0.8, 1.2)
     if melhor[1] is None:                              # nada a compensar: volta aos campos abertos
         for c in alvos:
             c.segmentos = None
         doses_um.update(calculo.dose_por_um(grade, alvos, colim, modelo, kernels, posicao, permitir_demonstracao))
         calculo.normalizar(plano, doses_um, grade, alvo)
         return ResultadoCompensador({}, {c.nome: 0 for c in alvos}, hi0, hi0, hist,
-                                    ["Compensador sem ganho (a heterogeneidade está ao longo do eixo dos feixes, que a "
-                                     "fluência não corrige): campos mantidos abertos"])
-    for c in alvos:                                    # fica a melhor iteração (a correção pode oscilar)
+                                    ["Compensador sem ganho: campos mantidos abertos"])
+    for c in alvos:                                    # fica a melhor iteração
         c.segmentos = melhor[1][c.nome]
         doses_um[c.nome] = melhor[2][c.nome]
     dose = calculo.normalizar(plano, doses_um, grade, alvo)
-    # UM mínima por segmento
     for c in alvos:
         novos = _fundir_pequenos(c.segmentos, c.mu, um_min_segmento)
         if len(novos) != len(c.segmentos):
@@ -206,5 +316,5 @@ def compensar(plano: Plano, grade: calculo.GradeDose, doses_um: dict, alvo: np.n
     for c in alvos:                                    # o envelope do campo vira a união dos segmentos
         c.mlc_a = [min(s["mlc_a"][i] for s in c.segmentos) for i in range(colim.n_pares)]
         c.mlc_b = [max(s["mlc_b"][i] for s in c.segmentos) for i in range(colim.n_pares)]
-    return ResultadoCompensador({n: (m[0], m[3]) for n, m in mapas.items()},
+    return ResultadoCompensador({n: (m[0], None) for n, m in mapas.items()},
                                 {c.nome: len(c.segmentos) for c in alvos}, hi0, _hi(dose, alvo), hist, avisos)
