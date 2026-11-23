@@ -90,7 +90,15 @@ app.mount("/estatico", StaticFiles(directory=ESTATICOS), name="estatico")
 @app.get("/api/info")
 def info():
     return {"versao": __version__, "maquinas": maquinas_disponiveis(), "home": str(paths.home()),
-            "configurar": not banco().tem_usuarios(), "papeis": PAPEIS}
+            "configurar": not banco().tem_usuarios(), "papeis": PAPEIS, "ia": _estado_ia()}
+
+
+def _estado_ia():
+    try:
+        from tps.ia.segmentacao import estado
+        return estado()
+    except Exception as e:  # noqa: BLE001
+        return {"disponivel": False, "motivo": str(e), "orgaos": []}
 
 
 @app.post("/api/configurar")
@@ -194,6 +202,12 @@ def caso_abrir(d: dict = Body(...), u: dict = Depends(usuario)):
     return s.resumo()
 
 
+@app.get("/api/modelos_plano")
+def modelos_plano(u: dict = Depends(usuario)):
+    from tps.planejamento import modelos_plano as MP
+    return MP.lista()
+
+
 @app.get("/api/{sid}")
 def resumo(sid: str, u: dict = Depends(usuario)):
     return _s(sid).resumo()
@@ -214,6 +228,16 @@ def plano(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
                  (d.get("cobertura_volume_pct", 95), d.get("cobertura_dose_pct", 100)))
     auditar(u, "plano_criado", s, **{k: d.get(k) for k in ("rotulo", "dose_total", "fracoes", "alvo", "metodo")})
     return s.resumo()
+
+
+@app.post("/api/{sid}/modelo_plano")
+def aplicar_modelo(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        r = s.aplicar_modelo(str(d.get("modelo", "")), str(d.get("rotulo", "PLANO1")), d.get("dose_total"),
+                             d.get("fracoes"), d.get("alvo") or None, bool(d.get("calcular", True)))
+    auditar(u, "plano_de_modelo", s, modelo=d.get("modelo"), rotulo=d.get("rotulo"))
+    return r
 
 
 @app.post("/api/{sid}/isocentro")
@@ -369,6 +393,13 @@ def contorno(sid: str, acao: str, d: dict = Body(...), u: dict = Depends(usuario
             r = s.corpo_automatico(d.get("nome", "BODY") or "BODY", float(d.get("limiar", -350)))
         elif acao == "desfazer":
             r = s.desfazer_contorno()
+        elif acao == "operar":
+            r = s.operar_contorno(d.get("nome", ""), d.get("operacao", ""), d.get("outra", ""),
+                                  float(d.get("margem_mm", 0) or 0))
+        elif acao == "orgaos":
+            r = s.orgaos_automaticos(list(d.get("orgaos") or []))
+        elif acao == "ia":
+            r = s.segmentar_ia(list(d.get("orgaos") or []))
         else:
             raise ErroUsuario(f"Ação de contorno desconhecida: {acao}")
     if acao != "editar":
@@ -436,6 +467,26 @@ def checkfilm_pdf(sid: str, u: dict = Depends(usuario)):
     auditar(u, "checkfilm_pdf", s)
     return Response(dados, media_type="application/pdf",
                     headers={"Content-Disposition": f'inline; filename="CheckFilm_{s.plano.rotulo}.pdf"'})
+
+
+@app.post("/api/{sid}/restricao")
+def restricao_nova(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    na_clinica = bool(d.get("na_clinica"))
+    if na_clinica and u["papel"] not in PODE_EXPORTAR:
+        raise ErroUsuario("Só o físico pode alterar o protocolo da clínica")
+    r = s.adicionar_restricao(d, na_clinica)
+    auditar(u, "restricao_clinica" if na_clinica else "restricao_plano", s,
+            **{k: d.get(k) for k in ("estrutura", "metrica", "op", "valor", "tipo")})
+    return r
+
+
+@app.delete("/api/{sid}/restricao/{indice}")
+def restricao_remover(sid: str, indice: int, u: dict = Depends(usuario)):
+    s = _s(sid)
+    r = s.remover_restricao(indice)
+    auditar(u, "restricao_removida", s, indice=indice)
+    return r
 
 
 @app.get("/api/{sid}/restricoes")

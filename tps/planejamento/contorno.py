@@ -129,3 +129,54 @@ def corpo_automatico(hu2d: np.ndarray, limiar_hu: float = -350.0) -> np.ndarray:
     tam = ndimage.sum(m, lab, range(1, n + 1))
     m = lab == (int(np.argmax(tam)) + 1)
     return ndimage.binary_fill_holes(m)
+
+
+def corpo_3d(hu: np.ndarray, limiar_hu: float = -350.0) -> np.ndarray:
+    """BODY em todos os cortes [nz, ny, nx]."""
+    return np.stack([corpo_automatico(hu[k], limiar_hu) for k in range(hu.shape[0])])
+
+
+def pulmoes_automaticos(hu: np.ndarray, corpo: np.ndarray, x: np.ndarray, y: np.ndarray, dz_mm: float,
+                        limiar_hu: float = -400.0, vol_min_cc: float = 30.0):
+    """Pulmões por limiar dentro do corpo: (esquerdo, direito) [nz, ny, nx] para decúbito HFS (esquerda = +x).
+
+    Tira a traqueia/brônquios principais (ar tubular perto da linha média) e o ar intestinal (componentes pequenos
+    ou abaixo do diafragma, separados dos pulmões)."""
+    dx, dy = float(abs(x[1] - x[0])), float(abs(y[1] - y[0]))
+    voxel_cc = dx * dy * dz_mm / 1000.0
+    dentro = ndimage.binary_erosion(corpo, structure=np.ones((1, 3, 3)), iterations=2)
+    ar = (hu < limiar_hu) & dentro
+    ar = ndimage.binary_opening(ar, structure=np.ones((1, 3, 3)))
+    lab, n = ndimage.label(ar)
+    if n == 0:
+        return np.zeros_like(ar), np.zeros_like(ar)
+    tam = ndimage.sum(ar, lab, range(1, n + 1)) * voxel_cc
+    grandes = [i + 1 for i in np.argsort(tam)[::-1][:3] if tam[i] >= vol_min_cc]
+    m = np.isin(lab, grandes)
+    # traqueia: em cada corte, componentes pequenos (< 7 cm²) perto da linha média do corpo
+    xc = np.array([x[np.nonzero(corpo[k].any(axis=0))[0]].mean() if corpo[k].any() else 0.0
+                   for k in range(corpo.shape[0])])
+    for k in range(m.shape[0]):
+        if not m[k].any():
+            continue
+        lk, nk = ndimage.label(m[k])
+        for j in range(1, nk + 1):
+            cc = lk == j
+            area = cc.sum() * dx * dy / 100.0
+            cxj = x[np.nonzero(cc.any(axis=0))[0]].mean()
+            if area < 7.0 and abs(cxj - xc[k]) < 25.0:
+                m[k][cc] = False
+    m = ndimage.binary_closing(m, structure=np.ones((1, 5, 5)))
+    m = np.stack([ndimage.binary_fill_holes(m[k]) for k in range(m.shape[0])]) & dentro
+    X = np.broadcast_to(x[None, None, :], m.shape)
+    esq = m & (X > xc[:, None, None])
+    dire = m & (X <= xc[:, None, None])
+    return esq, dire
+
+
+def ossos_automaticos(hu: np.ndarray, corpo: np.ndarray, limiar_hu: float = 200.0) -> np.ndarray:
+    """Osso por limiar (cortical + trabecular denso), sem ruído pequeno e com a medular preenchida por corte."""
+    m = (hu > limiar_hu) & corpo
+    m = ndimage.binary_opening(m, structure=np.ones((1, 2, 2)))
+    m = ndimage.binary_closing(m, structure=np.ones((1, 3, 3)))
+    return np.stack([ndimage.binary_fill_holes(m[k]) for k in range(m.shape[0])])

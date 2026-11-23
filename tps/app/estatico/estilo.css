@@ -161,3 +161,15 @@ details > summary:hover { color: var(--acento); }
 #topo .usuario { max-width: 140px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
 #dvh-fixo { border-top: 1px solid var(--borda); margin-top: 10px; }
 #dvh-fixo h3 { margin-top: 8px; }
+#dmax-topo { background: #2a0d24; border-color: #7a1f66; color: #ffb6ef; padding: 3px 10px; font-size: 12px; }
+#dmax-topo b { color: #fff; }
+#dmax-topo.morno { background: #3a2a10; border-color: #8a6a1e; color: var(--aviso); }
+#dmax-topo.quente { background: #3b1a20; border-color: var(--perigo); color: #ffd6da; }
+tr.propria td:first-child { color: var(--acento); }
+#tab-rest td button { padding: 0 5px; font-size: 11px; }
+#tab-oars input, #tab-oars select { padding: 1px 3px; font-size: 11px; }
+#tab-oars input[type=checkbox] { width: auto; }
+#tab-oars td:nth-child(4) input, #tab-oars td:nth-child(5) input { width: 44px; }
+#tab-oars td:nth-child(6) input { width: 40px; }
+#ia-orgaos { margin: 4px 0; }
+#tab-oars select { width: auto; min-width: 64px; }

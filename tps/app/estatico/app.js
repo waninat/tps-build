@@ -123,6 +123,12 @@ async function iniciar() {
   }
   mostrarUsuario();
   await listarPlanos();
+  try {
+    E.modelos = await api("GET", "/api/modelos_plano");
+    $("#mod-sel").innerHTML = E.modelos.map(m => `<option value="${m.id}">${m.sitio} · ${m.nome}</option>`).join("");
+    $("#mod-sel").onchange();
+  } catch (e) { /* sem modelos */ }
+  mostrarIA();
   window.addEventListener("resize", () => desenharTudo());
 }
 
@@ -160,6 +166,61 @@ function ligar() {
     aviso("Plano renormalizado (dose relativa igual, UM novas)", true);
   });
   $("#b-iso-cfg").onclick = () => tentar(configurarIsodoses);
+  $("#mod-sel").onchange = () => {
+    const m = (E.modelos || []).find(x => x.id === $("#mod-sel").value); if (!m) return;
+    $("#mod-desc").textContent = `${m.descricao} Sugestão: ${m.dose_total} Gy / ${m.fracoes} fx.`;
+    $("#p-dose").value = m.dose_total; $("#p-fx").value = m.fracoes;
+  };
+  $("#b-modelo").onclick = () => tentar(async () => {
+    if (E.resumo.plano && E.resumo.plano.rotulo === $("#p-rotulo").value.trim()) {
+      const v = await modal("Novo plano a partir do modelo", `<label>Rótulo do novo plano<input name="rotulo" maxlength="16"></label>`, { ok: "Criar" });
+      if (!v || !v.rotulo.trim()) return;
+      $("#p-rotulo").value = v.rotulo.trim();
+    }
+    E.campoSel = null;
+    const r = await api("POST", `/api/${E.sid}/modelo_plano`, { modelo: $("#mod-sel").value, rotulo: $("#p-rotulo").value,
+      dose_total: +$("#p-dose").value, fracoes: +$("#p-fx").value, calcular: true }, "Criando o plano do modelo e calculando…");
+    atualizar(r); preencherPrescricao(r);
+    const mi = r.modelo_aplicado || {}, op = mi.opcoes || {};
+    if (op.field_in_field) {
+      $("#o-fif-modo").value = op.field_in_field.modo === "filtro" ? "filtro" : "otimizado"; $("#o-fif-modo").onchange();
+      $("#o-fil-niveis").value = (op.field_in_field.niveis || []).join(" "); $("#o-fil-peso").value = op.field_in_field.peso_pct;
+      Array.from($("#o-fil-campos").options).forEach(o => o.selected = (op.field_in_field.campos || []).includes(o.value));
+      $("#o-fil-fino").checked = !!op.field_in_field.ajuste_fino;
+    }
+    E.oarCfg = {};
+    for (const o of ((op.proteger_oars || {}).oars || [])) E.oarCfg[o.estrutura] = { on: true, metrica: o.metrica, valor: o.valor ?? "", vol: o.volume_pct ?? "", prio: o.prioridade };
+    listarOars();
+    const t = mi.tangentes;
+    aviso(`Plano do modelo criado (alvo ${mi.alvo})` + (t ? ` · tangentes ${t.medial}° / ${t.lateral}° (pulmão no campo ${t.fracao_pulmao}%)` : ""), true);
+    if (r.isocentro) irPara(r.isocentro);
+  });
+  $("#b-k-op").onclick = () => tentar(async () => {
+    const nome = $("#k-est").value, outra = $("#k-outra").value;
+    if (!nome || !outra) throw new Error("Escolha as duas estruturas");
+    const r = await api("POST", `/api/${E.sid}/contorno/operar`, { nome, operacao: $("#k-op").value, outra, margem_mm: +$("#k-mg").value || 0 }, "Calculando a estrutura…");
+    atualizar(r); aviso(`${nome}: ${r.contorno.volume_cc} cc (desfazer volta ao anterior)`, true);
+  });
+  const auto = (orgaos, msg) => tentar(async () => {
+    const r = await api("POST", `/api/${E.sid}/contorno/orgaos`, { orgaos }, msg);
+    atualizar(r); aviso("Criado: " + r.contorno.criadas.map(n => `${n} (${r.contorno.volumes_cc[n]} cc)`).join(", ") + " — revise", true);
+  });
+  $("#b-auto-body").onclick = () => tentar(async () => { atualizar(await api("POST", `/api/${E.sid}/contorno/corpo`, { nome: "BODY" }, "Contornando o corpo…")); aviso("BODY criado — revise", true); });
+  $("#b-auto-pulm").onclick = () => auto(["pulmoes"], "Contornando os pulmões…");
+  $("#b-auto-ossos").onclick = () => auto(["ossos"], "Contornando os ossos…");
+  $("#b-ia").onclick = () => tentar(async () => {
+    const orgaos = Array.from($("#ia-orgaos").selectedOptions).map(o => o.value);
+    if (!orgaos.length) throw new Error("Escolha os órgãos (Ctrl+clique para vários)");
+    const r = await api("POST", `/api/${E.sid}/contorno/ia`, { orgaos }, "Segmentando com IA (1–5 min na CPU)…");
+    atualizar(r); aviso("Criado: " + r.contorno.criadas.join(", ") + " — revise", true);
+  });
+  $("#b-rest").onclick = () => tentar(async () => {
+    const corpo = { estrutura: $("#r-est").value, metrica: $("#r-met").value.trim(), op: $("#r-op").value,
+      valor: $("#r-val").value, tipo: $("#r-tipo").value, na_clinica: $("#r-clin").checked };
+    atualizar(await api("POST", `/api/${E.sid}/restricao`, corpo));
+    aviso(corpo.na_clinica ? "Restrição gravada no protocolo da clínica" : "Restrição acrescentada ao plano", true);
+    $("#r-val").value = "";
+  });
   const setupCampo = async (g, nome) => api("POST", `/api/${E.sid}/setup`, { nome: nome || "", gantry: g, x_cm: +$("#s-x").value,
     y_cm: +$("#s-y").value, mesa: +$("#s-mesa").value });
   $("#b-setup").onclick = () => tentar(async () => { atualizar(await setupCampo(+$("#s-gantry").value, $("#s-nome").value.trim())); $("#s-nome").value = ""; });
@@ -385,8 +446,13 @@ function atualizar(r) {
   { const atual = $("#k-est").value, nomes = r.estruturas.filter(e => e.tipo !== "BOLUS").map(e => e.nome);
     $("#k-est").innerHTML = nomes.map(n => `<option>${n}</option>`).join("");
     if (nomes.includes(atual)) $("#k-est").value = atual; }
+  { const atual = $("#r-est").value; $("#r-est").innerHTML = alvos.map(n => `<option>${n}</option>`).join(""); if (alvos.includes(atual)) $("#r-est").value = atual; }
+  $("#b-rest").disabled = !p;
   for (const sel of ["#ne-a", "#ne-b"]) { const atual = $(sel).value; $(sel).innerHTML = alvos.map(n => `<option>${n}</option>`).join(""); if (alvos.includes(atual)) $(sel).value = atual; }
   $("#b-nova-est").disabled = !r.estruturas.length;
+  { const atual = $("#k-outra").value; $("#k-outra").innerHTML = alvos.map(n => `<option>${n}</option>`).join(""); if (alvos.includes(atual)) $("#k-outra").value = atual; }
+  $("#b-modelo").disabled = !E.sid || r.tipo !== "ct";
+  listarOars();
   const dens = (p && p.densidades) || {};
   $("#lista-estruturas").innerHTML = r.estruturas.map(e => `<li><input type="checkbox" data-est="${e.nome}" ${E.ocultas.has(e.nome) ? "" : "checked"}>
     <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span>${(e.tipo === "DERIVADA" || e.editada) ? `<button class="pequeno" data-rem-est="${e.nome}" title="remover estrutura criada/editada no TPS">×</button>` : ""}
@@ -458,6 +524,15 @@ function atualizar(r) {
   listarCampos(); tabelas();
   $("#avisos").innerHTML = (r.avisos || []).map(a => `<li>${a}</li>`).join("");
   $("#n-avisos").textContent = (r.avisos || []).length || "";
+  { const res = r.resultado, b = $("#dmax-topo");
+    const ok = r.dose_atualizada && res && res.dmax_gy != null && p;
+    b.classList.toggle("oculto", !ok);
+    if (ok) {
+      const pct = res.dmax_gy / p.prescricao.dose_total_gy * 100;
+      b.innerHTML = `Dmax <b>${f1(res.dmax_gy, 2)} Gy</b> · ${f1(pct, 1)}%`;
+      b.className = pct > 107 ? "quente" : (pct > 105 ? "morno" : "");
+      b.onclick = () => res.dmax_xyz && irPara(res.dmax_xyz);
+    } }
   $("#log").innerHTML = (r.log || []).slice().reverse().map(a => `<li>${a}</li>`).join("");
   // BEV
   const nomes = p ? [...p.campos.map(c => c.nome), ...(p.campos_setup || []).map(c => c.nome)] : [];
@@ -540,10 +615,18 @@ async function calcular() {
   if (modo === "otimizado") fif = true;
   if (modo === "filtro") fif = { modo: "filtro", niveis: lerNiveis($("#o-fil-niveis").value), peso_pct: +$("#o-fil-peso").value,
     campos: Array.from($("#o-fil-campos").selectedOptions).map(o => o.value) };
+  if (fif && fif.modo === "filtro") fif.ajuste_fino = $("#o-fil-fino").checked;
   const corpo = { otimizar_pesos: $("#o-pesos").checked, field_in_field: fif, compensador: comp, ...normalizacaoDoForm() };
+  const oars = Object.entries(E.oarCfg || {}).filter(([n, o]) => o.on && E.resumo.estruturas.some(e => e.nome === n))
+    .map(([n, o]) => ({ estrutura: n, metrica: o.metrica, valor: o.valor === "" ? null : +o.valor, volume_pct: o.vol === "" ? null : +o.vol, prioridade: +o.prio || 5 }));
+  if (oars.length) corpo.proteger_oars = { oars, subcampos: $("#oar-sub").checked, margem_mm: +$("#oar-mg").value };
   const r = await api("POST", `/api/${E.sid}/calcular`, corpo, "Calculando a dose (collapsed cone)…");
   atualizar(r);
   const i = r.resultado.info || {};
+  if (i.protecao_oars) {
+    const t = Object.entries(i.protecao_oars.oars).map(([n, q]) => `${n} Dméd ${f1(q.antes.Dmean, 1)}→${f1(q.depois.Dmean, 1)} Gy`).join(" · ");
+    aviso(`Proteção de OARs: ${t} · HI ${i.protecao_oars.hi_antes.toFixed(3)} → ${i.protecao_oars.hi_depois.toFixed(3)}`, true);
+  }
   if (i.compensador) aviso(`Compensador: HI ${i.compensador.hi_antes.toFixed(3)} → ${i.compensador.hi_depois.toFixed(3)}`, true);
   if (i.field_in_field) aviso(`Field-in-field${i.field_in_field.modo === "filtro" ? " (filtro)" : ""}: HI ${i.field_in_field.hi_antes.toFixed(3)} → ${i.field_in_field.hi_depois.toFixed(3)}` +
     (i.field_in_field.dmax_depois ? ` · Dmax ${f1(i.field_in_field.dmax_antes, 1)}% → ${f1(i.field_in_field.dmax_depois, 1)}%` : ""), true);
@@ -558,6 +641,33 @@ async function exportar() {
   $("#exportados").innerHTML = r.arquivos.filter(a => !/imagens_/.test(a)).map(a => `<div><a href="/api/${E.sid}/arquivo?t=${encodeURIComponent(E.token)}&caminho=${encodeURIComponent(a)}">${a.split(/[\\/]/).pop()}</a></div>`).join("") +
     (r.envio ? `<div class="ok">Enviado: ${r.envio.enviados.length} arquivo(s)</div>` : "") + `<div class="pequeno-txt">${r.pasta}</div>`;
   aviso("RTPLAN exportado e conferido", true);
+}
+
+function listarOars() {
+  const r = E.resumo; if (!r) return;
+  E.oarCfg = E.oarCfg || {};
+  const p = r.plano, alvo = p && p.prescricao.estrutura_alvo;
+  const nomes = r.estruturas.filter(e => e.nome !== alvo && !/^(EXTERNAL|BOLUS)$/i.test(e.tipo) && !/^(body|external|corpo|externo)$/i.test(e.nome) && !/^(PTV|CTV|GTV|ITV)/i.test(e.nome)).map(e => e.nome);
+  $("#tab-oars tbody").innerHTML = nomes.map(n => {
+    const o = E.oarCfg[n] || { on: false, metrica: "Dmean", valor: "", vol: "", prio: 5 };
+    return `<tr data-oar="${n}"><td><input type="checkbox" data-k="on" ${o.on ? "checked" : ""}></td><td>${n}</td>
+      <td><select data-k="metrica"><option value="Dmean" ${o.metrica === "Dmean" ? "selected" : ""}>Dméd ≤</option><option value="Dmax" ${o.metrica === "Dmax" ? "selected" : ""}>Dmáx ≤</option>
+        <option value="V" ${o.metrica === "V" ? "selected" : ""}>V(Gy) ≤ vol</option></select></td>
+      <td><input data-k="valor" value="${o.valor}" placeholder="mín."></td><td><input data-k="vol" value="${o.vol}" ${o.metrica === "V" ? "" : "disabled"}></td>
+      <td><input data-k="prio" type="number" min="1" max="10" value="${o.prio}"></td></tr>`;
+  }).join("");
+  $$("#tab-oars tbody tr").forEach(tr => tr.querySelectorAll("[data-k]").forEach(i => i.onchange = () => {
+    const n = tr.dataset.oar, o = E.oarCfg[n] || { on: false, metrica: "Dmean", valor: "", vol: "", prio: 5 };
+    o[i.dataset.k] = i.type === "checkbox" ? i.checked : i.value;
+    if (i.dataset.k !== "on") o.on = true;
+    E.oarCfg[n] = o; listarOars();
+  }));
+}
+function mostrarIA() {
+  const ia = (E.info && E.info.ia) || {};
+  $("#ia-estado").textContent = ia.disponivel ? "instalado" : (ia.motivo || "não instalado neste computador");
+  $("#ia-orgaos").innerHTML = (ia.orgaos || []).map(o => `<option value="${o.id}">${o.nome}</option>`).join("");
+  $("#ia-orgaos").disabled = !ia.disponivel; $("#b-ia").disabled = !ia.disponivel;
 }
 
 // ------------------------------------------------------------------ tabelas
@@ -578,9 +688,11 @@ function tabelas() {
   $("#rest-avisos").textContent = rr ? [...(rr.avisos || []), ...(rr.erro ? [rr.erro] : [])].join(" ") : "";
   $("#tab-rest tbody").innerHTML = !rr ? "" : (rr.resultados || []).map(q => {
     const cls = q.ok ? "ok" : (q.tipo === "limite" ? "falha" : "avisotxt");
-    return `<tr title="${q.tg263} · ${q.tipo} · ${q.fonte}${q.obs ? " · " + q.obs : ""}"><td>${q.estrutura}</td><td>${q.metrica}</td>` +
-      `<td>${q.op.replace(">=", "≥").replace("<=", "≤")} ${q.limite} ${q.unidade === "Gy" ? "" : q.unidade.startsWith("%") ? "%" : q.unidade}</td><td class="${cls}">${f1(q.valor, 1)}</td></tr>`;
+    return `<tr title="${q.tg263} · ${q.tipo} · ${q.fonte}${q.obs ? " · " + q.obs : ""}" class="${q.extra != null ? "propria" : ""}"><td>${q.estrutura}</td><td>${q.metrica}</td>` +
+      `<td>${q.op.replace(">=", "≥").replace("<=", "≤")} ${q.limite} ${q.unidade === "Gy" ? "" : q.unidade.startsWith("%") ? "%" : q.unidade}</td><td class="${cls}">${f1(q.valor, 1)}</td>` +
+      `<td>${q.extra != null ? `<button class="pequeno" data-rem-rest="${q.extra}" title="remover restrição própria">×</button>` : ""}</td></tr>`;
   }).join("");
+  $$("[data-rem-rest]").forEach(b => b.onclick = () => tentar(async () => atualizar(await api("DELETE", `/api/${E.sid}/restricao/${b.dataset.remRest}`))));
   const p = r && r.plano;
   const conf = res ? Object.fromEntries(res.conferencia_um.map(k => [k.campo, k])) : {};
   $("#tab-um tbody").innerHTML = !p ? "" : p.campos.map(c => {

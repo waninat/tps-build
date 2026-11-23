@@ -1,0 +1,17 @@
+id: prostata
+nome: Próstata — box 4 campos + filtro
+sitio: Pelve
+descricao: Box conformado (7 mm), filtro nos laterais, proteção de reto e bexiga na otimização.
+dose_total: 70.0
+fracoes: 35
+alvo: ["^PTV.*70", "^PTV", "CTV"]
+campos:
+  - {nome: AP, gantry: 0}
+  - {nome: LE, gantry: 90}
+  - {nome: PA, gantry: 180}
+  - {nome: LD, gantry: 270}
+margem: {x1: 7, x2: 7, y1: 7, y2: 7}
+ponto_encontro: fora
+normalizacao: {metodo: cobertura, volume_pct: 95, dose_pct: 100}
+field_in_field: {modo: filtro, niveis: [97, 94, 91], peso_pct: 3, gantry: [90, 270]}
+oars: ["tg:Rectum", "tg:Bladder", "tg:Femur_Head_L", "tg:Femur_Head_R"]

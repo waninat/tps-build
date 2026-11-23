@@ -11,6 +11,7 @@
   <div class="marca">TPS <span id="versao"></span></div>
   <div id="caso-nome" class="caso">Nenhum caso aberto</div>
   <div id="estado" class="selo">—</div>
+  <button id="dmax-topo" class="oculto" title="dose máxima do plano (no corpo) — clique para ir até o ponto"></button>
   <div id="planos-sessao" class="oculto" title="planos desta TC (cada um com seus campos, dose e aprovação)">
     <select id="plano-sel"></select>
     <button id="b-plano-copiar" class="pequeno" title="cria uma cópia do plano atual (rascunho) para testar alternativas">Copiar</button>
@@ -90,6 +91,12 @@
       <label>z<input id="p-pz" type="number" value="0"></label>
     </div>
     <button id="b-plano" class="primario" disabled>Criar plano</button>
+    <div class="caixa-import" id="caixa-modelo">
+      <div class="pequeno-txt"><b>Plano a partir de modelo</b> — campos, filtro e normalização do sítio, prontos para revisar
+        (usa o rótulo, a dose e as frações acima; vazio = as do modelo).</div>
+      <div class="linha-inline"><select id="mod-sel"></select><button id="b-modelo" class="pequeno" disabled>Criar</button></div>
+      <div id="mod-desc" class="pequeno-txt"></div>
+    </div>
     <div class="pequeno-txt">Para outro plano na mesma TC, troque o rótulo e clique em <b>Novo plano</b>; o plano atual continua na sessão (seletor no topo).</div>
     <div id="planos-dicom" class="oculto caixa-import">
       <div class="pequeno-txt"><b>Planos DICOM nesta pasta</b> — importe para editar/recalcular no TPS (a dose
@@ -199,7 +206,17 @@
         <label>Peso por nível (%)<input id="o-fil-peso" type="number" value="3" step="0.5" min="0.5" max="10"></label>
       </div>
       <label>Campos com subcampos (vazio = todos)<select id="o-fil-campos" multiple size="3"></select></label>
+      <label class="check" title="depois dos subcampos, re-otimiza os pesos de campos e subcampos: alvo mais homogêneo e queda de dose mais rápida fora dele"><input type="checkbox" id="o-fil-fino"> ajuste fino dos pesos (homogeneidade e gradiente)</label>
     </div>
+    <details class="sub" id="sec-oars"><summary>Proteger órgãos de risco</summary>
+      <div class="pequeno-txt">Cria subcampos que bloqueiam cada órgão (fora do alvo) e otimiza os pesos de todos os
+        campos: alvo coberto e homogêneo, órgãos abaixo do objetivo. Vazio = o menor possível. Prioridade 1–10.</div>
+      <table id="tab-oars"><thead><tr><th></th><th>Órgão</th><th>Objetivo</th><th>Gy</th><th>Vol %</th><th>Prior.</th></tr></thead><tbody></tbody></table>
+      <div class="linha2">
+        <label class="check"><input type="checkbox" id="oar-sub" checked> subcampos que bloqueiam</label>
+        <label>Margem do bloqueio (mm)<input id="oar-mg" type="number" value="5" min="0" max="20"></label>
+      </div>
+    </details>
     <label class="check"><input id="o-comp" type="checkbox"> compensador de fluência</label>
     <div class="linha2">
       <label>Níveis do compensador<input id="o-niveis" type="number" value="6" min="2" max="12"></label>
@@ -281,6 +298,19 @@
   </div>
   <div class="painel-d" id="pd-est">
     <ul id="lista-estruturas"></ul>
+    <details class="sub" id="sec-auto"><summary>Contorno automático</summary>
+      <div class="botoes">
+        <button id="b-auto-body" class="pequeno" title="contorno externo por limiar (−350 HU), buracos preenchidos">BODY</button>
+        <button id="b-auto-pulm" class="pequeno" title="pulmão esquerdo e direito por limiar (−400 HU), sem traqueia">Pulmões</button>
+        <button id="b-auto-ossos" class="pequeno" title="osso por limiar (> 200 HU)">Ossos</button>
+      </div>
+      <div id="ia-caixa" class="caixa-import">
+        <div class="pequeno-txt"><b>Órgãos por IA</b> (TotalSegmentator, roda neste computador) — <span id="ia-estado">verificando…</span></div>
+        <select id="ia-orgaos" multiple size="7"></select>
+        <button id="b-ia" class="pequeno" disabled>Segmentar</button>
+      </div>
+      <div class="pequeno-txt">Todo contorno automático precisa ser revisado e corrigido antes do plano.</div>
+    </details>
   <details class="sub" id="sec-contorno"><summary>Contorno (desenhar/editar)</summary>
     <div class="linha2">
       <label>Estrutura<select id="k-est"></select></label>
@@ -301,6 +331,15 @@
       <button id="b-k-interp" class="pequeno" title="preenche os cortes vazios entre cortes contornados">interpolar</button>
       <button id="b-k-desf" class="pequeno">desfazer</button>
       <button id="b-k-corpo" class="pequeno" title="contorno externo automático (limiar −350 HU) em todos os cortes">BODY automático</button>
+    </div>
+    <div class="caixa-import">
+      <div class="pequeno-txt"><b>Operação na estrutura</b> (no lugar, desfazível) — ex.: RETO − (PTV + 3 mm)</div>
+      <div class="linha3">
+        <label>Operação<select id="k-op"><option value="subtrair">subtrair</option><option value="unir">unir</option><option value="intersecao">interseção</option></select></label>
+        <label>Outra<select id="k-outra"></select></label>
+        <label>Margem (mm)<input id="k-mg" type="number" value="0" min="0" max="50" step="0.5"></label>
+      </div>
+      <button id="b-k-op" class="pequeno">Aplicar à estrutura</button>
     </div>
     <div class="pequeno-txt">Polígono: clique os pontos e dê duplo clique para fechar (Esc cancela). Pincel: arraste. Roda do mouse: muda o corte.</div>
   </details>
@@ -337,7 +376,25 @@
   <table id="tab-estat"><thead><tr><th>Estrutura</th><th>Dméd</th><th>D95</th><th>D2</th><th>Dmax</th></tr></thead><tbody></tbody></table>
   <h3>Restrições <span id="rest-prot" class="pequeno-txt"></span></h3>
   <div id="rest-avisos" class="pequeno-txt avisotxt"></div>
-  <table id="tab-rest"><thead><tr><th>Estrutura</th><th>Métrica</th><th>Limite</th><th>Valor</th></tr></thead><tbody></tbody></table>
+  <table id="tab-rest"><thead><tr><th>Estrutura</th><th>Métrica</th><th>Limite</th><th>Valor</th><th></th></tr></thead><tbody></tbody></table>
+  <details class="sub" id="sec-rest-nova"><summary>+ Restrição própria</summary>
+    <div class="linha2">
+      <label>Estrutura<select id="r-est"></select></label>
+      <label>Métrica<input id="r-met" list="r-mets" placeholder="Dmean, D0.03cc, V20Gy…"></label>
+    </div>
+    <datalist id="r-mets"><option>Dmean</option><option>Dmax</option><option>D0.03cc</option><option>D2cc</option>
+      <option>D95%</option><option>D50%</option><option>V5Gy</option><option>V20Gy</option><option>V30Gy</option>
+      <option>V40Gy</option><option>V45Gy</option><option>V50Gy</option><option>V45Gy_cc</option><option>V95%</option></datalist>
+    <div class="linha3">
+      <label>Condição<select id="r-op"><option value="<=">≤</option><option value=">=">≥</option></select></label>
+      <label>Valor<input id="r-val" type="number" step="0.1"></label>
+      <label>Tipo<select id="r-tipo"><option value="limite">limite</option><option value="objetivo">objetivo</option></select></label>
+    </div>
+    <div class="pequeno-txt">Dmean/Dmax/D…cc/D…% em Gy · V…Gy e V…% em % do volume · V…Gy_cc em cm³. Restrições com
+      limite também entram na otimização que protege OARs.</div>
+    <label class="check"><input type="checkbox" id="r-clin"> gravar no protocolo da clínica (vale para todos os planos)</label>
+    <button id="b-rest" class="pequeno">Adicionar</button>
+  </details>
   <div id="comparacao" class="oculto">
     <h3>Comparação com <span id="cmp-fonte"></span></h3>
     <div id="cmp-resumo" class="pequeno-txt"></div>

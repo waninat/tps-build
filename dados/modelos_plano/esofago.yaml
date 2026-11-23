@@ -1,0 +1,18 @@
+id: esofago
+nome: Esôfago — AP/PA + oblíquos posteriores
+sitio: Tórax
+descricao: AP/PA e dois oblíquos posteriores (130°/230°) para tirar a medula; proteção de medula e pulmões.
+dose_total: 50.4
+fracoes: 28
+alvo: ["^PTV", "CTV"]
+campos:
+  - {nome: AP, gantry: 0}
+  - {nome: PA, gantry: 180}
+  - {nome: OPE, gantry: 130}
+  - {nome: OPD, gantry: 230}
+margem: {x1: 7, x2: 7, y1: 10, y2: 10}
+ponto_encontro: fora
+normalizacao: {metodo: media_alvo}
+field_in_field: {modo: filtro, niveis: [97, 94], peso_pct: 3, gantry: todos}
+oars: ["tg:SpinalCord", "tg:Lungs", "tg:Lung_L", "tg:Lung_R", "tg:Heart"]
+proteger: [{oar: "tg:SpinalCord", metrica: Dmax, valor: 45, prioridade: 8}, {oar: "tg:Lungs", metrica: V, valor: 20, volume_pct: 30, prioridade: 4}]

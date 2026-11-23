@@ -1,0 +1,17 @@
+id: mama_d
+nome: Mama direita — tangentes + filtro
+sitio: Mama
+descricao: Tangentes com ângulo automático (menos pulmão, borda posterior sem divergência), flash anterior de 2 cm, subcampos filtro nos dois campos.
+dose_total: 40.05
+fracoes: 15
+lado: D
+alvo: ["^PTV.*MAMA", "^PTV", "MAMA", "BREAST", "CTV"]
+campos:
+  - {nome: TGM, gantry: tangente_medial}
+  - {nome: TGL, gantry: tangente_lateral}
+margem: {x1: 7, x2: 7, y1: 10, y2: 10}
+flash_mm: 20
+ponto_encontro: fora
+normalizacao: {metodo: cobertura, volume_pct: 95, dose_pct: 100}
+field_in_field: {modo: filtro, niveis: [97, 94, 91, 88], peso_pct: 3, gantry: todos}
+oars: ["tg:Lung_R", "tg:Heart", "tg:Lungs"]

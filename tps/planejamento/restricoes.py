@@ -148,9 +148,58 @@ class Avaliacao:
                 "falhas_objetivo": sum(1 for r in self.resultados if not r.ok and r.tipo != "limite")}
 
 
+METRICA_RE = r"Dmean|Dmax|D[\d.]+cc|D[\d.]+%|V[\d.]+Gy(_cc)?|V[\d.]+%"
+
+
+def validar_restricao(r: dict, estruturas) -> dict:
+    """Restrição própria do usuário: {estrutura, metrica, op, valor, tipo}. Devolve normalizada ou ValueError."""
+    m = str(r.get("metrica", "")).strip().replace(",", ".").replace(" ", "")
+    if m.upper() == "DMAX":
+        m = "Dmax"
+    if m.upper() == "DMEAN" or m.upper() == "DMED":
+        m = "Dmean"
+    if not re.fullmatch(METRICA_RE, m):
+        raise ValueError(f"Métrica {m!r} inválida: use Dmean, Dmax, D0.03cc, D2cc, D95%, V20Gy, V20Gy_cc ou V95%")
+    est = str(r.get("estrutura", ""))
+    if est not in estruturas:
+        raise ValueError(f"Estrutura {est} não existe")
+    op = r.get("op", "<=")
+    if op not in ("<=", ">="):
+        raise ValueError("Operador deve ser <= ou >=")
+    try:
+        valor = float(str(r.get("valor")).replace(",", "."))
+    except (TypeError, ValueError) as e:
+        raise ValueError("Valor do limite inválido") from e
+    tipo = r.get("tipo", "limite")
+    if tipo not in ("limite", "objetivo"):
+        tipo = "limite"
+    un = "cm³" if m.endswith("_cc") else ("%" if m.startswith("V") else "Gy")
+    return {"estrutura": est, "metrica": m, "op": op, "valor": valor, "tipo": tipo, "unidade": un,
+            "fonte": str(r.get("fonte") or "usuário")[:60]}
+
+
+def salvar_na_clinica(r: dict) -> Path:
+    """Acrescenta a restrição ao protocolo da clínica (<home>/restricoes/clinica.yaml; criado a partir do padrão)."""
+    tg = nome_tg263(r["estrutura"])
+    if not tg:
+        raise ValueError(f"{r['estrutura']}: nome não reconhecido no TG-263 — a restrição só pode ficar neste plano")
+    arq = paths.home() / "restricoes" / "clinica.yaml"
+    arq.parent.mkdir(parents=True, exist_ok=True)
+    dados = yaml.safe_load((arq if arq.exists() else PADRAO).read_text(encoding="utf-8"))
+    if not arq.exists():
+        dados["nome"] = "Protocolo da clínica (baseado no QUANTEC)"
+    item = {k: r[k] for k in ("metrica", "op", "valor", "tipo")}
+    item["fonte"] = r.get("fonte") or "clínica"
+    lista = dados.setdefault("orgaos", {}).setdefault(tg, [])
+    if not any(all(x.get(k) == item[k] for k in ("metrica", "op", "valor")) for x in lista):
+        lista.append(item)
+    arq.write_text(yaml.safe_dump(dados, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return arq
+
+
 def avaliar(doses: dict, voxel_cc: float, prescricao_gy: float, fracoes: int, alvo: str | None,
-            protocolo: dict | None = None) -> Avaliacao:
-    """doses: {nome da estrutura: doses dos voxels (Gy, total do plano)}."""
+            protocolo: dict | None = None, extras: list | None = None) -> Avaliacao:
+    """doses: {nome da estrutura: doses dos voxels (Gy, total do plano)}. extras: restrições próprias do plano."""
     prot = protocolo or carregar()
     av = Avaliacao(protocolo=prot.get("nome", ""))
     dpf = prescricao_gy / max(fracoes, 1)
@@ -181,6 +230,15 @@ def avaliar(doses: dict, voxel_cc: float, prescricao_gy: float, fracoes: int, al
             if tg == "Lungs":
                 r.obs = (r.obs + "; " if r.obs else "") + "QUANTEC: pulmões menos GTV"
             av.resultados.append(r)
+    for k, c in enumerate(extras or []):
+        if c["estrutura"] not in doses:
+            av.avisos.append(f"Restrição própria em {c['estrutura']}: estrutura sem volume")
+            continue
+        v = metrica(doses[c["estrutura"]], voxel_cc, c["metrica"], prescricao_gy)
+        r = _res(c["estrutura"], nome_tg263(c["estrutura"]) or "—", {**c, "fonte": c.get("fonte", "usuário")}, v)
+        r.obs = "própria do plano"
+        av.resultados.append(r)
+        r.__dict__["extra"] = k
     return av
 
 

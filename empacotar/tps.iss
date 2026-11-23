@@ -43,6 +43,7 @@ Name: "atalho"; Description: "Criar atalho na Área de Trabalho"; GroupDescripti
 
 [Files]
 Source: "saida\TPS\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "ia\instalar_ia.ps1"; DestDir: "{app}\ia"; Flags: ignoreversion
 
 [Dirs]
 Name: "{commonappdata}\TPS"; Permissions: users-modify; Flags: uninsneveruninstall
@@ -51,6 +52,7 @@ Name: "{commonappdata}\TPS"; Permissions: users-modify; Flags: uninsneveruninsta
 Name: "{group}\TPS"; Filename: "{app}\TPS.exe"; IconFilename: "{app}\tps.ico"
 Name: "{group}\Gerar casos de teste (Documentos)"; Filename: "{app}\TPS-cmd.exe"; Parameters: "--casos-teste ""{userdocs}\TPS casos de teste"""; IconFilename: "{app}\tps.ico"
 Name: "{group}\Pasta de dados do TPS"; Filename: "{commonappdata}\TPS"
+Name: "{group}\Instalar contorno por IA (TotalSegmentator)"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoExit -File ""{app}\ia\instalar_ia.ps1"""
 Name: "{group}\Desinstalar o TPS"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\TPS"; Filename: "{app}\TPS.exe"; IconFilename: "{app}\tps.ico"; Tasks: atalho
 

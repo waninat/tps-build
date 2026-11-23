@@ -1,0 +1,16 @@
+id: encefalo_total
+nome: Encéfalo total — laterais opostos
+sitio: SNC
+descricao: Laterais opostos conformados ao encéfalo (10 mm), cristalinos protegidos, colimador e mesa em 0.
+dose_total: 30.0
+fracoes: 10
+alvo: ["^PTV", "tg:Brain", "ENCEF", "CEREBRO"]
+campos:
+  - {nome: LE, gantry: 90}
+  - {nome: LD, gantry: 270}
+margem: {x1: 10, x2: 10, y1: 10, y2: 10}
+ponto_encontro: fora
+blindagens: [{oar: "tg:Lens_L", margem: 5}, {oar: "tg:Lens_R", margem: 5}]
+normalizacao: {metodo: media_alvo}
+field_in_field: {modo: filtro, niveis: [97, 94], peso_pct: 3, gantry: todos}
+oars: ["tg:Lens_L", "tg:Lens_R"]

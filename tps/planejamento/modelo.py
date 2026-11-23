@@ -110,6 +110,7 @@ class Plano:
     densidades: dict = field(default_factory=dict)          # estrutura → densidade eletrônica relativa forçada
     bolus: list = field(default_factory=list)               # [{"nome", "espessura_mm", "campos"}]
     pontos: list = field(default_factory=list)              # [{"nome", "xyz"}] pontos de referência
+    restricoes: list = field(default_factory=list)          # restrições próprias do plano (além do protocolo)
     campos_setup: list = field(default_factory=list)        # campos de localização (sem dose; SETUP no DICOM)
 
     # ------------------------------------------------------------------ edição controlada
@@ -136,6 +137,7 @@ class Plano:
         d = asdict(self)
         for k in ("estado", "aprovacao", "historico", "pontos"):
             d.pop(k)
+        d.pop("restricoes", None)                # avaliação, não tratamento
         for c in d.get("campos", []):           # campo sem descrição: mesmo hash das versões anteriores
             if not c.get("descricao"):
                 c.pop("descricao", None)

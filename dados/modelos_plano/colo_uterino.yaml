@@ -1,0 +1,19 @@
+# Modelo de plano. Copie para <pasta de dados>/modelos_plano/ e edite para criar os da clínica.
+# alvo/oars: regex (sem maiúsculas) ou "tg:<nome TG-263>"; o primeiro que existir no paciente é usado.
+id: colo_uterino
+nome: Colo uterino — box 4 campos + filtro
+sitio: Pelve
+descricao: AP, PA e laterais conformados ao PTV (7 mm), subcampos tipo filtro nos laterais, 95% do PTV com 100%.
+dose_total: 45.0
+fracoes: 25
+alvo: ["^PTV.*45", "^PTV", "CTV"]
+campos:
+  - {nome: AP, gantry: 0}
+  - {nome: LE, gantry: 90}
+  - {nome: PA, gantry: 180}
+  - {nome: LD, gantry: 270}
+margem: {x1: 7, x2: 7, y1: 7, y2: 7}
+ponto_encontro: fora
+normalizacao: {metodo: cobertura, volume_pct: 95, dose_pct: 100}
+field_in_field: {modo: filtro, niveis: [97, 94, 91, 88], peso_pct: 3, gantry: [90, 270]}
+oars: ["tg:Bladder", "tg:Rectum", "tg:Bag_Bowel", "tg:Bowel_Small", "tg:Femur_Head_L", "tg:Femur_Head_R"]

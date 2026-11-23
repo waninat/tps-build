@@ -1,0 +1,18 @@
+id: pulmao
+nome: Pulmão — AP/PA + 2 oblíquos poupando medula
+sitio: Tórax
+descricao: AP/PA e dois oblíquos do lado do tumor (evitam a medula); proteção de medula e pulmões na otimização.
+dose_total: 60.0
+fracoes: 30
+alvo: ["^PTV", "CTV", "GTV"]
+campos:
+  - {nome: AP, gantry: 0}
+  - {nome: PA, gantry: 180}
+  - {nome: OANT, gantry: lado_tumor_40}
+  - {nome: OPOS, gantry: lado_tumor_140}
+margem: {x1: 7, x2: 7, y1: 7, y2: 7}
+ponto_encontro: fora
+normalizacao: {metodo: media_alvo}
+field_in_field: {modo: filtro, niveis: [97, 94], peso_pct: 3, gantry: todos}
+oars: ["tg:SpinalCord", "tg:Lungs", "tg:Lung_L", "tg:Lung_R", "tg:Heart", "tg:Esophagus"]
+proteger: [{oar: "tg:SpinalCord", metrica: Dmax, valor: 45, prioridade: 8}]

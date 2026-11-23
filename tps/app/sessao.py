@@ -465,6 +465,92 @@ class Sessao:
         self.eta_original = self.grade.eta.copy()
         self._registrar(f"Plano {rotulo}: {dose_total} Gy / {fracoes} fx em {alvo}")
 
+    def aplicar_modelo(self, modelo_id: str, rotulo: str, dose_total: float | None = None, fracoes: int | None = None,
+                       alvo: str | None = None, calcular: bool = True) -> dict:
+        """Plano semi-pronto a partir de um modelo por sítio (dados/modelos_plano/*.yaml). SRS-PLN-080."""
+        from tps.planejamento import modelos_plano as MP
+        from tps.planejamento.conformacao import projetar_bev
+        mods = MP.carregar()
+        if modelo_id not in mods:
+            raise ErroUsuario(f"Modelo {modelo_id} não existe")
+        md = mods[modelo_id]
+        nomes = list(self.estruturas)
+        alvo = alvo or MP.achar_estrutura(nomes, md.get("alvo") or [])
+        if not alvo or alvo not in self.estruturas:
+            raise ErroUsuario(f"Não achei o alvo para o modelo ({', '.join(md.get('alvo') or [])}): escolha o alvo")
+        norm = md.get("normalizacao") or {}
+        metodo = norm.get("metodo", "media_alvo")
+        self.isocentro = None                           # isocentro no centro do alvo do modelo
+        self.novo_plano(rotulo, float(dose_total or md.get("dose_total", 50)), int(fracoes or md.get("fracoes", 25)),
+                        alvo, metodo, None, float(norm.get("isodose_pct", 100)),
+                        (norm.get("volume_pct", 95), norm.get("dose_pct", 100)))
+        g = self.grade
+        eixos = (g.x, g.y, g.z)
+        am = self.estruturas[alvo].mascara
+        corpo = self._corpo()
+        info = {"modelo": modelo_id, "alvo": alvo}
+        angulos = {}
+        if any(str(c.get("gantry", "")).startswith("tangente") for c in md["campos"]):
+            lado = md.get("lado") or MP.lateralidade(am, corpo, g.x)
+            pul = (self.eta_original < 0.6) & np.asarray(corpo) & ~am
+            from scipy.ndimage import binary_erosion
+            pul &= binary_erosion(corpo, iterations=3)
+            cor_nome = MP.achar_estrutura(nomes, ["tg:Heart"])
+            t = MP.tangentes(am, pul, eixos, self.isocentro, lado, coracao=self.estruturas[cor_nome].mascara
+                             if cor_nome else None)
+            angulos = {"tangente_medial": t["medial"], "tangente_lateral": t["lateral"]}
+            info["tangentes"] = t
+        lado_tumor = MP.lateralidade(am, corpo, g.x)
+        oars = MP.achar_todas(nomes, md.get("oars") or [])
+        blind = [{"nome": n, "margem": float(b.get("margem", 3))} for b in md.get("blindagens") or []
+                 for n in MP.achar_todas(nomes, [b["oar"]])]
+        avisos = []
+        for cdef in md["campos"]:
+            gtxt = str(cdef.get("gantry", 0))
+            if gtxt in angulos:
+                gantry = angulos[gtxt]
+            elif gtxt.startswith("lado_tumor_"):
+                a = float(gtxt.split("_")[-1])
+                gantry = a if lado_tumor == "E" else (360 - a) % 360
+            else:
+                gantry = float(gtxt)
+            margem = dict(md.get("margem") or {"x1": 7, "x2": 7, "y1": 7, "y2": 7})
+            if md.get("flash_mm"):                      # abre o lado anterior (pele) do BEV: flash
+                c0 = Campo("t", float(gantry), isocentro_mm=self.isocentro)
+                u_ant, _ = projetar_bev(np.array([[self.isocentro[0], self.isocentro[1] - 150, self.isocentro[2]]]), c0)
+                margem["x2" if u_ant[0] > 0 else "x1"] = float(md["flash_mm"])
+            spec = {"nome": cdef.get("nome"), "gantry": gantry, "colimador": cdef.get("colimador", 0),
+                    "peso": cdef.get("peso", 1.0), "modo": "conformado", "alvo": alvo, "margem": margem,
+                    "ponto_encontro": md.get("ponto_encontro", "fora"), "blindagens": blind}
+            r = self.salvar_campo(spec)
+            avisos += r["avisos"]
+        fif = md.get("field_in_field")
+        opcoes = {"metodo": metodo}
+        if metodo == "cobertura":
+            opcoes.update(cobertura_volume_pct=norm.get("volume_pct", 95), cobertura_dose_pct=norm.get("dose_pct", 100))
+        if fif:
+            gs = fif.get("gantry", "todos")
+            campos = [c.nome for c in self.plano.campos if gs == "todos" or
+                      any(abs(((c.gantry - float(x)) + 180) % 360 - 180) < 1 for x in gs)]
+            opcoes["field_in_field"] = {"modo": fif.get("modo", "filtro"), "niveis": fif.get("niveis", [97, 94, 91, 88]),
+                                        "peso_pct": fif.get("peso_pct", 3), "campos": campos,
+                                        "ajuste_fino": bool(fif.get("ajuste_fino", False))}
+        prot = []
+        for o in md.get("proteger") or []:
+            for n in MP.achar_todas(nomes, [o["oar"]])[:1]:
+                prot.append({"estrutura": n, "metrica": o.get("metrica", "Dmean"), "valor": o.get("valor"),
+                             "volume_pct": o.get("volume_pct"), "prioridade": o.get("prioridade", 5)})
+        if prot:
+            opcoes["proteger_oars"] = {"oars": prot, "subcampos": True}
+        info.update(oars=oars, opcoes=opcoes, avisos=avisos)
+        self._registrar(f"Plano {rotulo} criado pelo modelo {md.get('nome', modelo_id)} (alvo {alvo})")
+        if calcular:
+            self.calcular(opcoes)
+            self.avisos = avisos + self.avisos
+        out = self.resumo()
+        out["modelo_aplicado"] = info
+        return out
+
     def _info_modelo(self):
         mo = self.maquina.modelo
         return {"energia_mv": mo.energy_mv, "hash": calculo.hash_modelo(mo), "comissionado": mo.comissionado,
@@ -946,6 +1032,154 @@ class Sessao:
         self._depois_de_editar(e)
         return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1)}
 
+    def operar_contorno(self, nome: str, operacao: str, outra: str, margem_mm: float = 0.0) -> dict:
+        """Booleana no lugar, na resolução do CT: nome = nome − outra (subtrair), ∪ (unir) ou ∩ (intersecao), com
+        margem opcional em volta da outra (ex.: RETO − (PTV + 3 mm)). Desfazível."""
+        from tps.planejamento import contorno as K
+        from tps.planejamento import estruturas as E
+        if operacao not in ("subtrair", "unir", "intersecao"):
+            raise ErroUsuario(f"Operação desconhecida: {operacao}")
+        if outra == nome:
+            raise ErroUsuario("Escolha outra estrutura")
+        e = self._editavel(nome)
+        ob = self.estruturas.get(outra)
+        if ob is None:
+            raise ErroUsuario(f"Estrutura {outra} não existe")
+        pb = list(ob.contornos) if ob.contornos else self._contornos_de_mascara(ob.mascara)
+        cx, cy, cz = self.ct.axes()
+        tol = float(self.ct.spacing[2]) / 2 + 0.01
+        dz = float(abs(cz[1] - cz[0])) if len(cz) > 1 else 3.0
+        dy, dx = float(abs(cy[1] - cy[0])), float(abs(cx[1] - cx[0]))
+        todos = [c for c in list(e.contornos) + pb]
+        if not todos:
+            raise ErroUsuario("As duas estruturas estão vazias")
+        pts = np.vstack([c[:, :3] for c in todos])
+        mg = max(float(margem_mm), 0.0)
+        x0, x1 = pts[:, 0].min() - mg - 3 * dx, pts[:, 0].max() + mg + 3 * dx
+        y0, y1 = pts[:, 1].min() - mg - 3 * dy, pts[:, 1].max() + mg + 3 * dy
+        ix = np.nonzero((cx >= x0) & (cx <= x1))[0]
+        iy = np.nonzero((cy >= y0) & (cy <= y1))[0]
+        xs, ys = cx[ix], cy[iy]
+        A = np.zeros((len(cz), len(ys), len(xs)), bool)
+        B = np.zeros_like(A)
+        for k, z in enumerate(cz):
+            A[k] = K.mascara_de_poligonos(K.poligonos_do_corte(e.contornos, float(z), tol), xs, ys)
+            B[k] = K.mascara_de_poligonos(K.poligonos_do_corte(pb, float(z), tol), xs, ys)
+        if mg > 0:
+            try:
+                B = E.margem(B, (dz, dy, dx), mg)
+            except ValueError as ex:
+                raise ErroUsuario(str(ex)) from ex
+        R = A & ~B if operacao == "subtrair" else (A | B if operacao == "unir" else A & B)
+        self._guardar_desfazer(e)
+        novos = []
+        for k, z in enumerate(cz):
+            if R[k].any():
+                novos += K.poligonos_de_mascara(R[k], xs, ys, float(z))
+        e.contornos = novos
+        self._depois_de_editar(e)
+        txt = {"subtrair": "−", "unir": "∪", "intersecao": "∩"}[operacao]
+        self._registrar(f"{nome} = {nome} {txt} {outra}{f' (+{mg:g} mm)' if mg else ''}")
+        return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1)}
+
+    def _estrutura_de_volume(self, nome: str, tipo: str, cor, vol: np.ndarray, sobrescrever: bool = False) -> str:
+        """Cria (ou substitui, se foi criada no TPS) uma estrutura a partir de uma máscara na grade do CT."""
+        from tps.planejamento import contorno as K
+        cx, cy, cz = self.ct.axes()
+        if nome in self.estruturas and not (sobrescrever and nome in self.editadas):
+            base, k = nome, 2
+            while nome in self.estruturas:
+                nome = f"{base}_{k}"
+                k += 1
+        if nome not in self.estruturas:
+            self.nova_estrutura(nome, tipo, cor)
+        e = self.estruturas[nome]
+        self._guardar_desfazer(e)
+        polys = []
+        for k, z in enumerate(cz):
+            if vol[k].any():
+                polys += K.poligonos_de_mascara(vol[k], cx, cy, float(z), suavizar=0.6, min_pontos=6)
+        e.contornos = polys
+        self._depois_de_editar(e)
+        return nome
+
+    def _corpo_ct(self) -> np.ndarray:
+        from tps.planejamento import contorno as K
+        cx, cy, cz = self.ct.axes()
+        for e in self.estruturas.values():
+            if (e.tipo.upper() == "EXTERNAL" or e.nome.lower() in ("body", "external", "corpo", "externo")) \
+                    and e.contornos:
+                tol = float(self.ct.spacing[2]) / 2 + 0.01
+                return np.stack([K.mascara_de_poligonos(K.poligonos_do_corte(e.contornos, float(z), tol), cx, cy)
+                                 for z in cz])
+        return K.corpo_3d(self.ct.hu)
+
+    def orgaos_automaticos(self, orgaos: list[str]) -> dict:
+        """Órgãos por limiar de HU (rápidos, sem IA): pulmões (E/D) e ossos. Os outros vêm da segmentação por IA."""
+        from tps.planejamento import contorno as K
+        self._exigir(self.tipo == "ct", "Contorno automático só em CT de paciente")
+        cx, cy, cz = self.ct.axes()
+        dz = float(abs(cz[1] - cz[0])) if len(cz) > 1 else 3.0
+        corpo = self._corpo_ct()
+        criadas = {}
+        if "pulmoes" in orgaos:
+            esq, dire = K.pulmoes_automaticos(self.ct.hu, corpo, cx, cy, dz)
+            if not (esq.any() or dire.any()):
+                raise ErroUsuario("Não encontrei pulmões neste CT")
+            if esq.any():
+                criadas["Pulmao_E"] = self._estrutura_de_volume("Pulmao_E", "ORGAN", (90, 160, 255), esq, True)
+            if dire.any():
+                criadas["Pulmao_D"] = self._estrutura_de_volume("Pulmao_D", "ORGAN", (60, 220, 255), dire, True)
+        if "ossos" in orgaos:
+            o = K.ossos_automaticos(self.ct.hu, corpo)
+            criadas["Ossos"] = self._estrutura_de_volume("Ossos", "ORGAN", (240, 240, 200), o, True)
+        if not criadas:
+            raise ErroUsuario("Escolha pelo menos um órgão")
+        self._registrar("Contorno automático (limiar de HU): " + ", ".join(criadas.values()) + " — revise antes de usar")
+        return {"criadas": list(criadas.values()),
+                "volumes_cc": {n: round(float(self.estruturas[n].mascara.sum()) * self.grade.voxel_cc, 1)
+                               for n in criadas.values()}}
+
+    def segmentar_ia(self, orgaos: list[str]) -> dict:
+        """Órgãos por IA (TotalSegmentator local). Cria/substitui as estruturas do TPS; nada do RTSTRUCT original muda."""
+        from tps.dicom_io.rtstruct import read_rtstruct
+        from tps.ia import segmentacao as IA
+        from tps.planejamento import contorno as K
+        self._exigir(self.tipo == "ct", "Contorno automático só em CT de paciente")
+        if not orgaos:
+            raise ErroUsuario("Escolha pelo menos um órgão")
+        arquivos = sorted(f for f in self.pasta_ct.iterdir() if f.is_file() and self._e_ct(f))
+        try:
+            rs, classes = IA.segmentar(arquivos, orgaos)
+        except (RuntimeError, ValueError, OSError) as e:
+            raise ErroUsuario(str(e)) from e
+        except Exception as e:  # noqa: BLE001  (timeout etc.)
+            raise ErroUsuario(f"Segmentação por IA falhou: {e}") from e
+        rois = {st.name.lower(): st for st in read_rtstruct(rs)}
+        cx, cy, cz = self.ct.axes()
+        tol = float(self.ct.spacing[2]) / 2 + 0.01
+        criadas, faltam = [], []
+        for o in orgaos:
+            nome, cls, cor = IA.ORGAOS[o]
+            polys = [c for k in cls for c in (rois.get(k).contours if rois.get(k) else [])]
+            if not polys:
+                faltam.append(nome)
+                continue
+            vol = np.stack([K.mascara_de_poligonos(K.poligonos_do_corte(polys, float(z), tol), cx, cy) for z in cz])
+            if o in ("femur_e", "femur_d"):            # só cabeça e colo: os 7 cm superiores do fêmur
+                ks = np.nonzero(vol.any(axis=(1, 2)))[0]
+                ztop = max(cz[ks])
+                vol[np.abs(cz - ztop) > IA.CABECA_FEMORAL_MM] = False
+            if vol.any():
+                criadas.append(self._estrutura_de_volume(nome, "ORGAN", cor, vol, True))
+            else:
+                faltam.append(nome)
+        shutil.rmtree(rs.parent.parent, ignore_errors=True)
+        if not criadas:
+            raise ErroUsuario("A IA não encontrou nenhum dos órgãos pedidos neste CT")
+        self._registrar("Contorno por IA (TotalSegmentator): " + ", ".join(criadas) + " — revise antes de usar")
+        return {"criadas": criadas, "nao_encontrados": faltam}
+
     def desfazer_contorno(self) -> dict:
         if not self.desfazer_pilha:
             raise ErroUsuario("Nada para desfazer")
@@ -1057,7 +1291,7 @@ class Sessao:
         if so_normalizar:
             self._exigir(bool(self.doses_um) and all(c.nome in self.doses_um for c in p.campos),
                          "Calcule a dose antes de renormalizar")
-            opcoes = {k: v for k, v in opcoes.items() if k not in ("otimizar_pesos", "field_in_field", "compensador")}
+            opcoes = {k: v for k, v in opcoes.items() if k not in ("otimizar_pesos", "field_in_field", "compensador", "proteger_oars")}
         if opcoes.get("metodo"):
             pr.metodo = opcoes["metodo"]
             if pr.metodo == "ponto":
@@ -1106,12 +1340,40 @@ class Sessao:
                                           "hi_antes": r.hi_antes, "hi_depois": r.hi_depois,
                                           "dmax_antes": r.dmax_antes_pct, "dmax_depois": r.dmax_depois_pct, "avisos": r.avisos}
                 self.avisos = list(r.avisos)
+                if fif.get("ajuste_fino") and r.subcampos:
+                    from tps.planejamento.protecao_oar import ajuste_fino
+                    h0, h1, av = ajuste_fino(p, g, self.doses_um, alvo, corpo)
+                    info["field_in_field"]["ajuste_fino"] = {"hi_antes": h0, "hi_depois": h1}
+                    info["field_in_field"]["hi_depois"] = h1
+                    info["field_in_field"]["subcampos"] = [c.nome for c in p.campos if c.campo_pai]
+                    self.avisos += av
             elif fif and alvo is not None:
                 r = field_in_field(p, g, self.doses_um, alvo, corpo, m.colim, m.modelo,
                                    um_min=float(opcoes.get("um_min", 3.0)))
                 info["field_in_field"] = {"subcampos": [c.nome for c in r.subcampos], "hi_antes": r.hi_antes,
                                           "hi_depois": r.hi_depois, "avisos": r.avisos}
                 self.avisos = list(r.avisos)
+            prot = opcoes.get("proteger_oars")
+            if prot and alvo is not None:
+                if opcoes.get("compensador"):
+                    raise ErroUsuario("Use a proteção de OARs ou o compensador, não os dois no mesmo cálculo")
+                from tps.planejamento.protecao_oar import ObjetivoOAR, proteger_oars
+                objs = []
+                for o in prot.get("oars") or []:
+                    e = self.estruturas.get(o.get("estrutura"))
+                    if e is None:
+                        raise ErroUsuario(f"Estrutura {o.get('estrutura')} não existe")
+                    val = o.get("valor")
+                    objs.append(ObjetivoOAR(e.nome, e.mascara, o.get("metrica", "Dmean"),
+                                            float(val) if val not in (None, "") else None,
+                                            float(o["volume_pct"]) if o.get("volume_pct") not in (None, "") else None,
+                                            float(o.get("prioridade", 5))))
+                r = proteger_oars(p, g, self.doses_um, alvo, corpo, m.colim, m.modelo, objs,
+                                  criar_subcampos=bool(prot.get("subcampos", True)),
+                                  margem_mm=float(prot.get("margem_mm", 5)))
+                info["protecao_oars"] = {"subcampos": [c.nome for c in r.subcampos], "hi_antes": r.hi_antes,
+                                         "hi_depois": r.hi_depois, "oars": r.oars, "avisos": r.avisos}
+                self.avisos += list(r.avisos)
             if opcoes.get("compensador") and alvo is not None:
                 comp = opcoes["compensador"]
                 r = compensar(p, g, self.doses_um, alvo, m.colim, m.modelo, campos=comp.get("campos") or None,
@@ -1121,7 +1383,8 @@ class Sessao:
                                        "historico": r.historico, "avisos": r.avisos}
                 self.avisos = list(r.avisos)
             if pr.metodo == "um_fixas":
-                if opcoes.get("otimizar_pesos") or opcoes.get("field_in_field") or opcoes.get("compensador"):
+                if (opcoes.get("otimizar_pesos") or opcoes.get("field_in_field") or opcoes.get("compensador")
+                        or opcoes.get("proteger_oars")):
                     raise ErroUsuario("Plano com UM fixas (importado): troque a normalização antes de otimizar, "
                                       "fazer field-in-field ou compensador")
                 faltam_um = [c.nome for c in p.campos if not c.mu]
@@ -1163,9 +1426,38 @@ class Sessao:
         try:
             doses = {n: total[e.mascara] for n, e in self.estruturas.items() if e.mascara.any()}
             return restricoes.avaliar(doses, self.grade.voxel_cc, pr.dose_total_gy, pr.fracoes,
-                                      pr.estrutura_alvo).json()
+                                      pr.estrutura_alvo, extras=self.plano.restricoes).json()
         except Exception as e:  # noqa: BLE001
             return {"erro": f"avaliação das restrições falhou: {e}", "resultados": [], "avisos": []}
+
+    def adicionar_restricao(self, r: dict, na_clinica: bool = False) -> dict:
+        """Restrição própria (fica no plano; com na_clinica também entra no protocolo da clínica)."""
+        from tps.planejamento import restricoes
+        self._exigir_plano()
+        try:
+            item = restricoes.validar_restricao(r, self.estruturas)
+            if na_clinica:
+                arq = restricoes.salvar_na_clinica(item)
+                self._registrar(f"Restrição {item['estrutura']} {item['metrica']} {item['op']} {item['valor']} "
+                                f"gravada no protocolo da clínica ({arq.name})")
+        except ValueError as e:
+            raise ErroUsuario(str(e)) from e
+        if not na_clinica:
+            self.plano.restricoes.append(item)
+        self._reavaliar_restricoes()
+        return self.resumo()
+
+    def remover_restricao(self, indice: int) -> dict:
+        self._exigir_plano()
+        if not 0 <= indice < len(self.plano.restricoes):
+            raise ErroUsuario("Restrição inexistente")
+        self.plano.restricoes.pop(indice)
+        self._reavaliar_restricoes()
+        return self.resumo()
+
+    def _reavaliar_restricoes(self):
+        if self.dose_atualizada and self.dose_fx is not None and self.resultado:
+            self.resultado["restricoes"] = self._avaliar_restricoes(self.dose_fx * self.plano.prescricao.fracoes)
 
     def restricoes_json(self) -> dict:
         self._exigir(self.dose_atualizada, "Dose não calculada")
@@ -1478,7 +1770,7 @@ class Sessao:
                 d = self.dose_em(pt["xyz"]) if self.dose_atualizada else {}
                 pts.append({**pt, "total_gy": d.get("total_gy"), "pct": d.get("pct"), "campos": d.get("campos", {})})
             out["plano"] = {"rotulo": p.rotulo, "estado": p.estado, "aprovacao": p.aprovacao, "tecnica": p.tecnica,
-                            "pontos": pts, "bolus": p.bolus, "densidades": p.densidades,
+                            "pontos": pts, "restricoes": p.restricoes, "bolus": p.bolus, "densidades": p.densidades,
                             "prescricao": dataclasses.asdict(p.prescricao), "historico": p.historico,
                             "campos": [self._campo_json(c) for c in p.campos],
                             "campos_setup": [self._campo_json(c) for c in p.campos_setup]}
