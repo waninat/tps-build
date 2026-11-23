@@ -1098,7 +1098,7 @@ class Sessao:
         polys = []
         for k, z in enumerate(cz):
             if vol[k].any():
-                polys += K.poligonos_de_mascara(vol[k], cx, cy, float(z), suavizar=0.6, min_pontos=6)
+                polys += K.poligonos_de_mascara(vol[k], cx, cy, float(z), suavizar=0.4, min_pontos=6)
         e.contornos = polys
         self._depois_de_editar(e)
         return nome
@@ -1174,7 +1174,7 @@ class Sessao:
                 criadas.append(self._estrutura_de_volume(nome, "ORGAN", cor, vol, True))
             else:
                 faltam.append(nome)
-        shutil.rmtree(rs.parent.parent, ignore_errors=True)
+        shutil.rmtree(rs.parent, ignore_errors=True)
         if not criadas:
             raise ErroUsuario("A IA não encontrou nenhum dos órgãos pedidos neste CT")
         self._registrar("Contorno por IA (TotalSegmentator): " + ", ".join(criadas) + " — revise antes de usar")

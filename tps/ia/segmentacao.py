@@ -96,15 +96,37 @@ def segmentar(arquivos_ct: list[Path], orgaos: list[str], rapido: bool = True, t
         fm.MediaStorageSOPClassUID = d.SOPClassUID
         fm.MediaStorageSOPInstanceUID = d.SOPInstanceUID
         d.save_as(ent / f"CT{k:04d}.dcm", enforce_file_format=True)
-    saida = tmp / "seg"
+    saida = tmp / "seg.dcm"                          # --output_type dicom grava UM arquivo RTSTRUCT
     cmd = [str(exe), "-i", str(ent), "-o", str(saida), "--output_type", "dicom", "--roi_subset", *classes]
     if rapido:
         cmd.append("--fast")
     if dispositivo:
         cmd += ["--device", dispositivo]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=tempo_max_s, creationflags=flags)
-    rs = next(iter(sorted(saida.rglob("*.dcm"))), None) if saida.exists() else None
+    kw = {"creationflags": flags} if sys.platform == "win32" else {"start_new_session": True}
+    pr = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
+    try:
+        out, err = pr.communicate(timeout=tempo_max_s)
+    except subprocess.TimeoutExpired:
+        _matar_arvore(pr)                       # o nnU-Net abre processos filhos: não deixar órfãos
+        raise RuntimeError(f"TotalSegmentator passou de {tempo_max_s // 60} min e foi interrompido")
+    r = subprocess.CompletedProcess(cmd, pr.returncode, out, err)
+    if saida.is_dir():
+        rs = next(iter(sorted(saida.rglob("*.dcm"))), None)
+    else:
+        rs = saida if saida.exists() else None
     if r.returncode != 0 or rs is None:
         raise RuntimeError("TotalSegmentator falhou: " + (r.stderr or r.stdout or "")[-800:])
     return rs, {o: ORGAOS[o][1] for o in orgaos}
+
+
+def _matar_arvore(pr):
+    try:
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pr.pid)], capture_output=True,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        else:
+            import signal
+            os.killpg(os.getpgid(pr.pid), signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        pr.kill()

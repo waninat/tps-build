@@ -154,3 +154,26 @@ def test_filtro_com_ajuste_fino_nao_piora(cli):
                                                                        "ajuste_fino": True}}))
     i = r["resultado"]["info"]["field_in_field"]
     assert "ajuste_fino" in i and i["ajuste_fino"]["hi_depois"] <= i["ajuste_fino"]["hi_antes"] + 1e-9
+
+
+def test_segmentacao_ia_le_o_rtstruct_da_rede(cli, monkeypatch, tmp_path):
+    """Sem a rede instalada: simula o TotalSegmentator devolvendo um RTSTRUCT com a classe urinary_bladder."""
+    import pydicom
+    from tps.app.servidor import SESSOES
+    from tps.exportacao.rtstruct import exportar_rtstruct
+    from tps.ia import segmentacao as IA
+    c, sid, _ = cli
+    s = SESSOES[sid]
+    arq = tmp_path / "seg.dcm"
+    exportar_rtstruct(s, arq)
+    ds = pydicom.dcmread(arq)
+    for r in ds.StructureSetROISequence:
+        if r.ROIName == "PTV_fantoma":
+            r.ROIName = "urinary_bladder"
+    ds.save_as(arq)
+    monkeypatch.setattr(IA, "segmentar", lambda arqs, orgaos, **k: (arq, {}))
+    r = _ok(c.post(f"/api/{sid}/contorno/ia", json={"orgaos": ["bexiga", "rim_e"]}))
+    assert r["contorno"]["criadas"] == ["Bexiga"] and r["contorno"]["nao_encontrados"] == ["Rim_E"]
+    v = {e["nome"]: e["volume_cc"] for e in r["estruturas"]}
+    assert v["Bexiga"] == pytest.approx(v["PTV_fantoma"], rel=0.08)          # caixa: cantos arredondados
+    assert _ok(c.get("/api/info"))["ia"]["orgaos"]
