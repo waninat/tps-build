@@ -393,3 +393,80 @@ def otimizar_colimador(campo: Campo, colim: Colimacao, alvos: list[tuple], eixos
     candidatos = [a for a, e in custos.items() if e <= melhor * 1.02 + 0.05]
     escolhido = min(candidatos, key=lambda a: min(a % 90, 90 - a % 90))
     return escolhido, custos
+
+
+def acomodar_lamina(a, b, colim: Colimacao, par: int, banco: str, pos: float) -> tuple[list, list]:
+    """Move uma lâmina como no Eclipse: respeita gap, overtravel e extensão; num MLC sem interdigitação (MLCi)
+    empurra as lâminas vizinhas em vez de recusar. Pares fechados vizinhos andam juntos (continuam fechados)."""
+    a = np.asarray(a, float).copy()
+    b = np.asarray(b, float).copy()
+    g = colim.gap_minimo_mm
+    lmax, ot = colim.lamina_max_mm, colim.overtravel_mm
+    if banco == "a":
+        a[par] = float(np.clip(pos, -lmax, min(ot, lmax - g)))
+        if b[par] - a[par] < g:
+            b[par] = a[par] + g
+    else:
+        b[par] = float(np.clip(pos, max(-ot, -lmax + g), lmax))
+        if b[par] - a[par] < g:
+            a[par] = b[par] - g
+    if not getattr(colim, "interdigitacao", True):
+        fila = [par]
+        visitados = 0
+        while fila and visitados < 8 * colim.n_pares:
+            i = fila.pop(0)
+            visitados += 1
+            for j in (i - 1, i + 1):
+                if not 0 <= j < colim.n_pares:
+                    continue
+                fechado = b[j] - a[j] <= g + 1e-6
+                mudou = False
+                if a[i] > b[j] - g + 1e-9:            # A deste par passou da B do vizinho
+                    b[j] = a[i] + g
+                    if fechado:
+                        a[j] = b[j] - g
+                    mudou = True
+                if b[i] < a[j] + g - 1e-9:            # B deste par passou da A do vizinho
+                    a[j] = b[i] - g
+                    if fechado:
+                        b[j] = a[j] + g
+                    mudou = True
+                if mudou:
+                    if b[j] - a[j] < g:
+                        b[j] = a[j] + g
+                    fila.append(j)
+    a = np.clip(a, -lmax, ot)
+    b = np.clip(b, -ot, lmax)
+    return [round(float(x), 1) for x in a], [round(float(x), 1) for x in b]
+
+
+def raster_de_poligono(pontos, u: np.ndarray, v: np.ndarray) -> np.ndarray:
+    """Máscara BEV [nv, nu] de um polígono (u, v) em mm no plano do isocentro."""
+    from matplotlib.path import Path as _P
+    p = np.asarray(pontos, float)
+    if len(p) < 3:
+        raise ValueError("Desenhe pelo menos 3 pontos")
+    U, V = np.meshgrid(u, v)
+    return _P(p).contains_points(np.c_[U.ravel(), V.ravel()]).reshape(U.shape)
+
+
+def laminas_para_desenho(campo: Campo, colim: Colimacao, pontos, modo: str = "abrir",
+                         ponto_encontro: str | float = "fora", res_mm: float = 0.5) -> ResultadoAjuste:
+    """Ferramenta "desenhar e as lâminas vão para a forma" (Eclipse: Fit to drawing).
+
+    modo: "abrir" (a abertura passa a ser o desenho), "acrescentar" (abertura atual ∪ desenho),
+          "bloquear" (abertura atual − desenho)."""
+    import copy as _copy
+    if modo not in ("abrir", "acrescentar", "bloquear"):
+        raise ValueError(f"Modo desconhecido: {modo}")
+    ext = colim.jaw_y_max_mm + 5
+    u, v = grade_bev(ext, res_mm)
+    m = raster_de_poligono(pontos, u, v)
+    if modo != "abrir":
+        atual = raster_da_abertura(campo, colim, u, v).m
+        m = (atual | m) if modo == "acrescentar" else (atual & ~m)
+    if not m.any():
+        raise ValueError("A forma resultante não tem abertura")
+    c = _copy.deepcopy(campo)
+    op = OpcoesAjuste(ponto_encontro=ponto_encontro, resolucao_mm=res_mm)
+    return ajustar(c, colim, [], [], None, op, abertura_base=RasterBEV(u, v, m))

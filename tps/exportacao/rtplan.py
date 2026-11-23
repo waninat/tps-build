@@ -44,23 +44,41 @@ def _ds(**kw) -> Dataset:
 
 
 def _feixes_para_exportar(plano: Plano, modo_segmentos: str) -> list[tuple]:
-    """[(nome, campo, mu, formas)] — formas: [(jaw_x, jaw_y, mlc_a, mlc_b, peso)].
+    """[(nome, campo, mu, formas, membros)] — formas: [(jaw_x, jaw_y, mlc_a, mlc_b, peso)]; membros: [(campo, UM)]
+    que somam a dose do feixe.
 
-    Campos com segmentos (compensador): "campos_separados" vira um campo estático por segmento (nome + c1, c2…;
-    UM do campo × peso, 0,1 UM); "step_and_shoot" vira um único campo com pares de pontos de controle."""
+    "step_and_shoot" (como o Monaco): o campo e os seus subcampos de field-in-field viram UM feixe STATIC com pares
+    de pontos de controle (peso = UM de cada forma ÷ UM total), e o compensador também. "campos_separados": cada
+    subcampo e cada segmento vira um campo estático próprio. Campos de localização vêm à parte (campos_setup)."""
+    if modo_segmentos not in ("step_and_shoot", "campos_separados"):
+        raise ValueError(f"Modo de segmentos desconhecido: {modo_segmentos}")
     out = []
-    for c in plano.campos:
-        if not c.segmentos:
-            out.append((c.nome, c, float(c.mu), [(c.jaw_x, c.jaw_y, c.mlc_a, c.mlc_b, 1.0)]))
-        elif modo_segmentos == "step_and_shoot":
-            out.append((c.nome, c, float(c.mu), [(s.get("jaw_x"), s["jaw_y"], s["mlc_a"], s["mlc_b"], s["peso"])
-                                                 for s in c.segmentos]))
-        elif modo_segmentos == "campos_separados":
-            for k, s in enumerate(c.segmentos, start=1):
-                out.append((f"{c.nome[:13]}c{k}", c, round(float(c.mu) * s["peso"], 1),
-                            [(s.get("jaw_x"), s["jaw_y"], s["mlc_a"], s["mlc_b"], 1.0)]))
+    principais = [c for c in plano.campos if not c.campo_pai]
+    for c in principais:
+        filhos = [f for f in plano.campos if f.campo_pai == c.nome]
+        if modo_segmentos == "step_and_shoot":
+            formas, membros, total = [], [(c, float(c.mu))], float(c.mu)
+            if c.segmentos:
+                formas = [(s.get("jaw_x"), s["jaw_y"], s["mlc_a"], s["mlc_b"], s["peso"] * float(c.mu))
+                          for s in c.segmentos]
+            else:
+                formas = [(c.jaw_x, c.jaw_y, c.mlc_a, c.mlc_b, float(c.mu))]
+            for f in filhos:
+                formas.append((f.jaw_x, f.jaw_y, f.mlc_a, f.mlc_b, float(f.mu)))
+                membros.append((f, float(f.mu)))
+                total += float(f.mu)
+            formas = [(*fm[:4], fm[4] / total) for fm in formas]
+            out.append((c.nome, c, round(total, 1), formas, membros))
         else:
-            raise ValueError(f"Modo de segmentos desconhecido: {modo_segmentos}")
+            if not c.segmentos:
+                out.append((c.nome, c, float(c.mu), [(c.jaw_x, c.jaw_y, c.mlc_a, c.mlc_b, 1.0)], [(c, float(c.mu))]))
+            else:
+                for k, s in enumerate(c.segmentos, start=1):
+                    mu = round(float(c.mu) * s["peso"], 1)
+                    out.append((f"{c.nome[:13]}c{k}", c, mu, [(s.get("jaw_x"), s["jaw_y"], s["mlc_a"], s["mlc_b"], 1.0)],
+                                [(c, float(c.mu) * s["peso"])]))
+            for f in filhos:
+                out.append((f.nome, f, float(f.mu), [(f.jaw_x, f.jaw_y, f.mlc_a, f.mlc_b, 1.0)], [(f, float(f.mu))]))
     return out
 
 
@@ -170,6 +188,11 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     n = colim.n_pares
     feixes = _feixes_para_exportar(plano, modo_segmentos)
     fg.NumberOfBeams = len(feixes)
+    setups = list(getattr(plano, "campos_setup", []) or [])
+    nomes = [f[0] for f in feixes] + [c.nome for c in setups]
+    if len(set(nomes)) != len(nomes):
+        raise ValueError("Nomes de feixe repetidos na exportação")
+    feixes = feixes + [(c.nome, c, 0.0, [(c.jaw_x, c.jaw_y, c.mlc_a, c.mlc_b, 1.0)], []) for c in setups]
 
     def posicoes(jx, jy, ma, mb):
         out = []
@@ -180,15 +203,17 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
                        LeafJawPositions=[float(v) for v in ma] + [float(v) for v in mb]))
         return Sequence(out)
 
-    for nb, (nome, c, mu, formas) in enumerate(feixes, start=1):
-        if mu < 0.1:
-            raise ValueError(f"{nome}: UM abaixo de 0,1")
-        rb = _ds(ReferencedBeamNumber=nb, BeamMeterset=round(mu, 1))
-        dfx = (ex.get("dose_feixe") or {}).get(nome)
-        if pref and not sem_imagem and dfx is not None:
-            rb.BeamDoseSpecificationPoint = [round(float(v), 1) for v in pref["xyz"]]
-            rb.BeamDose = round(float(dfx), 4)
-        fg.ReferencedBeamSequence.append(rb)
+    for nb, (nome, c, mu, formas, _membros) in enumerate(feixes, start=1):
+        e_setup = nb > fg.NumberOfBeams
+        if not e_setup:
+            if mu < 0.1:
+                raise ValueError(f"{nome}: UM abaixo de 0,1")
+            rb = _ds(ReferencedBeamNumber=nb, BeamMeterset=round(mu, 1))
+            dfx = (ex.get("dose_feixe") or {}).get(nome)
+            if pref and not sem_imagem and dfx is not None:
+                rb.BeamDoseSpecificationPoint = [round(float(v), 1) for v in pref["xyz"]]
+                rb.BeamDose = round(float(dfx), 4)
+            fg.ReferencedBeamSequence.append(rb)
         b = Dataset()
         bol = [x for x in plano.bolus if not x.get("campos") or c.nome in x["campos"] or (c.campo_pai or "") in x["campos"]]
         b.BeamNumber, b.BeamName = nb, nome[:16]
@@ -199,7 +224,8 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
         b.TreatmentMachineName = plano.nome_dicom_maquina
         b.PrimaryDosimeterUnit = "MU"
         b.SourceAxisDistance = float(sad_mm)
-        b.BeamType, b.RadiationType, b.TreatmentDeliveryType = "STATIC", "PHOTON", "TREATMENT"
+        b.BeamType, b.RadiationType = "STATIC", "PHOTON"
+        b.TreatmentDeliveryType = "SETUP" if e_setup else "TREATMENT"
         b.PrimaryFluenceModeSequence = Sequence([_ds(FluenceMode="STANDARD")])
         dist = ex.get("distancia_fonte_mm") or {}
 
@@ -247,6 +273,8 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
         cp0.CumulativeMetersetWeight = 0.0
 
         def refdose(w):
+            if e_setup:                                   # campo de localização: sem dose
+                return Sequence([])
             out = [_ds(ReferencedDoseReferenceNumber=1, CumulativeDoseReferenceCoefficient=round(w, 6))]
             if len(refs) > 1:
                 out.append(_ds(ReferencedDoseReferenceNumber=2, CumulativeDoseReferenceCoefficient=round(w, 6)))

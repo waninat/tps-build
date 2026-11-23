@@ -9,10 +9,33 @@ const E = {
   wl: { janela: 400, nivel: 40 },
   imgs: {}, sobre: {}, campoSel: null, bev: null, bevSeg: 0, drrImg: null,
   ocultas: new Set(), dvh: null, arrasto: null, token: null, usuario: null,
+  isoCfg: { niveis: [], ref: "rx", unidade: "pct" }, bevDes: { pts: [], mouse: null, livre: false },
 };
+try { const c = JSON.parse(localStorage.getItem("tps_iso") || "null"); if (c) E.isoCfg = c; } catch (e) { /* ok */ }
 try { E.token = sessionStorage.getItem("tps_token"); } catch (e) { /* sem storage */ }
 const ISO_CORES = { 30: "#3355ff", 50: "#00b7ff", 70: "#00e08a", 80: "#9be000", 90: "#ffe100", 95: "#ffae00",
                     100: "#ff7a00", 105: "#ff2d55", 107: "#ff00c8", 110: "#ffffff" };
+
+const PALETA_ISO = ["#3355ff", "#00b7ff", "#00e08a", "#9be000", "#ffe100", "#ffae00", "#ff7a00", "#ff2d55", "#ff00c8", "#ffffff"];
+function corIso(nivel) {
+  // cor pela fração da referência (100% = prescrição ou máximo): mesma cor para o mesmo % em Gy ou em %
+  const ref = E.isoRef, pct = ref && ref.unidade === "gy" ? nivel / ref.cem_gy * 100 : nivel;
+  if (ISO_CORES[Math.round(pct * 10) / 10]) return ISO_CORES[Math.round(pct * 10) / 10];
+  const marcos = [30, 50, 70, 80, 90, 95, 100, 105, 107, 110];
+  let k = marcos.findIndex(m => pct < m); if (k < 0) k = marcos.length - 1; else if (k > 0 && pct - marcos[k - 1] < marcos[k] - pct) k--;
+  return PALETA_ISO[k];
+}
+function lerNiveis(txt) {
+  // aceita "97 94 91", "97; 94", "97,94,91" e vírgula decimal ("97,5")
+  const out = [];
+  for (const tk of String(txt).trim().split(/[\s;]+/).filter(Boolean)) {
+    const p = tk.split(",");
+    if (p.length > 2 || (p.length === 2 && +p[1] >= 10)) p.forEach(x => x && out.push(+x));
+    else out.push(+tk.replace(",", "."));
+  }
+  if (out.some(v => !isFinite(v) || v <= 0)) throw new Error("Níveis inválidos: use números separados por espaço");
+  return out;
+}
 
 // ------------------------------------------------------------------ comunicação
 async function api(metodo, url, corpo, msg) {
@@ -108,6 +131,54 @@ function ligar() {
     $$(".aba").forEach(x => x.classList.toggle("ativa", x === b));
     $$(".painel-aba").forEach(p => p.classList.toggle("oculto", p.id !== "aba-" + b.dataset.aba));
   });
+  $$(".aba-d").forEach(b => b.onclick = () => {
+    $$(".aba-d").forEach(x => x.classList.toggle("ativa", x === b));
+    $$(".painel-d").forEach(p => p.classList.toggle("oculto", p.id !== "pd-" + b.dataset.abad));
+    if (b.dataset.abad === "aval") desenharDvh();
+  });
+  $("#plano-sel").onchange = () => tentar(async () => {
+    const r = await api("POST", `/api/${E.sid}/plano/trocar`, { rotulo: $("#plano-sel").value }, "Trocando de plano…");
+    E.campoSel = null; atualizar(r); preencherPrescricao(r);
+  });
+  $("#b-plano-copiar").onclick = () => tentar(async () => {
+    const v = await modal("Copiar plano", `<label>Rótulo da cópia<input name="rotulo" maxlength="16" value="${(E.resumo.plano.rotulo + "_2").slice(0, 16)}"></label>
+      <div class="pequeno-txt">A cópia é um rascunho com os mesmos campos, prescrição e opções (sem a aprovação).</div>`, { ok: "Copiar" });
+    if (!v) return;
+    const r = await api("POST", `/api/${E.sid}/plano/copiar`, { rotulo: v.rotulo }, "Copiando…");
+    atualizar(r); preencherPrescricao(r);
+  });
+  $("#b-plano-rem").onclick = () => tentar(async () => {
+    const rot = E.resumo.plano.rotulo;
+    if (!confirm(`Tirar o plano ${rot} desta sessão? (o arquivo salvo, se houver, continua)`)) return;
+    const r = await api("DELETE", `/api/${E.sid}/plano/${encodeURIComponent(rot)}`);
+    E.campoSel = null; atualizar(r); preencherPrescricao(r);
+  });
+  $("#o-fif-modo").onchange = () => $("#o-filtro").classList.toggle("oculto", $("#o-fif-modo").value !== "filtro");
+  $("#b-renorm").onclick = () => tentar(async () => {
+    const corpo = { so_normalizar: true, ...normalizacaoDoForm() };
+    atualizar(await api("POST", `/api/${E.sid}/calcular`, corpo, "Renormalizando…"));
+    aviso("Plano renormalizado (dose relativa igual, UM novas)", true);
+  });
+  $("#b-iso-cfg").onclick = () => tentar(configurarIsodoses);
+  const setupCampo = async (g, nome) => api("POST", `/api/${E.sid}/setup`, { nome: nome || "", gantry: g, x_cm: +$("#s-x").value,
+    y_cm: +$("#s-y").value, mesa: +$("#s-mesa").value });
+  $("#b-setup").onclick = () => tentar(async () => { atualizar(await setupCampo(+$("#s-gantry").value, $("#s-nome").value.trim())); $("#s-nome").value = ""; });
+  $("#b-setup-ap-lat").onclick = () => tentar(async () => {
+    const lat = await modal("Setup AP + lateral", `<label>Lateral<select name="g"><option value="90">90° (esquerda do paciente, HFS)</option>
+      <option value="270">270° (direita do paciente, HFS)</option></select></label>`, { ok: "Adicionar" });
+    if (!lat) return;
+    await setupCampo(0, "SETUP AP"); atualizar(await setupCampo(+lat.g, `SETUP LAT${lat.g === "90" ? "E" : "D"}`));
+  });
+  $("#b-setup-ortog").onclick = () => tentar(async () => {
+    let r; for (const [g, n] of [[0, "SETUP AP"], [90, "SETUP LATE"], [180, "SETUP PA"], [270, "SETUP LATD"]]) r = await setupCampo(g, n);
+    atualizar(r);
+  });
+  $("#bev-ferr").onchange = () => {
+    const f = $("#bev-ferr").value, des = f !== "editar";
+    $("#bev-enc").classList.toggle("oculto", !des);
+    $("#bev-dica").textContent = des ? "clique os vértices (duplo clique fecha) ou arraste à mão livre · Esc cancela" : "arraste a ponta da lâmina ou o jaw (Shift + arrastar: jaw sobre a lâmina)";
+    E.bevDes = { pts: [], mouse: null, livre: false }; desenharBev();
+  };
   $("#b-ct").onclick = () => tentar(async () => abrirCaso(await api("POST", "/api/caso/ct", { pasta: $("#ct-pasta").value.trim() }, "Lendo CT e estruturas…")));
   $("#ct-upload").onchange = (ev) => tentar(async () => {
     const fd = new FormData(); for (const f of ev.target.files) fd.append("arquivos", f, f.name);
@@ -211,15 +282,58 @@ function ligar() {
   iniciarContorno();
   const bc = $("#v-bev canvas");
   bc.addEventListener("mousedown", bevBaixo); bc.addEventListener("mousemove", bevMove);
+  bc.addEventListener("dblclick", bevDuplo);
   window.addEventListener("mouseup", bevSolta);
   document.addEventListener("keydown", (ev) => {
-    if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT") return;
+    if (ev.key === "Escape" && E.bevDes.pts.length) { E.bevDes = { pts: [], mouse: null, livre: false }; desenharBev(); }
+    if (ev.target.tagName === "INPUT" || ev.target.tagName === "SELECT" || ev.target.tagName === "TEXTAREA") return;
     if (ev.key === "ArrowUp" || ev.key === "PageUp") mudarCorte("axial", -1);
     if (ev.key === "ArrowDown" || ev.key === "PageDown") mudarCorte("axial", 1);
   });
 }
 
-function mostrarPonto() { $("#p-ponto-linha").classList.toggle("oculto", $("#p-metodo").value !== "ponto"); }
+function mostrarPonto() {
+  const m = $("#p-metodo").value;
+  $("#p-ponto-linha").classList.toggle("oculto", m !== "ponto");
+  $("#p-cob-linha").classList.toggle("oculto", m !== "cobertura");
+  $("#p-iso-linha").classList.toggle("oculto", m === "um_fixas" || m === "cobertura");
+}
+function normalizacaoDoForm() {
+  const metodo = $("#p-metodo").value, o = { metodo };
+  if (metodo === "ponto") o.ponto = [+$("#p-px").value, +$("#p-py").value, +$("#p-pz").value];
+  if (metodo === "cobertura") { o.cobertura_volume_pct = +$("#p-cobv").value; o.cobertura_dose_pct = +$("#p-cobd").value; o.isodose_pct = 100; }
+  else if (metodo !== "um_fixas") o.isodose_pct = +$("#p-isopct").value || 100;
+  return o;
+}
+function preencherPrescricao(r) {
+  const p = r.plano; if (!p) return;
+  const rx = p.prescricao;
+  $("#p-rotulo").value = p.rotulo; $("#p-dose").value = rx.dose_total_gy; $("#p-fx").value = rx.fracoes;
+  if (rx.estrutura_alvo) $("#p-alvo").value = rx.estrutura_alvo;
+  $("#p-metodo").value = rx.metodo; $("#p-isopct").value = rx.isodose_pct || 100;
+  if (rx.cobertura_volume_pct) $("#p-cobv").value = rx.cobertura_volume_pct;
+  if (rx.cobertura_dose_pct) $("#p-cobd").value = rx.cobertura_dose_pct;
+  if (rx.ponto_mm) { $("#p-px").value = rx.ponto_mm[0]; $("#p-py").value = rx.ponto_mm[1]; $("#p-pz").value = rx.ponto_mm[2]; }
+  mostrarPonto();
+}
+async function configurarIsodoses() {
+  const c = E.isoCfg, ref = E.isoRef;
+  const v = await modal("Isodoses", `
+    <label>Curvas (vazio = padrão 30 50 70 80 90 95 100 105 107 110 %)<input name="niveis" value="${(c.niveis || []).join(" ")}"
+      placeholder="ex.: 95 100 105  ou em Gy: 45 50 52.5"></label>
+    <div class="linha2">
+      <label>100% é<select name="ref"><option value="rx" ${c.ref !== "max" ? "selected" : ""}>a prescrição</option>
+        <option value="max" ${c.ref === "max" ? "selected" : ""}>o máximo do plano</option></select></label>
+      <label>Mostrar em<select name="unidade"><option value="pct" ${c.unidade !== "gy" ? "selected" : ""}>% (relativo)</option>
+        <option value="gy" ${c.unidade === "gy" ? "selected" : ""}>Gy (absoluto, dose total)</option></select></label>
+    </div>
+    <div class="pequeno-txt">O ponto de dose máxima do plano aparece sempre (▲) com o valor na legenda.${ref ? ` Máximo atual: ${f1(ref.dmax_gy, 2)} Gy
+      (${f1(ref.dmax_gy / ref.rx_gy * 100, 1)}% da prescrição).` : ""}</div>`, { ok: "Aplicar" });
+  if (!v) return;
+  E.isoCfg = { niveis: v.niveis.trim() ? lerNiveis(v.niveis) : [], ref: v.ref, unidade: v.unidade };
+  try { localStorage.setItem("tps_iso", JSON.stringify(E.isoCfg)); } catch (e) { /* ok */ }
+  E.sobre = {}; carregarSobre();
+}
 
 // ------------------------------------------------------------------ caso e plano
 async function abrirCaso(r) {
@@ -229,15 +343,24 @@ async function abrirCaso(r) {
   if (r.tipo === "fantoma") { $("#p-metodo").value = "ponto"; mostrarPonto(); }
   if (!r.maquina) atualizar(await api("POST", `/api/${E.sid}/maquina`, { id: $("#maquina").value }));
   else atualizar(r);
+  preencherPrescricao(E.resumo);
   if (r.isocentro) irPara(r.isocentro);
   carregarCortes();
 }
 
 async function criarPlano() {
-  const metodo = $("#p-metodo").value;
+  const n = normalizacaoDoForm();
+  if (E.resumo.plano && E.resumo.plano.rotulo === $("#p-rotulo").value.trim()) {
+    const v = await modal("Novo plano nesta TC", `<label>Rótulo do novo plano<input name="rotulo" maxlength="16" value=""></label>
+      <div class="pequeno-txt">O plano ${E.resumo.plano.rotulo} continua na sessão; troque entre eles no seletor do topo.</div>`, { ok: "Criar" });
+    if (!v || !v.rotulo.trim()) return;
+    $("#p-rotulo").value = v.rotulo.trim();
+  }
+  E.campoSel = null;
   atualizar(await api("POST", `/api/${E.sid}/plano`, {
     rotulo: $("#p-rotulo").value, dose_total: +$("#p-dose").value, fracoes: +$("#p-fx").value,
-    alvo: $("#p-alvo").value, metodo, ponto: metodo === "ponto" ? [+$("#p-px").value, +$("#p-py").value, +$("#p-pz").value] : null,
+    alvo: $("#p-alvo").value, metodo: n.metodo, ponto: n.ponto || null, isodose: n.isodose_pct || 100,
+    cobertura_volume_pct: n.cobertura_volume_pct, cobertura_dose_pct: n.cobertura_dose_pct,
   }));
   if (E.resumo.isocentro) irPara(E.resumo.isocentro);
 }
@@ -277,7 +400,21 @@ function atualizar(r) {
   // estados dos botões
   const temPlano = !!p, aprovado = p && p.estado === "APROVADO";
   $("#b-plano").disabled = !E.sid;
-  $("#b-plano").textContent = temPlano ? "Recriar plano (apaga os campos)" : "Criar plano";
+  $("#b-plano").textContent = temPlano ? "Novo plano" : "Criar plano";
+  const ps = r.planos_sessao || [];
+  $("#planos-sessao").classList.toggle("oculto", !ps.length);
+  $("#plano-sel").innerHTML = ps.map(q => `<option value="${q.rotulo}" ${q.atual ? "selected" : ""}>${q.rotulo} · ${q.estado.toLowerCase()} · ${q.campos} campo(s)${q.dose ? "" : " · sem dose"}</option>`).join("");
+  $("#b-plano-copiar").disabled = !temPlano; $("#b-plano-rem").disabled = !temPlano || aprovado;
+  $("#b-renorm").disabled = !temPlano || aprovado || !r.dose_atualizada;
+  const setup = (p && p.campos_setup) || [];
+  $("#lista-setup").innerHTML = setup.map(c => `<li>${c.nome} · G${c.gantry.toFixed(0)} M${c.mesa.toFixed(0)} · ${f1((c.jaw_x ? c.jaw_x[1] - c.jaw_x[0] : c.mlc_b[20] - c.mlc_a[20]) / 10, 0)}×${f1((c.jaw_y[1] - c.jaw_y[0]) / 10, 0)} cm
+    ${aprovado ? "" : `<button class="pequeno" data-rem-setup="${c.nome}">×</button>`}</li>`).join("");
+  $$("[data-rem-setup]").forEach(b => b.onclick = () => tentar(async () => atualizar(await api("DELETE", `/api/${E.sid}/setup/${encodeURIComponent(b.dataset.remSetup)}`))));
+  $$("#sec-setup button").forEach(b => { if (!b.dataset.remSetup) b.disabled = !temPlano || aprovado; });
+  { const sel = new Set(Array.from($("#o-fil-campos").selectedOptions).map(o => o.value));
+    const base = p ? p.campos.filter(c => !c.campo_pai) : [];
+    if (!sel.size) base.filter(c => [90, 270].includes(Math.round(c.gantry) % 360)).forEach(c => sel.add(c.nome));
+    $("#o-fil-campos").innerHTML = base.map(c => `<option ${sel.has(c.nome) ? "selected" : ""}>${c.nome}</option>`).join(""); }
   $("#form-campo").disabled = !temPlano || aprovado;
   $("#b-iso").disabled = !temPlano || aprovado;
   $("#b-calc").disabled = !temPlano || aprovado || !p.campos.length;
@@ -291,9 +428,10 @@ function atualizar(r) {
   $("#lista-planos-dicom").innerHTML = pd.map(q => `<li><b>${q.rotulo}</b> · ${q.campos} campo(s) · ${q.maquina} · ${q.fabricante}
     ${q.dose ? "· com dose" : ""} <button class="pequeno" data-imp="${q.arquivo}">importar</button></li>`).join("");
   $$("[data-imp]").forEach(b => b.onclick = () => tentar(async () => {
-    if (temPlano && !confirm("Importar substitui o plano atual desta sessão (salve-o antes, se precisar). Continuar?")) return;
+
     const r2 = await api("POST", `/api/${E.sid}/importar_plano`, { arquivo: b.dataset.imp }, "Importando o plano…");
-    atualizar(r2); $("#p-metodo").value = "um_fixas"; mostrarPonto();
+    atualizar(r2); preencherPrescricao(r2);
+    aviso("Plano importado como mais um plano desta TC (o anterior continua no seletor do topo)", true);
     if (r2.isocentro) irPara(r2.isocentro);
   }));
   if (p && p.prescricao && p.prescricao.metodo === "um_fixas") $("#p-metodo").value = "um_fixas";
@@ -319,9 +457,10 @@ function atualizar(r) {
   doseCruz();
   listarCampos(); tabelas();
   $("#avisos").innerHTML = (r.avisos || []).map(a => `<li>${a}</li>`).join("");
+  $("#n-avisos").textContent = (r.avisos || []).length || "";
   $("#log").innerHTML = (r.log || []).slice().reverse().map(a => `<li>${a}</li>`).join("");
   // BEV
-  const nomes = p ? p.campos.map(c => c.nome) : [];
+  const nomes = p ? [...p.campos.map(c => c.nome), ...(p.campos_setup || []).map(c => c.nome)] : [];
   const bsel = $("#bev-campo").value;
   $("#bev-campo").innerHTML = nomes.map(n => `<option>${n}</option>`).join("");
   if (nomes.length) {
@@ -396,14 +535,18 @@ async function arranjo(tipo) {
 
 async function calcular() {
   const comp = $("#o-comp").checked ? { niveis: +$("#o-niveis").value, um_min: +$("#o-ummin").value } : null;
-  const corpo = { otimizar_pesos: $("#o-pesos").checked, field_in_field: $("#o-fif").checked, compensador: comp,
-                  metodo: $("#p-metodo").value };
-  if (corpo.metodo === "ponto") corpo.ponto = [+$("#p-px").value, +$("#p-py").value, +$("#p-pz").value];
+  const modo = $("#o-fif-modo").value;
+  let fif = false;
+  if (modo === "otimizado") fif = true;
+  if (modo === "filtro") fif = { modo: "filtro", niveis: lerNiveis($("#o-fil-niveis").value), peso_pct: +$("#o-fil-peso").value,
+    campos: Array.from($("#o-fil-campos").selectedOptions).map(o => o.value) };
+  const corpo = { otimizar_pesos: $("#o-pesos").checked, field_in_field: fif, compensador: comp, ...normalizacaoDoForm() };
   const r = await api("POST", `/api/${E.sid}/calcular`, corpo, "Calculando a dose (collapsed cone)…");
   atualizar(r);
   const i = r.resultado.info || {};
   if (i.compensador) aviso(`Compensador: HI ${i.compensador.hi_antes.toFixed(3)} → ${i.compensador.hi_depois.toFixed(3)}`, true);
-  if (i.field_in_field) aviso(`Field-in-field: HI ${i.field_in_field.hi_antes.toFixed(3)} → ${i.field_in_field.hi_depois.toFixed(3)}`, true);
+  if (i.field_in_field) aviso(`Field-in-field${i.field_in_field.modo === "filtro" ? " (filtro)" : ""}: HI ${i.field_in_field.hi_antes.toFixed(3)} → ${i.field_in_field.hi_depois.toFixed(3)}` +
+    (i.field_in_field.dmax_depois ? ` · Dmax ${f1(i.field_in_field.dmax_antes, 1)}% → ${f1(i.field_in_field.dmax_depois, 1)}%` : ""), true);
 }
 
 async function exportar() {
@@ -489,7 +632,8 @@ async function carregarSobreVista(vista) {
   const i = E.idx[vista], chave = `${vista}:${i}`;
   if (E.sobre[chave]) return desenharCorte(vista);
   E.sobre[chave] = "carregando";
-  try { E.sobre[chave] = await api("GET", `/api/${E.sid}/sobreposicao/${vista}/${i}`); }
+  const c = E.isoCfg, q = `?ref=${c.ref}&unidade=${c.unidade}&niveis=${encodeURIComponent((c.niveis || []).join(","))}`;
+  try { E.sobre[chave] = await api("GET", `/api/${E.sid}/sobreposicao/${vista}/${i}${q}`); if (E.sobre[chave].iso_ref) E.isoRef = E.sobre[chave].iso_ref; }
   catch (e) { delete E.sobre[chave]; return; }
   desenharCorte(vista);
 }
@@ -564,7 +708,7 @@ function desenharCorte(vista) {
     }
     if ($("#v-axial .t-iso").checked) {
       g.lineWidth = 1.2;
-      for (const iso of sob.isodoses) { g.strokeStyle = ISO_CORES[iso.nivel] || "#fff"; iso.linhas.forEach(l => linha(l, false)); }
+      for (const iso of sob.isodoses) { g.strokeStyle = corIso(iso.nivel); iso.linhas.forEach(l => linha(l, false)); }
     }
     if (vista === "axial") {
       g.setLineDash([5, 4]);
@@ -595,10 +739,27 @@ function desenharCorte(vista) {
     g.moveTo(x, 0); g.lineTo(x, h); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
   }
   if (vista === "axial") desenharContornoPreview(g, T);
-  // legenda de isodoses
-  if (vista === "axial" && sob && sob.isodoses && sob.isodoses.length && $("#v-axial .t-iso").checked) {
+  // ponto de dose máxima do plano (sempre que estiver neste corte)
+  const res = E.resumo.resultado, mx = E.resumo.dose_atualizada && res && res.dmax_xyz;
+  if (mx) {
+    const V = VISTAS[vista], k = { x: 0, y: 1, z: 2 }, ax = EIXO_IDX[vista];
+    if (Math.abs(mx[k[ax]] - posDoIdx(vista, i)) <= Math.max(eixo(ax).d, 2.5) * 0.75) {
+      const [x, y] = T.px(mx[k[V.h]], mx[k[V.v]]);
+      g.fillStyle = "#ff00c8"; g.strokeStyle = "#000"; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(x, y - 7); g.lineTo(x + 6, y + 4); g.lineTo(x - 6, y + 4); g.closePath(); g.fill(); g.stroke();
+    }
+  }
+  // legenda de isodoses (curvas escolhidas + máximo do plano)
+  if (vista === "axial" && sob && sob.iso_ref && $("#v-axial .t-iso").checked) {
+    const ir = sob.iso_ref, gy = ir.unidade === "gy";
     g.font = "11px system-ui"; let yy = 16;
-    for (const n of Object.keys(ISO_CORES).map(Number).reverse()) { g.fillStyle = ISO_CORES[n]; g.fillText(`${n}%`, w - 40, yy); yy += 13; }
+    const txtMax = gy ? `máx ${f1(ir.dmax_gy, 2)} Gy` : `máx ${f1(ir.dmax_gy / ir.cem_gy * 100, 1)}%`;
+    g.fillStyle = "#ff00c8"; g.textAlign = "right"; g.fillText("▲ " + txtMax, w - 6, yy); yy += 14;
+    for (const n of ir.niveis.slice().reverse()) {
+      g.fillStyle = corIso(n); g.fillText(gy ? `${+n.toFixed(2)} Gy` : `${+n.toFixed(1)}%`, w - 6, yy); yy += 13;
+    }
+    g.fillStyle = "#8b95a3"; g.fillText(ir.referencia === "max" ? `100% = máx (${f1(ir.cem_gy, 2)} Gy)` : `100% = ${f1(ir.rx_gy, 2)} Gy`, w - 6, yy + 2);
+    g.textAlign = "left";
   }
 }
 
@@ -682,37 +843,127 @@ function desenharBev() {
   g.fillText(`${c.nome} · G${c.gantry.toFixed(0)} C${c.colimador.toFixed(0)} M${c.mesa.toFixed(0)} · ${c.mu != null ? c.mu.toFixed(1) + " UM" : "UM —"}` +
     (F.peso ? ` · segmento ${E.bevSeg}/${B.segmentos.length} (${(F.peso * 100).toFixed(0)}%)` : ""), 8, 14);
   g.fillText("A ←   → B", 8, h - 8);
+  const D = E.bevDes;
+  if (D.pts.length) {
+    g.strokeStyle = "#ffd84d"; g.fillStyle = "rgba(255,216,77,.12)"; g.lineWidth = 1.5; g.setLineDash([4, 3]);
+    g.beginPath(); D.pts.forEach(([u, v], k) => { const [x, y] = T.px(u, v); k ? g.lineTo(x, y) : g.moveTo(x, y); });
+    if (D.mouse && !D.livre) { const [x, y] = T.px(...D.mouse); g.lineTo(x, y); }
+    g.closePath(); g.fill(); g.stroke(); g.setLineDash([]);
+  }
+  if (E.arrasto && E.arrasto.pos !== undefined) {
+    g.fillStyle = "#ffd84d";
+    g.fillText(E.arrasto.jaw ? `${E.arrasto.jaw.toUpperCase()} ${(E.arrasto.pos / 10).toFixed(2)} cm` :
+      `par ${E.arrasto.par + 1} ${E.arrasto.banco.toUpperCase()} ${(E.arrasto.pos / 10).toFixed(2)} cm`, 8, 28);
+  }
   $("#bev-seg-t").textContent = E.bevSeg ? `${E.bevSeg}/${B.segmentos.length}` : "envelope";
 }
 
-function bevBaixo(ev) {
-  if (!E.bev || E.bevSeg > 0 || (E.resumo.plano && E.resumo.plano.estado !== "RASCUNHO")) return;
+function bevPos(ev) {
   const cv = $("#v-bev canvas"), r = cv.getBoundingClientRect(), T = bevT(r.width, r.height);
-  const [u, v] = T.mm(ev.clientX - r.left, ev.clientY - r.top), lim = E.bev.limites, c = E.bev.campo;
+  return { T, mm: T.mm(ev.clientX - r.left, ev.clientY - r.top) };
+}
+function bevEditavel() { return E.bev && E.bevSeg === 0 && E.resumo.plano && E.resumo.plano.estado === "RASCUNHO"; }
+// cópia em JS de ajuste_mlc.acomodar_lamina (prévia durante o arrasto; o servidor refaz e confere a mecânica)
+function acomodarLamina(a, b, par, banco, pos) {
+  const B = E.bev, g = B.gap || 0, n = a.length, lmax = B.lamina_max || 200, ot = B.overtravel || 125;
+  a = a.slice(); b = b.slice();
+  if (banco === "a") { a[par] = Math.max(-lmax, Math.min(pos, ot, lmax - g)); if (b[par] - a[par] < g) b[par] = a[par] + g; }
+  else { b[par] = Math.min(lmax, Math.max(pos, -ot, -lmax + g)); if (b[par] - a[par] < g) a[par] = b[par] - g; }
+  if (B.interdigitacao === false) {
+    const fila = [par]; let k = 0;
+    while (fila.length && k++ < 8 * n) {
+      const i = fila.shift();
+      for (const j of [i - 1, i + 1]) {
+        if (j < 0 || j >= n) continue;
+        const fechado = b[j] - a[j] <= g + 1e-6; let mudou = false;
+        if (a[i] > b[j] - g + 1e-9) { b[j] = a[i] + g; if (fechado) a[j] = b[j] - g; mudou = true; }
+        if (b[i] < a[j] + g - 1e-9) { a[j] = b[i] - g; if (fechado) b[j] = a[j] + g; mudou = true; }
+        if (mudou) { if (b[j] - a[j] < g) b[j] = a[j] + g; fila.push(j); }
+      }
+    }
+  }
+  return [a, b];
+}
+function bevBaixo(ev) {
+  if (!bevEditavel()) return;
+  const { T, mm: [u, v] } = bevPos(ev), c = E.bev.campo, lim = E.bev.limites, tol = 6 / T.s;
+  const ferr = $("#bev-ferr").value;
+  if (ferr !== "editar") {                                  // desenho: vértice ou início de traço à mão livre
+    E.bevDes.pts.push([u, v]); E.bevDes.baixo = [u, v]; E.bevDes.livre = false; ev.preventDefault(); desenharBev(); return;
+  }
+  // jaws primeiro (linha a até 6 px)
+  const jaws = [["y1", c.jaw_y[0], Math.abs(v - c.jaw_y[0])], ["y2", c.jaw_y[1], Math.abs(v - c.jaw_y[1])]];
+  if (c.jaw_x) jaws.push(["x1", c.jaw_x[0], Math.abs(u - c.jaw_x[0])], ["x2", c.jaw_x[1], Math.abs(u - c.jaw_x[1])]);
   let par = -1; for (let i = 0; i < lim.length - 1; i++) if (v >= lim[i] && v < lim[i + 1]) par = i;
-  if (par < 0) return;
-  const tol = 6 / T.s, da = Math.abs(u - c.mlc_a[par]), db = Math.abs(u - c.mlc_b[par]);
-  if (Math.min(da, db) > tol) return;
-  E.arrasto = { par, banco: da < db ? "a" : "b", a: c.mlc_a.slice(), b: c.mlc_b.slice() };
+  const da = par >= 0 ? Math.abs(u - c.mlc_a[par]) : Infinity, db = par >= 0 ? Math.abs(u - c.mlc_b[par]) : Infinity;
+  const jmin = jaws.reduce((m, j) => j[2] < m[2] ? j : m, ["", 0, Infinity]);
+  // a lâmina tem prioridade (o jaw X do MLCi costuma coincidir com a lâmina mais aberta); Shift pega o jaw
+  if (jmin[2] <= tol && (ev.shiftKey || Math.min(da, db) > tol)) {
+    E.arrasto = { jaw: jmin[0], jy: c.jaw_y.slice(), jx: c.jaw_x ? c.jaw_x.slice() : null, a: c.mlc_a.slice(), b: c.mlc_b.slice() };
+  } else {
+    if (par < 0 || Math.min(da, db) > tol) return;
+    // par fechado: o lado é o do clique em relação ao gap
+    const banco = Math.abs(da - db) < 1e-6 ? (u < c.mlc_a[par] ? "a" : "b") : (da < db ? "a" : "b");
+    E.arrasto = { par, banco, a: c.mlc_a.slice(), b: c.mlc_b.slice() };
+  }
   ev.preventDefault();
 }
 function bevMove(ev) {
+  if (!E.bev) return;
+  const { mm: [u, v] } = bevPos(ev);
+  if ($("#bev-ferr").value !== "editar") {
+    const D = E.bevDes; D.mouse = [u, v];
+    if (D.baixo && ev.buttons & 1) {                        // arrastando: mão livre
+      const ult = D.pts[D.pts.length - 1];
+      if (Math.hypot(u - ult[0], v - ult[1]) > 1.5) { D.pts.push([u, v]); D.livre = true; }
+    }
+    desenharBev(); return;
+  }
   if (!E.arrasto) return;
-  const cv = $("#v-bev canvas"), r = cv.getBoundingClientRect(), T = bevT(r.width, r.height);
-  const [u] = T.mm(ev.clientX - r.left, ev.clientY - r.top), A = E.arrasto, gap = E.bev.gap;
-  const uu = Math.round(u * 2) / 2;
-  if (A.banco === "a") E.bev.campo.mlc_a[A.par] = Math.min(uu, E.bev.campo.mlc_b[A.par] - gap);
-  else E.bev.campo.mlc_b[A.par] = Math.max(uu, E.bev.campo.mlc_a[A.par] + gap);
+  const A = E.arrasto, c = E.bev.campo, uu = Math.round(u * 2) / 2, vv = Math.round(v * 2) / 2;
+  if (A.jaw) {
+    if (A.jaw[0] === "y") { const k = A.jaw === "y1" ? 0 : 1; c.jaw_y = A.jy.slice(); c.jaw_y[k] = vv; }
+    else { const k = A.jaw === "x1" ? 0 : 1; c.jaw_x = A.jx.slice(); c.jaw_x[k] = uu; }
+    A.pos = A.jaw[0] === "y" ? vv : uu;
+  } else {
+    [c.mlc_a, c.mlc_b] = acomodarLamina(A.a, A.b, A.par, A.banco, uu); A.pos = uu;
+  }
   desenharBev();
 }
 function bevSolta() {
+  if ($("#bev-ferr") && $("#bev-ferr").value !== "editar") {
+    const D = E.bevDes; const livre = D.livre; D.baixo = null;
+    if (livre && D.pts.length >= 3) enviarDesenho();
+    return;
+  }
   if (!E.arrasto) return;
   const A = E.arrasto; E.arrasto = null;
   const c = E.bev.campo;
+  if (A.pos === undefined) { desenharBev(); return; }
   tentar(async () => {
-    try { atualizar(await api("POST", `/api/${E.sid}/campo/${encodeURIComponent(c.nome)}/laminas`, { mlc_a: c.mlc_a, mlc_b: c.mlc_b })); }
-    catch (e) { c.mlc_a = A.a; c.mlc_b = A.b; desenharBev(); throw e; }
+    const corpo = A.jaw ? { jaw: A.jaw, pos: A.pos } : { par: A.par, banco: A.banco, pos: A.pos };
+    try { atualizar(await api("POST", `/api/${E.sid}/campo/${encodeURIComponent(c.nome)}/lamina`, corpo)); }
+    catch (e) { c.mlc_a = A.a; c.mlc_b = A.b; if (A.jy) c.jaw_y = A.jy; if (A.jx) c.jaw_x = A.jx; desenharBev(); throw e; }
   });
+}
+function bevDuplo(ev) {
+  if ($("#bev-ferr").value === "editar" || !E.bevDes.pts.length) return;
+  ev.preventDefault();
+  // o duplo clique acrescenta 2 vértices repetidos: tira-os
+  const P = E.bevDes.pts;
+  while (P.length > 1 && Math.hypot(P[P.length - 1][0] - P[P.length - 2][0], P[P.length - 1][1] - P[P.length - 2][1]) < 1) P.pop();
+  if (P.length >= 3) enviarDesenho();
+}
+function enviarDesenho() {
+  const pts = E.bevDes.pts.map(([u, v]) => [Math.round(u * 10) / 10, Math.round(v * 10) / 10]);
+  E.bevDes = { pts: [], mouse: null, livre: false };
+  const nome = E.bev.campo.nome;
+  tentar(async () => {
+    const r = await api("POST", `/api/${E.sid}/campo/${encodeURIComponent(nome)}/desenho`,
+      { pontos: pts, modo: $("#bev-ferr").value, encontro: $("#bev-enc").value }, "Ajustando as lâminas ao desenho…");
+    atualizar(r); (r.desenho_avisos || []).forEach(a => aviso(a, true));
+  });
+  desenharBev();
 }
 
 // ------------------------------------------------------------------ DVH

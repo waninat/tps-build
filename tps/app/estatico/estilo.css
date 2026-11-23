@@ -80,7 +80,7 @@ th:first-child, td:first-child { text-align: left; }
 tr.sub td:first-child { padding-left: 14px; color: var(--fraco); }
 .ok { color: var(--ok); } .falha { color: var(--perigo); } .avisotxt { color: var(--aviso); }
 .pequeno-txt { font-size: 11px; color: var(--fraco); }
-#lista-estruturas { list-style: none; padding: 0; margin: 0; max-height: 170px; overflow-y: auto; }
+#lista-estruturas { list-style: none; padding: 0; margin: 0; max-height: 42vh; overflow-y: auto; }
 #lista-estruturas li { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
 #lista-estruturas input { width: auto; margin: 0; }
 #lista-estruturas .cor { width: 11px; height: 11px; border-radius: 2px; flex: none; }
@@ -135,3 +135,29 @@ tr.sub td:first-child { padding-left: 14px; color: var(--fraco); }
 #k-ferr { flex-wrap: wrap; gap: 6px; }
 .caixa-import { border: 1px dashed #3a4656; border-radius: 6px; padding: 6px 8px; margin-top: 8px; }
 .caixa-import ul { margin: 4px 0 0; padding-left: 16px; }
+
+/* planos da sessão (topo) */
+#planos-sessao { display: flex; gap: 4px; align-items: center; }
+#planos-sessao select { width: auto; min-width: 150px; padding: 2px 6px; font-size: 12px; }
+/* painel direito em abas */
+.abas-dir { position: sticky; top: -8px; background: var(--painel); padding: 4px 0 6px; z-index: 2;
+  border-bottom: 1px solid var(--borda); margin: -8px 0 6px; }
+.aba-d { flex: 1; font-size: 11.5px; padding: 5px 2px; border-radius: 4px 4px 0 0; }
+.aba-d.ativa { border-color: var(--acento); color: var(--acento); background: #10161d; }
+#n-avisos:not(:empty) { background: #5a4a1e; color: var(--aviso); border-radius: 8px; padding: 0 5px; font-size: 10px; }
+#lista-setup { padding-left: 16px; margin: 4px 0; }
+#b-renorm { width: 100%; margin-top: 6px; }
+#v-bev .vista-topo select { max-width: 170px; }
+.legenda-iso { font-size: 11px; }
+textarea { background: #0c0f13; color: var(--texto); border: 1px solid var(--borda); border-radius: 4px;
+  padding: 4px 6px; font: inherit; width: 100%; resize: vertical; }
+details > summary:hover { color: var(--acento); }
+#sec-calc .caixa-import label { margin-top: 3px; }
+#topo { gap: 8px; }
+#topo > * { white-space: nowrap; flex: none; }
+#topo .espaco { flex: 1; }
+#topo .caso { max-width: 240px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+#topo .selo { max-width: 260px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+#topo .usuario { max-width: 140px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+#dvh-fixo { border-top: 1px solid var(--borda); margin-top: 10px; }
+#dvh-fixo h3 { margin-top: 8px; }

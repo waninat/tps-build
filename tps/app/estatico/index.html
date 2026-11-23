@@ -11,9 +11,14 @@
   <div class="marca">TPS <span id="versao"></span></div>
   <div id="caso-nome" class="caso">Nenhum caso aberto</div>
   <div id="estado" class="selo">—</div>
+  <div id="planos-sessao" class="oculto" title="planos desta TC (cada um com seus campos, dose e aprovação)">
+    <select id="plano-sel"></select>
+    <button id="b-plano-copiar" class="pequeno" title="cria uma cópia do plano atual (rascunho) para testar alternativas">Copiar</button>
+    <button id="b-plano-rem" class="pequeno" title="tira o plano desta sessão (o arquivo salvo continua)">Remover</button>
+  </div>
   <div class="espaco"></div>
-  <span class="nao-clinico">Em desenvolvimento — não usar em paciente</span>
-  <button id="b-salvar" disabled>Salvar plano</button>
+  <span class="nao-clinico" title="Em desenvolvimento — não usar em paciente">não clínico</span>
+  <button id="b-salvar" disabled title="salva todos os planos desta TC">Salvar</button>
   <button id="b-relatorio" disabled>Relatório PDF</button>
   <button id="b-checkfilm" disabled title="DRR de cada campo com MLC e escala, para comparar com o filme de verificação">Check film</button>
   <button id="b-auditoria" title="Trilha de auditoria e usuários">Auditoria</button>
@@ -69,14 +74,23 @@
         <option value="media_alvo">Média do alvo = 100%</option>
         <option value="isocentro">Isocentro = 100%</option>
         <option value="ponto">Ponto (x, y, z)</option>
+        <option value="maximo">Máximo do plano = 100%</option>
+        <option value="cobertura">Cobertura: x% do alvo recebe y% da dose</option>
         <option value="um_fixas">UM fixas (plano importado)</option>
       </select></label>
+    <div class="linha2" id="p-cob-linha">
+      <label>Volume do alvo (%)<input id="p-cobv" type="number" value="95" min="1" max="100" step="0.5"></label>
+      <label>recebe (% da prescrição)<input id="p-cobd" type="number" value="100" min="50" max="120" step="0.5"></label>
+    </div>
+    <label id="p-iso-linha" title="prescrever na isodose de x%: 100 = a normalização vale a prescrição; 95 = a prescrição fica na curva de 95% (o ponto de normalização recebe 105,3%)">
+      Prescrever na isodose de (%)<input id="p-isopct" type="number" value="100" min="50" max="120" step="0.5"></label>
     <div class="linha3" id="p-ponto-linha">
       <label>x<input id="p-px" type="number" value="0"></label>
       <label>y<input id="p-py" type="number" value="0"></label>
       <label>z<input id="p-pz" type="number" value="0"></label>
     </div>
     <button id="b-plano" class="primario" disabled>Criar plano</button>
+    <div class="pequeno-txt">Para outro plano na mesma TC, troque o rótulo e clique em <b>Novo plano</b>; o plano atual continua na sessão (seletor no topo).</div>
     <div id="planos-dicom" class="oculto caixa-import">
       <div class="pequeno-txt"><b>Planos DICOM nesta pasta</b> — importe para editar/recalcular no TPS (a dose
         do outro sistema fica para comparação), ou crie um plano novo acima.</div>
@@ -102,6 +116,24 @@
       </div>
       <button id="b-bolus" class="pequeno">Criar bolus nos campos</button>
       <ul id="lista-bolus" class="pequeno-txt"></ul>
+    </details>
+    <details class="sub" id="sec-setup"><summary>Campos de localização (setup)</summary>
+      <div class="pequeno-txt">Sem dose e sem UM; vão no RTPLAN como SETUP (imagem portal/kV no Mosaiq) e no check film.</div>
+      <div class="linha3">
+        <label>Nome<input id="s-nome" placeholder="auto" maxlength="16"></label>
+        <label>Gantry<input id="s-gantry" type="number" value="0"></label>
+        <label>Mesa<input id="s-mesa" type="number" value="0"></label>
+      </div>
+      <div class="linha2">
+        <label>X (cm)<input id="s-x" type="number" value="20" step="1" min="2" max="40"></label>
+        <label>Y (cm)<input id="s-y" type="number" value="20" step="1" min="2" max="40"></label>
+      </div>
+      <div class="botoes">
+        <button id="b-setup" class="pequeno">Adicionar</button>
+        <button id="b-setup-ap-lat" class="pequeno" title="AP (0°) e lateral (90° ou 270°)">AP + LAT</button>
+        <button id="b-setup-ortog" class="pequeno" title="0°, 90°, 180° e 270°">4 ortogonais</button>
+      </div>
+      <ul id="lista-setup" class="pequeno-txt"></ul>
     </details>
     <fieldset id="form-campo" disabled>
       <div class="linha3">
@@ -153,13 +185,28 @@
 
   <details open id="sec-calc"><summary>4 · Cálculo</summary>
     <label class="check"><input id="o-pesos" type="checkbox"> otimizar pesos dos campos</label>
-    <label class="check"><input id="o-fif" type="checkbox"> field-in-field automático</label>
+    <label>Field-in-field
+      <select id="o-fif-modo">
+        <option value="">não</option>
+        <option value="otimizado">automático (otimiza subcampos)</option>
+        <option value="filtro">filtro (subcampos nas isodoses quentes)</option>
+      </select></label>
+    <div id="o-filtro" class="oculto caixa-import">
+      <div class="pequeno-txt">Normaliza com a prescrição no máximo; para cada nível, um subcampo que bloqueia a região
+        acima da isodose, com o peso que tira ≈ "peso %" da dose ali (dividido entre os campos escolhidos).</div>
+      <div class="linha2">
+        <label>Isodoses (%)<input id="o-fil-niveis" value="97 94 91 88" title="separe com espaço ou ponto-e-vírgula"></label>
+        <label>Peso por nível (%)<input id="o-fil-peso" type="number" value="3" step="0.5" min="0.5" max="10"></label>
+      </div>
+      <label>Campos com subcampos (vazio = todos)<select id="o-fil-campos" multiple size="3"></select></label>
+    </div>
     <label class="check"><input id="o-comp" type="checkbox"> compensador de fluência</label>
     <div class="linha2">
       <label>Níveis do compensador<input id="o-niveis" type="number" value="6" min="2" max="12"></label>
       <label>UM mín. por segmento<input id="o-ummin" type="number" value="2" step="0.5"></label>
     </div>
     <button id="b-calc" class="primario grande" disabled>Calcular dose</button>
+    <button id="b-renorm" disabled title="aplica a normalização escolhida em 2 · Prescrição sem recalcular a dose (mesma forma, outras UM)">Renormalizar (sem recalcular)</button>
   </details>
 
   <details id="sec-aprov"><summary>5 · Aprovação e exportação</summary>
@@ -192,6 +239,7 @@
     <div class="vista-topo"><b>Axial</b><span class="pos"></span>
       <select class="wl"><option value="400,40">Tecidos moles</option><option value="1500,-600">Pulmão</option><option value="2000,400">Osso</option></select>
       <label class="check"><input type="checkbox" class="t-iso" checked> isodoses</label>
+      <button id="b-iso-cfg" class="pequeno" title="quais isodoses, referência (prescrição ou máximo do plano) e % ou Gy">⚙</button>
       <label class="check" title="dose em cores sobre o CT, nos três cortes"><input type="checkbox" id="t-wash"> colorwash</label>
       <select id="wash-min" title="dose mínima mostrada no colorwash (% da prescrição)"><option>10</option><option selected>20</option><option>30</option><option>50</option><option>80</option><option>90</option><option>95</option></select>
     </div>
@@ -201,7 +249,16 @@
     <div class="vista-topo"><b>BEV</b><select id="bev-campo"></select>
       <label class="check"><input type="checkbox" id="t-drr"> DRR</label>
       <span id="bev-seg" class="oculto">segmento <input type="range" id="bev-seg-r" min="0" max="0" value="0"> <span id="bev-seg-t"></span></span>
-      <span class="dica">arraste a ponta da lâmina para editar</span>
+      <select id="bev-ferr" title="ferramenta no BEV">
+        <option value="editar">arrastar lâminas/jaws</option>
+        <option value="abrir">desenhar: abertura = desenho</option>
+        <option value="acrescentar">desenhar: acrescentar</option>
+        <option value="bloquear">desenhar: bloquear</option>
+      </select>
+      <select id="bev-enc" class="oculto" title="ponto de encontro lâmina–desenho">
+        <option value="fora">fora</option><option value="meio">meio</option><option value="area">área 50%</option><option value="dentro">dentro</option>
+      </select>
+      <span class="dica" id="bev-dica">arraste a ponta da lâmina ou o jaw (Shift: jaw)</span>
     </div>
     <canvas></canvas>
   </div>
@@ -216,8 +273,14 @@
 </section>
 
 <aside id="direita">
-  <h3>Estruturas</h3>
-  <ul id="lista-estruturas"></ul>
+  <div class="abas abas-dir">
+    <button class="aba-d ativa" data-abad="est">Estruturas</button>
+    <button class="aba-d" data-abad="aval">Avaliação</button>
+    <button class="aba-d" data-abad="um">UM e pontos</button>
+    <button class="aba-d" data-abad="reg">Registro <span id="n-avisos"></span></button>
+  </div>
+  <div class="painel-d" id="pd-est">
+    <ul id="lista-estruturas"></ul>
   <details class="sub" id="sec-contorno"><summary>Contorno (desenhar/editar)</summary>
     <div class="linha2">
       <label>Estrutura<select id="k-est"></select></label>
@@ -267,29 +330,42 @@
     <div id="ne-iso" class="linha2 oculto"><label>Dose (Gy)<input id="ne-gy" type="number" value="45" step="0.5"></label></div>
     <button id="b-nova-est" class="pequeno" disabled>Criar</button>
   </details>
-  <h3>Histograma dose-volume</h3>
-  <canvas id="dvh" width="320" height="220"></canvas>
+  </div>
+  <div class="painel-d oculto" id="pd-aval">
   <h3>Dose</h3>
   <div id="resumo-dose" class="pequeno-txt">—</div>
   <table id="tab-estat"><thead><tr><th>Estrutura</th><th>Dméd</th><th>D95</th><th>D2</th><th>Dmax</th></tr></thead><tbody></tbody></table>
   <h3>Restrições <span id="rest-prot" class="pequeno-txt"></span></h3>
   <div id="rest-avisos" class="pequeno-txt avisotxt"></div>
+  <table id="tab-rest"><thead><tr><th>Estrutura</th><th>Métrica</th><th>Limite</th><th>Valor</th></tr></thead><tbody></tbody></table>
   <div id="comparacao" class="oculto">
     <h3>Comparação com <span id="cmp-fonte"></span></h3>
     <div id="cmp-resumo" class="pequeno-txt"></div>
     <table id="tab-cmp"><thead><tr><th>Estrutura</th><th>Dméd outro</th><th>Dméd TPS</th><th>Dif.</th></tr></thead><tbody></tbody></table>
   </div>
-  <table id="tab-rest"><thead><tr><th>Estrutura</th><th>Métrica</th><th>Limite</th><th>Valor</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="painel-d oculto" id="pd-um">
   <h3>Cruz</h3>
   <div id="dose-cruz" class="pequeno-txt">Clique num corte</div>
+  <h3>UM e conferência independente</h3>
+  <div class="pequeno-txt">SSD = distância fonte–pele no eixo central (cm). Conf. = diferença das UM do TPS para o
+    cálculo independente por tabelas (Clarkson, TG-114; tolerância ±3%). Subcampos de field-in-field são conferidos
+    junto com o campo principal (*).</div>
+  <table id="tab-um"><thead><tr><th>Campo</th><th>UM</th><th>SSD (cm)</th><th>Conf. TPS × tabela</th></tr></thead><tbody></tbody></table>
   <h3>Pontos de referência</h3>
   <div class="linha-ponto"><input id="pt-nome" placeholder="nome"><button id="b-ponto" class="pequeno" disabled>+ na cruz</button></div>
   <table id="tab-pontos"><thead><tr><th>Ponto</th><th>Gy</th><th>%</th><th></th></tr></thead><tbody></tbody></table>
-  <h3>UM e conferência independente</h3>
-  <table id="tab-um"><thead><tr><th>Campo</th><th>UM</th><th>SSD</th><th>Tabela</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="painel-d oculto" id="pd-reg">
   <h3>Avisos</h3>
   <ul id="avisos"></ul>
-  <details class="sub"><summary>Registro</summary><ul id="log" class="pequeno-txt"></ul></details>
+  <h3>Registro</h3>
+  <ul id="log" class="pequeno-txt"></ul>
+  </div>
+  <div id="dvh-fixo">
+    <h3>Histograma dose-volume</h3>
+    <canvas id="dvh" width="320" height="220"></canvas>
+  </div>
 </aside>
 </main>
 <div id="modal" class="oculto"><div class="caixa">

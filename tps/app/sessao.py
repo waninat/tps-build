@@ -121,6 +121,7 @@ class Sessao:
         self.resultado: dict = {}
         self.dose_atualizada = False
         self.avisos: list[str] = []
+        self.outros_planos: dict = {}            # rótulo → estado guardado (vários planos no mesmo CT)
         self.log: list[str] = []
 
     # ================================================================== carregamento
@@ -251,6 +252,7 @@ class Sessao:
             raise ErroUsuario(f"Máquina \"{r['maquina']}\" do plano não está cadastrada no TPS "
                               "(dicom_machine_names em maquina.yaml)")
         energia = f"{int(round(r['campos'][0].energia_mv))}MV"
+        self._guardar_plano_atual()                    # o plano atual continua na sessão
         self.definir_maquina(alvo_maq, energia)
         # alvo: estrutura com o nome da descrição da prescrição; senão o PTV de maior dose no nome
         nomes = list(self.estruturas)
@@ -262,6 +264,10 @@ class Sessao:
         if alvo is None:
             raise ErroUsuario("Nenhuma estrutura alvo (PTV) para a prescrição do plano importado")
         rot = (r["rotulo"] or "IMPORTADO")[:16]
+        base, k = rot, 2
+        while rot in self.outros_planos:
+            rot = f"{base[:13]}_{k}"
+            k += 1
         self.novo_plano(rot, float(r["dose_total"] or 0), int(r["fracoes"]), alvo, metodo="um_fixas")
         p = self.plano
         p.referencia_rtstruct = r["rtstruct"] or p.referencia_rtstruct
@@ -323,17 +329,121 @@ class Sessao:
         return {"fonte": self.dose_ref["fonte"], "dvh": hist, "estatisticas": estat, "gama_3_3": round(gam, 1),
                 "dmax_ref": round(float(ref[corpo].max()), 2) if corpo.any() else None}
 
+    # ---------------------------------------------------------------- vários planos no mesmo CT
+    _ESTADO = ("plano", "doses_um", "dose_fx", "resultado", "dose_atualizada", "eta_original", "avisos",
+               "isocentro", "dose_ref", "maquina")
+
+    def _guardar_plano_atual(self):
+        """Tira o plano atual da frente (com dose, resultado, bolus e máquina) e guarda na lista da sessão."""
+        if self.plano is None:
+            return
+        est = {k: getattr(self, k, None) for k in self._ESTADO}
+        est["bolus"] = {b["nome"]: self.estruturas.pop(b["nome"]) for b in self.plano.bolus
+                        if b["nome"] in self.estruturas}
+        self.outros_planos[self.plano.rotulo] = est
+        self.plano = None
+        self.doses_um, self.dose_fx, self.resultado, self.dose_atualizada = {}, None, {}, False
+        self.dose_ref = None
+        self.avisos = []
+        if getattr(self, "eta_ct", None) is not None or self.grade is not None:
+            self.eta_original = None
+            if self.tipo == "ct":
+                self._mascarar_fora_do_corpo()
+
+    def _restaurar_plano(self, rotulo: str):
+        est = self.outros_planos.pop(rotulo)
+        for k in self._ESTADO:
+            setattr(self, k, est.get(k))
+        for nome, e in (est.get("bolus") or {}).items():
+            self.estruturas[nome] = e
+        if self.eta_original is None:
+            self.eta_original = self.grade.eta.copy()
+        self._aplicar_eta(manter_dose=True)
+
+    def trocar_plano(self, rotulo: str) -> dict:
+        if self.plano is not None and self.plano.rotulo == rotulo:
+            return self.resumo()
+        if rotulo not in self.outros_planos:
+            raise ErroUsuario(f"Plano {rotulo} não está nesta sessão")
+        self._guardar_plano_atual()
+        self._restaurar_plano(rotulo)
+        self._registrar(f"Plano {rotulo} em uso")
+        return self.resumo()
+
+    def copiar_plano(self, novo_rotulo: str) -> dict:
+        """Cópia do plano atual (rascunho, sem aprovação), para variar campos/normalização e comparar."""
+        self._exigir_plano()
+        novo_rotulo = (novo_rotulo or "").strip()[:16]
+        if not novo_rotulo:
+            raise ErroUsuario("Dê um rótulo ao plano novo")
+        if novo_rotulo == self.plano.rotulo or novo_rotulo in self.outros_planos:
+            raise ErroUsuario(f"Já existe um plano {novo_rotulo} nesta sessão")
+        novo = copy.deepcopy(self.plano)
+        novo.rotulo = novo_rotulo
+        novo.estado, novo.aprovacao, novo.historico = "RASCUNHO", None, []
+        for c, c0 in zip(novo.campos, self.plano.campos):
+            c.__dict__["_spec"] = copy.deepcopy(c0.__dict__.get("_spec"))
+        doses = dict(self.doses_um)
+        dose_fx, res, atual = self.dose_fx, copy.deepcopy(self.resultado), self.dose_atualizada
+        bolus = {b["nome"]: self.estruturas[b["nome"]] for b in self.plano.bolus if b["nome"] in self.estruturas}
+        eta_o, iso, ref, maq = self.eta_original, self.isocentro, self.dose_ref, self.maquina
+        self._guardar_plano_atual()
+        self.plano, self.doses_um, self.dose_fx, self.resultado = novo, doses, dose_fx, res
+        self.dose_atualizada, self.eta_original, self.isocentro, self.dose_ref, self.maquina = atual, eta_o, iso, ref, maq
+        for nome, e in bolus.items():
+            self.estruturas[nome] = copy.deepcopy(e)
+        self._aplicar_eta()
+        self._registrar(f"Plano {novo_rotulo} copiado")
+        return self.resumo()
+
+    def remover_plano(self, rotulo: str) -> dict:
+        if self.plano is not None and self.plano.rotulo == rotulo:
+            if self.plano.estado != "RASCUNHO":
+                raise ErroUsuario("Desaprove o plano antes de removê-lo da sessão")
+            for b in self.plano.bolus:
+                self.estruturas.pop(b["nome"], None)
+            self.plano = None
+            self.doses_um, self.dose_fx, self.resultado, self.dose_atualizada = {}, None, {}, False
+            if self.outros_planos:
+                self._restaurar_plano(next(iter(self.outros_planos)))
+        elif rotulo in self.outros_planos:
+            if self.outros_planos[rotulo]["plano"].estado != "RASCUNHO":
+                raise ErroUsuario("Desaprove o plano antes de removê-lo da sessão")
+            self.outros_planos.pop(rotulo)
+        else:
+            raise ErroUsuario(f"Plano {rotulo} não está nesta sessão")
+        self._registrar(f"Plano {rotulo} removido da sessão (o arquivo salvo, se houver, continua)")
+        return self.resumo()
+
+    def lista_planos(self) -> list[dict]:
+        out = []
+        if self.plano is not None:
+            out.append({"rotulo": self.plano.rotulo, "estado": self.plano.estado, "atual": True,
+                        "campos": len(self.plano.campos), "dose": self.dose_atualizada})
+        for r, e in self.outros_planos.items():
+            out.append({"rotulo": r, "estado": e["plano"].estado, "atual": False, "campos": len(e["plano"].campos),
+                        "dose": bool(e.get("dose_atualizada"))})
+        return sorted(out, key=lambda q: q["rotulo"])
+
     def novo_plano(self, rotulo: str, dose_total: float, fracoes: int, alvo: str, metodo: str = "media_alvo",
-                   ponto=None, isodose: float = 100.0):
+                   ponto=None, isodose: float = 100.0, cobertura: tuple | None = None):
         self._exigir(self.grade is not None, "Abra um CT ou crie um fantoma antes")
         self._exigir(self.maquina is not None, "Escolha a máquina antes")
+        rotulo = (rotulo or "").strip()[:16]
+        if rotulo in self.outros_planos or (self.plano is not None and self.plano.rotulo == rotulo):
+            raise ErroUsuario(f"Já existe um plano {rotulo} nesta sessão: use outro rótulo (ou troque para ele)")
         rx = Prescricao(float(dose_total), int(fracoes), alvo, metodo, tuple(ponto) if ponto else None, float(isodose))
+        if metodo == "cobertura":
+            rx.cobertura_volume_pct, rx.cobertura_dose_pct = (float(v) for v in (cobertura or (95.0, 100.0)))
         erros = rx.validar()
         if metodo == "media_alvo" and alvo not in self.estruturas:
             erros.append(f"Estrutura alvo {alvo} não existe")
         if erros:
             raise ErroUsuario("; ".join(erros))
         ref = referencia_do_ct(sorted(p for p in self.pasta_ct.iterdir() if p.is_file() and self._e_ct(p))[0])
+        maq, iso = self.maquina, self.isocentro
+        self._guardar_plano_atual()                     # o plano anterior continua na sessão
+        self.maquina, self.isocentro = maq, iso
         m = self.maquina
         self.plano = Plano(rotulo=rotulo[:16], paciente_id=self.paciente["id"], maquina_id=m.id,
                            nome_dicom_maquina=m.nome_dicom, prescricao=rx,
@@ -449,6 +559,39 @@ class Sessao:
         self.avisos = avisos
         return {"campo": self._campo_json(c), "avisos": avisos}
 
+    # ---------------------------------------------------------------- campos de localização (setup)
+    def adicionar_setup(self, nome: str, gantry: float, x_cm: float = 20.0, y_cm: float = 20.0,
+                        colimador: float = 0.0, mesa: float = 0.0) -> dict:
+        """Campo de localização (imagem de posicionamento): sem dose, exportado como SETUP (TreatmentDeliveryType),
+        sem UM e fora do grupo de frações. Abertura retangular centrada no isocentro."""
+        from tps.planejamento.plano_2d import CampoRetangular, campo_de_retangulo
+        self._exigir_plano()
+        self.plano._exigir_rascunho()
+        nome = (nome or "").strip()[:16] or f"SETUP{int(gantry) % 360:03d}"
+        todos = {c.nome for c in self.plano.campos} | {c.nome for c in self.plano.campos_setup}
+        if nome in todos:
+            raise ErroUsuario(f"Já existe um campo {nome}")
+        if not (2 <= x_cm <= 40 and 2 <= y_cm <= 40):
+            raise ErroUsuario("Tamanho do campo de localização entre 2 e 40 cm")
+        iso = self.isocentro or (self.plano.campos[0].isocentro_mm if self.plano.campos else (0.0, 0.0, 0.0))
+        c = campo_de_retangulo(CampoRetangular.simetrico(nome, float(gantry), float(x_cm), float(y_cm),
+                                                         colimador=float(colimador)), self.maquina.colim, iso,
+                               self.maquina.modelo.energy_mv)
+        c.mesa = float(mesa)
+        c.descricao = "SETUP"
+        c.ssd_mm = calculo.ssd_no_eixo(self.grade, c)
+        self.plano.campos_setup.append(c)
+        self._registrar(f"Campo de localização {nome} (G{gantry:g}, {x_cm:g}×{y_cm:g} cm)")
+        return {"nome": nome}
+
+    def remover_setup(self, nome: str):
+        self._exigir_plano()
+        self.plano._exigir_rascunho()
+        antes = len(self.plano.campos_setup)
+        self.plano.campos_setup = [c for c in self.plano.campos_setup if c.nome != nome]
+        if len(self.plano.campos_setup) == antes:
+            raise ErroUsuario(f"Campo de localização {nome} não existe")
+
     def _remover_derivados(self):
         """Ao mudar um campo principal, sub-campos e segmentos calculados deixam de valer."""
         p = self.plano
@@ -457,6 +600,9 @@ class Sessao:
         for s in subs:
             p.campos.remove(s)
             self.doses_um.pop(s.nome, None)
+        for c in p.campos:                       # pesos que o field-in-field mudou voltam ao que eram
+            if "_peso_antes_fif" in c.__dict__:
+                c.peso = c.__dict__.pop("_peso_antes_fif")
         for c in p.campos:
             if c.segmentos:
                 c.segmentos = None
@@ -482,6 +628,54 @@ class Sessao:
         self.dose_atualizada = False
         return {"campo": self._campo_json(c)}
 
+    def mover_lamina(self, nome: str, par: int, banco: str, pos_mm: float) -> dict:
+        """Arrasto de uma lâmina no BEV, empurrando vizinhas quando o MLC não interdigita (MLCi)."""
+        from tps.planejamento.ajuste_mlc import acomodar_lamina
+        self._exigir_plano()
+        self.plano._exigir_rascunho()
+        c = self._campo(nome)
+        if banco not in ("a", "b") or not 0 <= int(par) < self.maquina.colim.n_pares:
+            raise ErroUsuario("Lâmina inválida")
+        a, b = acomodar_lamina(c.mlc_a, c.mlc_b, self.maquina.colim, int(par), banco, float(pos_mm))
+        return self.editar_laminas(nome, a, b)
+
+    def mover_jaw(self, nome: str, jaw: str, pos_mm: float) -> dict:
+        self._exigir_plano()
+        self.plano._exigir_rascunho()
+        c = self._campo(nome)
+        colim = self.maquina.colim
+        pos = round(float(pos_mm), 1)
+        if jaw in ("y1", "y2"):
+            jy = list(c.jaw_y)
+            k = 0 if jaw == "y1" else 1
+            jy[k] = float(np.clip(pos, -colim.jaw_y_max_mm, colim.jaw_y_max_mm))
+            if jy[1] - jy[0] < 5:
+                raise ErroUsuario("Abertura Y menor que 5 mm")
+            return self.editar_laminas(nome, c.mlc_a, c.mlc_b, None, jy)
+        if jaw in ("x1", "x2") and colim.tem_jaw_x and c.jaw_x:
+            jx = list(c.jaw_x)
+            k = 0 if jaw == "x1" else 1
+            jx[k] = float(np.clip(pos, -colim.jaw_x_max_mm, colim.jaw_x_max_mm))
+            if jx[1] - jx[0] < 5:
+                raise ErroUsuario("Abertura X menor que 5 mm")
+            return self.editar_laminas(nome, c.mlc_a, c.mlc_b, jx, None)
+        raise ErroUsuario("Jaw inválido")
+
+    def desenhar_laminas(self, nome: str, pontos: list, modo: str = "abrir", encontro="fora") -> dict:
+        """As lâminas e os jaws vão para a forma desenhada no BEV (como no Eclipse)."""
+        from tps.planejamento.ajuste_mlc import laminas_para_desenho
+        self._exigir_plano()
+        self.plano._exigir_rascunho()
+        c = self._campo(nome)
+        try:
+            r = laminas_para_desenho(c, self.maquina.colim, pontos, modo, encontro)
+        except ValueError as e:
+            raise ErroUsuario(str(e)) from e
+        out = self.editar_laminas(nome, r.campo.mlc_a, r.campo.mlc_b, r.campo.jaw_x, r.campo.jaw_y)
+        self._registrar(f"{nome}: lâminas ajustadas a um desenho ({modo}, encontro {encontro})")
+        out["avisos"] = r.avisos
+        return out
+
     def remover_campo(self, nome: str):
         self._exigir_plano()
         self._remover_derivados()
@@ -491,8 +685,9 @@ class Sessao:
         self.dose_atualizada = False
 
     # ================================================================== densidade, bolus, pontos
-    def _aplicar_eta(self):
-        """η da grade = original do CT + bolus (água) + densidades forçadas. Toda mudança invalida a dose."""
+    def _aplicar_eta(self, manter_dose: bool = False):
+        """η da grade = original do CT + bolus (água) + densidades forçadas. Toda mudança invalida a dose
+        (manter_dose: só ao trazer de volta um plano guardado, cuja dose foi calculada com esse mesmo η)."""
         p = self.plano
         eta = self.eta_original.copy()
         for b in p.bolus:
@@ -503,6 +698,8 @@ class Sessao:
             if nome in self.estruturas:
                 eta[self.estruturas[nome].mascara] = float(val)
         self.grade.eta = eta.astype(np.float32)
+        if manter_dose:
+            return
         self.doses_um, self.dose_fx, self.dose_atualizada = {}, None, False
         if p.estado == "RASCUNHO":                           # bolus muda a SSD; plano aprovado não é tocado
             for c in p.campos:
@@ -856,14 +1053,27 @@ class Sessao:
             return self._recalcular_aprovado()
         p._exigir_rascunho()
         pr = p.prescricao
+        so_normalizar = bool(opcoes.get("so_normalizar"))
+        if so_normalizar:
+            self._exigir(bool(self.doses_um) and all(c.nome in self.doses_um for c in p.campos),
+                         "Calcule a dose antes de renormalizar")
+            opcoes = {k: v for k, v in opcoes.items() if k not in ("otimizar_pesos", "field_in_field", "compensador")}
         if opcoes.get("metodo"):
             pr.metodo = opcoes["metodo"]
             if pr.metodo == "ponto":
                 pr.ponto_mm = tuple(float(v) for v in opcoes.get("ponto") or self.isocentro)
+        if opcoes.get("isodose_pct") is not None:
+            pr.isodose_pct = float(opcoes["isodose_pct"])
+        if pr.metodo == "cobertura":
+            pr.cobertura_volume_pct = float(opcoes.get("cobertura_volume_pct") or pr.cobertura_volume_pct or 95.0)
+            pr.cobertura_dose_pct = float(opcoes.get("cobertura_dose_pct") or pr.cobertura_dose_pct or 100.0)
+        erros = pr.validar()
+        if erros:
+            raise ErroUsuario("; ".join(erros))
         alvo = self.estruturas[pr.estrutura_alvo].mascara if pr.estrutura_alvo in self.estruturas else None
-        if pr.metodo == "media_alvo" and alvo is None:
-            raise ErroUsuario("Normalização pela média do alvo sem estrutura alvo")
-        if pr.metodo != "um_fixas":          # plano importado: segmentos e UM são os do plano original
+        if pr.metodo in ("media_alvo", "cobertura") and alvo is None:
+            raise ErroUsuario("Normalização pelo alvo sem estrutura alvo")
+        if pr.metodo != "um_fixas" and not so_normalizar:   # importado: segmentos e UM são os do plano original
             self._remover_derivados()
         p.modelo_feixe = self._info_modelo()
         self.avisos = []
@@ -882,7 +1092,21 @@ class Sessao:
                 for c in p.campos:
                     c.peso = round(w[c.nome], 4)
             corpo = self._corpo()
-            if opcoes.get("field_in_field") and alvo is not None:
+            fif = opcoes.get("field_in_field")
+            if fif and alvo is not None:
+                for c in p.campos:
+                    c.__dict__["_peso_antes_fif"] = c.peso
+            if fif and alvo is not None and isinstance(fif, dict) and fif.get("modo") == "filtro":
+                from tps.planejamento.otimizacao3d import field_in_field_filtro
+                r = field_in_field_filtro(p, g, self.doses_um, alvo, corpo, m.colim, m.modelo,
+                                          niveis_pct=[float(x) for x in (fif.get("niveis") or (97, 94, 91, 88))],
+                                          peso_pct=float(fif.get("peso_pct", 3.0)),
+                                          campos_base=fif.get("campos") or None)
+                info["field_in_field"] = {"modo": "filtro", "subcampos": [c.nome for c in r.subcampos],
+                                          "hi_antes": r.hi_antes, "hi_depois": r.hi_depois,
+                                          "dmax_antes": r.dmax_antes_pct, "dmax_depois": r.dmax_depois_pct, "avisos": r.avisos}
+                self.avisos = list(r.avisos)
+            elif fif and alvo is not None:
                 r = field_in_field(p, g, self.doses_um, alvo, corpo, m.colim, m.modelo,
                                    um_min=float(opcoes.get("um_min", 3.0)))
                 info["field_in_field"] = {"subcampos": [c.nome for c in r.subcampos], "hi_antes": r.hi_antes,
@@ -920,10 +1144,17 @@ class Sessao:
                           "restricoes": self._avaliar_restricoes(total),
                           "comparacao": self.comparacao_ref(total),
                           "dmax_gy": float(total[corpo].max()) if corpo.any() else float(total.max()),
+                          "dmax_xyz": self._posicao_max(total, corpo),
                           "quando": dt.datetime.now().isoformat(timespec="seconds")}
         self.dose_atualizada = True
         self._registrar(f"Dose calculada ({len(p.campos)} campos)")
         return self.resumo()
+
+    def _posicao_max(self, total, corpo) -> list[float]:
+        g = self.grade
+        d = np.where(corpo, total, -np.inf) if corpo.any() else total
+        k, j, i = np.unravel_index(int(np.argmax(d)), d.shape)
+        return [round(float(g.x[i]), 1), round(float(g.y[j]), 1), round(float(g.z[k]), 1)]
 
     def _avaliar_restricoes(self, total) -> dict:
         """Restrições QUANTEC/ICRU (ou as da clínica) com nomes TG-263. Nunca impede o cálculo."""
@@ -964,7 +1195,8 @@ class Sessao:
         self.resultado = {"dvh": hist, "conferencia_um": conf, "info": {"recalculo_aprovado": True},
                           "restricoes": self._avaliar_restricoes(total),
                           "hi": indice_homogeneidade(total, alvo) if alvo is not None and alvo.any() else None,
-                          "dmax_gy": float(total[corpo].max()), "quando": dt.datetime.now().isoformat(timespec="seconds")}
+                          "dmax_gy": float(total[corpo].max()), "dmax_xyz": self._posicao_max(total, corpo),
+                          "quando": dt.datetime.now().isoformat(timespec="seconds")}
         self.dose_atualizada = True
         self._registrar("Dose do plano aprovado recalculada e conferida")
         return self.resumo()
@@ -1029,10 +1261,10 @@ class Sessao:
             g = self.grade
             idx = [[(ponto["xyz"][2] - g.z[0]) / (g.z[1] - g.z[0])], [(ponto["xyz"][1] - g.y[0]) / (g.y[1] - g.y[0])],
                    [(ponto["xyz"][0] - g.x[0]) / (g.x[1] - g.x[0])]]
-            for nome, c, mu, formas in _feixes_para_exportar(p, modo_segmentos):
-                if c.nome in self.doses_um:
-                    d1 = float(map_coordinates(self.doses_um[c.nome], idx, order=1)[0])
-                    dose_feixe[nome] = d1 * float(mu)
+            for nome, c, mu, formas, membros in _feixes_para_exportar(p, modo_segmentos):
+                if all(m_.nome in self.doses_um for m_, _ in membros):
+                    dose_feixe[nome] = sum(float(map_coordinates(self.doses_um[m_.nome], idx, order=1)[0]) * u_
+                                           for m_, u_ in membros)
         return {"distancia_fonte_mm": cfg.get("distancia_fonte_mm"), "tolerancia": cfg.get("tolerancia"),
                 "departamento": cfg.get("departamento"), "ponto_ref": ponto, "dose_feixe": dose_feixe}
 
@@ -1098,6 +1330,16 @@ class Sessao:
         return {"enviados": res}
 
     def salvar(self) -> Path:
+        """Salva o plano atual e os outros planos da sessão (um arquivo por plano)."""
+        self._exigir_plano()
+        atual = self.plano.rotulo
+        for r in list(self.outros_planos):
+            self.trocar_plano(r)
+            self._salvar_atual()
+        self.trocar_plano(atual)
+        return self._salvar_atual()
+
+    def _salvar_atual(self) -> Path:
         self._exigir_plano()
         d = paths.home() / "planos"
         d.mkdir(parents=True, exist_ok=True)
@@ -1133,7 +1375,9 @@ class Sessao:
         rx = Prescricao(**{k: (tuple(v) if k == "ponto_mm" and v else v) for k, v in pd_["prescricao"].items()})
         campos = [Campo(**{k: (tuple(v) if k in ("isocentro_mm", "jaw_x", "jaw_y") and v else v)
                            for k, v in c.items()}) for c in pd_["campos"]]
-        pd_ = {**pd_, "prescricao": rx, "campos": campos}
+        setup = [Campo(**{k: (tuple(v) if k in ("isocentro_mm", "jaw_x", "jaw_y") and v else v)
+                          for k, v in c.items()}) for c in pd_.get("campos_setup") or []]
+        pd_ = {**pd_, "prescricao": rx, "campos": campos, "campos_setup": setup}
         self.plano = Plano(**pd_)
         self.isocentro = tuple(dados["isocentro"])
         self.eta_original = self.grade.eta.copy()
@@ -1155,10 +1399,47 @@ class Sessao:
         for c in self.plano.campos:
             c.__dict__["_spec"] = (dados.get("specs") or {}).get(c.nome)
         self._registrar(f"Plano aberto de {arquivo} (estado {self.plano.estado}; dose a recalcular)")
+        if dados["tipo"] == "ct":                      # outros planos salvos do mesmo CT entram na sessão
+            for f in sorted((paths.home() / "planos").glob("*.json")):
+                if Path(f).resolve() == Path(arquivo).resolve():
+                    continue
+                try:
+                    d2 = json.loads(f.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                if d2.get("tipo") != "ct" or d2.get("pasta_ct") != dados["pasta_ct"]:
+                    continue
+                if d2["plano"]["rotulo"] in self.outros_planos or d2["plano"]["rotulo"] == self.plano.rotulo:
+                    continue
+                try:
+                    self._anexar_plano_salvo(d2)
+                except Exception as e:  # noqa: BLE001
+                    self._registrar(f"Plano salvo {f.name} não pôde ser aberto junto: {e}")
+
+    def _anexar_plano_salvo(self, dados: dict):
+        """Plano salvo de outro arquivo (mesmo CT) entra na lista da sessão, sem dose."""
+        pd_ = dados["plano"]
+        rx = Prescricao(**{k: (tuple(v) if k == "ponto_mm" and v else v) for k, v in pd_["prescricao"].items()})
+        campos = [Campo(**{k: (tuple(v) if k in ("isocentro_mm", "jaw_x", "jaw_y") and v else v)
+                           for k, v in c.items()}) for c in pd_["campos"]]
+        setup = [Campo(**{k: (tuple(v) if k in ("isocentro_mm", "jaw_x", "jaw_y") and v else v)
+                          for k, v in c.items()}) for c in pd_.get("campos_setup") or []]
+        plano = Plano(**{**pd_, "prescricao": rx, "campos": campos, "campos_setup": setup})
+        for c in plano.campos:
+            c.__dict__["_spec"] = (dados.get("specs") or {}).get(c.nome)
+        maq = self.maquina
+        if dados["maquina"] != maq.id or dados.get("energia", "6MV") != maq.energia:
+            maq = Maquina.carregar(dados["maquina"], dados.get("energia", "6MV"))
+        bolus = {nome: Estrutura(nome, "BOLUS", (255, 170, 60), _desempacotar(emp, self.grade.eta.shape))
+                 for nome, emp in (dados.get("bolus_mascaras") or {}).items()}
+        self.outros_planos[plano.rotulo] = {"plano": plano, "doses_um": {}, "dose_fx": None, "resultado": {},
+                                            "dose_atualizada": False, "eta_original": None, "avisos": [],
+                                            "isocentro": tuple(dados["isocentro"]), "dose_ref": None,
+                                            "maquina": maq, "bolus": bolus}
 
     # ================================================================== dados para a tela
     def _campo(self, nome: str) -> Campo:
-        c = next((c for c in self.plano.campos if c.nome == nome), None)
+        c = next((c for c in list(self.plano.campos) + list(self.plano.campos_setup) if c.nome == nome), None)
         if c is None:
             raise ErroUsuario(f"Campo {nome} não existe")
         return c
@@ -1182,7 +1463,7 @@ class Sessao:
                            "comissionamento": (self.maquina.modelo.ref or {}).get("comissionamento", "v1")}
                if self.maquina else None,
                "isocentro": self.isocentro, "dose_atualizada": self.dose_atualizada, "avisos": self.avisos,
-               "log": self.log[-30:], "planos_dicom": self.planos_dicom,
+               "log": self.log[-30:], "planos_dicom": self.planos_dicom, "planos_sessao": self.lista_planos(),
                "dose_ref": {"fonte": self.dose_ref["fonte"], "arquivo": self.dose_ref["arquivo"]} if self.dose_ref else None}
         if self.grade is not None:
             g = self.grade
@@ -1199,10 +1480,11 @@ class Sessao:
             out["plano"] = {"rotulo": p.rotulo, "estado": p.estado, "aprovacao": p.aprovacao, "tecnica": p.tecnica,
                             "pontos": pts, "bolus": p.bolus, "densidades": p.densidades,
                             "prescricao": dataclasses.asdict(p.prescricao), "historico": p.historico,
-                            "campos": [self._campo_json(c) for c in p.campos]}
+                            "campos": [self._campo_json(c) for c in p.campos],
+                            "campos_setup": [self._campo_json(c) for c in p.campos_setup]}
             if self.dose_atualizada and self.resultado:
                 r = self.resultado
-                out["resultado"] = {"hi": r["hi"], "dmax_gy": r["dmax_gy"], "info": r["info"],
+                out["resultado"] = {"hi": r["hi"], "dmax_gy": r["dmax_gy"], "dmax_xyz": r.get("dmax_xyz"), "info": r["info"],
                                     "restricoes": r.get("restricoes"),
                                     "comparacao": {k: v for k, v in (r.get("comparacao") or {}).items() if k != "dvh"}
                                     or None,
@@ -1261,7 +1543,9 @@ class Sessao:
             img = np.take(rel, i, axis=k[1])                   # [v, h]
         if vista != "axial":
             img = img[::-1]                                     # z cresce para cima na tela
-        top = float(maximo_pct) if maximo_pct and maximo_pct > minimo_pct else max(float(rel.max()), minimo_pct + 1)
+        corpo = self._corpo()
+        rmax = float(rel[corpo].max()) if corpo.any() else float(rel.max())
+        top = float(maximo_pct) if maximo_pct and maximo_pct > minimo_pct else max(rmax, minimo_pct + 1)
         t = np.clip((img - minimo_pct) / (top - minimo_pct), 0, 1)
         rgba = (matplotlib.colormaps["jet"](t) * 255).astype(np.uint8)
         rgba[..., 3] = np.where(img >= minimo_pct, int(255 * opacidade), 0).astype(np.uint8)
@@ -1278,7 +1562,8 @@ class Sessao:
             return float(cy[idx]), "x", "z"
         return float(cx[idx]), "y", "z"
 
-    def sobreposicao(self, vista: str, idx: int, estruturas: list[str] | None = None, isodoses: bool = True) -> dict:
+    def sobreposicao(self, vista: str, idx: int, estruturas: list[str] | None = None, isodoses: bool = True,
+                     niveis: list | None = None, referencia: str = "rx", unidade: str = "pct") -> dict:
         """Contornos, isodoses e feixes do corte, em mm (h, v)."""
         g = self.grade
         pos, eh, ev = self._plano_corte(vista, int(idx))
@@ -1317,14 +1602,27 @@ class Sessao:
             pas = {k: float(abs(v[1] - v[0])) for k, v in ax.items()}
             out["wash"] = {"h": [float(ax[eh][0]) - pas[eh] / 2, float(ax[eh][-1]) + pas[eh] / 2],
                            "v": [float(ax[ev][0]) - pas[ev] / 2, float(ax[ev][-1]) + pas[ev] / 2],
-                           "dmax_pct": round(float(self.dose_fx.max() / self.plano.prescricao.dose_fracao_gy * 100), 1)}
+                           "dmax_pct": round(float((self.dose_fx[self._corpo()].max() if self._corpo().any()
+                                                    else self.dose_fx.max()) / self.plano.prescricao.dose_fracao_gy * 100), 1)}
         if isodoses and self.dose_atualizada and self.dose_fx is not None:
-            rx = self.plano.prescricao.dose_fracao_gy
-            img = corte_grade(self.dose_fx / rx * 100.0)
-            for nv in NIVEIS_ISODOSE:
+            # 100% = prescrição ou dose máxima do plano; níveis em % ou em Gy (dose total)
+            fx = self.plano.prescricao.fracoes
+            corpo = self._corpo()
+            dmax_fx = float(self.dose_fx[corpo].max()) if corpo.any() else float(self.dose_fx.max())
+            cem = dmax_fx if referencia == "max" else self.plano.prescricao.dose_fracao_gy
+            if unidade == "gy":
+                img = corte_grade(self.dose_fx * fx)
+                lista = sorted(float(v) for v in (niveis or [cem * fx * k / 100 for k in NIVEIS_ISODOSE]))
+            else:
+                img = corte_grade(self.dose_fx / cem * 100.0)
+                lista = sorted(float(v) for v in (niveis or NIVEIS_ISODOSE))
+            for nv in lista:
                 ls = linhas(img, nv)
                 if ls:
                     out["isodoses"].append({"nivel": nv, "linhas": ls})
+            out["iso_ref"] = {"referencia": referencia, "unidade": unidade, "cem_gy": round(cem * fx, 3),
+                              "dmax_gy": round(dmax_fx * fx, 3),
+                              "rx_gy": self.plano.prescricao.dose_total_gy, "niveis": lista}
         if self.plano and vista == "axial":
             for c in self.plano.campos:
                 if c.campo_pai:
@@ -1363,7 +1661,8 @@ class Sessao:
         segs = [{"mlc_a": s["mlc_a"], "mlc_b": s["mlc_b"], "peso": s["peso"]} for s in (c.segmentos or [])]
         return {"campo": self._campo_json(c), "limites": list(map(float, colim.limites_laminas)),
                 "projecoes": proj, "segmentos": segs, "ext": ext, "tem_jaw_x": colim.tem_jaw_x,
-                "gap": colim.gap_minimo_mm, "interdigitacao": colim.interdigitacao}
+                "gap": colim.gap_minimo_mm, "interdigitacao": colim.interdigitacao,
+                "lamina_max": colim.lamina_max_mm, "overtravel": colim.overtravel_mm}
 
     def drr(self, nome: str, n: int = 256, ext_mm: float = 200.0) -> bytes:
         """Radiografia reconstruída (soma de η ao longo do raio), para conferência do campo."""

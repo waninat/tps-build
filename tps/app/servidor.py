@@ -210,7 +210,8 @@ def maquina(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
 def plano(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     s = _s(sid)
     s.novo_plano(d.get("rotulo", "PLANO1"), float(d["dose_total"]), int(d["fracoes"]), d.get("alvo", ""),
-                 d.get("metodo", "media_alvo"), d.get("ponto"), float(d.get("isodose", 100)))
+                 d.get("metodo", "media_alvo"), d.get("ponto"), float(d.get("isodose", 100)),
+                 (d.get("cobertura_volume_pct", 95), d.get("cobertura_dose_pct", 100)))
     auditar(u, "plano_criado", s, **{k: d.get(k) for k in ("rotulo", "dose_total", "fracoes", "alvo", "metodo")})
     return s.resumo()
 
@@ -237,6 +238,27 @@ def laminas(sid: str, nome: str, d: dict = Body(...), u: dict = Depends(usuario)
     s.editar_laminas(nome, d["mlc_a"], d["mlc_b"], d.get("jaw_x"), d.get("jaw_y"))
     auditar(u, "laminas_editadas", s, campo=nome)
     return s.resumo()
+
+
+@app.post("/api/{sid}/campo/{nome}/lamina")
+def mover_lamina(sid: str, nome: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        if d.get("jaw"):
+            s.mover_jaw(nome, str(d["jaw"]), float(d["pos"]))
+        else:
+            s.mover_lamina(nome, int(d["par"]), str(d["banco"]), float(d["pos"]))
+    auditar(u, "laminas_editadas", s, campo=nome)
+    return s.resumo()
+
+
+@app.post("/api/{sid}/campo/{nome}/desenho")
+def desenho_laminas(sid: str, nome: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        r = s.desenhar_laminas(nome, d.get("pontos") or [], str(d.get("modo", "abrir")), d.get("encontro", "fora"))
+    auditar(u, "laminas_desenhadas", s, campo=nome, modo=d.get("modo"))
+    return {**s.resumo(), "desenho_avisos": r.get("avisos", [])}
 
 
 @app.delete("/api/{sid}/campo/{nome}")
@@ -278,6 +300,48 @@ def remover_bolus(sid: str, nome: str, u: dict = Depends(usuario)):
     s = _s(sid)
     s.remover_bolus(nome)
     auditar(u, "bolus_removido", s, nome=nome)
+    return s.resumo()
+
+
+@app.post("/api/{sid}/plano/trocar")
+def plano_trocar(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        return s.trocar_plano(str(d.get("rotulo", "")))
+
+
+@app.post("/api/{sid}/plano/copiar")
+def plano_copiar(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        r = s.copiar_plano(str(d.get("rotulo", "")))
+    auditar(u, "plano_copiado", s)
+    return r
+
+
+@app.delete("/api/{sid}/plano/{rotulo}")
+def plano_remover(sid: str, rotulo: str, u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        r = s.remover_plano(rotulo)
+    auditar(u, "plano_removido_da_sessao", s, rotulo=rotulo)
+    return r
+
+
+@app.post("/api/{sid}/setup")
+def setup(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    s.adicionar_setup(d.get("nome", ""), float(d.get("gantry", 0)), float(d.get("x_cm", 20)), float(d.get("y_cm", 20)),
+                      float(d.get("colimador", 0)), float(d.get("mesa", 0)))
+    auditar(u, "campo_setup", s, **{k: d.get(k) for k in ("nome", "gantry", "x_cm", "y_cm")})
+    return s.resumo()
+
+
+@app.delete("/api/{sid}/setup/{nome}")
+def remover_setup(sid: str, nome: str, u: dict = Depends(usuario)):
+    s = _s(sid)
+    s.remover_setup(nome)
+    auditar(u, "campo_setup_removido", s, nome=nome)
     return s.resumo()
 
 
@@ -399,8 +463,14 @@ def dose_corte(sid: str, vista: str, idx: int, minimo: float = 20.0, maximo: flo
 
 
 @app.get("/api/{sid}/sobreposicao/{vista}/{idx}")
-def sobreposicao(sid: str, vista: str, idx: int, isodoses: bool = True, u: dict = Depends(usuario)):
-    return _s(sid).sobreposicao(vista, idx, None, isodoses)
+def sobreposicao(sid: str, vista: str, idx: int, isodoses: bool = True, niveis: str = "", ref: str = "rx",
+                 unidade: str = "pct", u: dict = Depends(usuario)):
+    try:
+        lista = [float(x) for x in niveis.replace(";", ",").split(",") if x.strip()] or None
+    except ValueError as e:
+        raise ErroUsuario("Níveis de isodose inválidos") from e
+    return _s(sid).sobreposicao(vista, idx, None, isodoses, lista, "max" if ref == "max" else "rx",
+                                "gy" if unidade == "gy" else "pct")
 
 
 @app.get("/api/{sid}/bev/{nome}")

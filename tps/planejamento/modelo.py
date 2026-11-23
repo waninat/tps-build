@@ -32,9 +32,11 @@ class Prescricao:
     dose_total_gy: float
     fracoes: int
     estrutura_alvo: str                 # nome da estrutura (ex.: PTV)
-    metodo: str = "media_alvo"          # media_alvo | isocentro | ponto
+    metodo: str = "media_alvo"          # media_alvo | isocentro | ponto | maximo | cobertura | um_fixas
     ponto_mm: tuple | None = None       # para metodo="ponto"
     isodose_pct: float = 100.0          # prescrição à isodose de x% do valor de normalização
+    cobertura_volume_pct: float | None = None   # metodo="cobertura": y% do volume do alvo recebe…
+    cobertura_dose_pct: float | None = None     # …pelo menos x% da prescrição (ex.: 95% em 98%)
 
     @property
     def dose_fracao_gy(self) -> float:
@@ -48,10 +50,15 @@ class Prescricao:
             erros.append(f"Número de frações fora da faixa aceita (1–60): {self.fracoes}")
         if self.dose_fracao_gy > 25:
             erros.append(f"Dose por fração acima de 25 Gy: {self.dose_fracao_gy:.2f}")
-        if self.metodo not in ("media_alvo", "isocentro", "ponto", "um_fixas"):
+        if self.metodo not in ("media_alvo", "isocentro", "ponto", "um_fixas", "maximo", "cobertura"):
             erros.append(f"Método de normalização desconhecido: {self.metodo}")
         if self.metodo == "ponto" and self.ponto_mm is None:
             erros.append("Normalização em ponto sem coordenada")
+        if self.metodo == "cobertura":
+            if not (self.cobertura_volume_pct and 1 <= self.cobertura_volume_pct <= 100):
+                erros.append("Normalização por cobertura: volume (%) entre 1 e 100")
+            if not (self.cobertura_dose_pct and 50 <= self.cobertura_dose_pct <= 110):
+                erros.append("Normalização por cobertura: dose (%) entre 50 e 110")
         if not (50 <= self.isodose_pct <= 110):
             erros.append(f"Isodose de prescrição fora da faixa (50–110%): {self.isodose_pct}")
         return erros
@@ -103,6 +110,7 @@ class Plano:
     densidades: dict = field(default_factory=dict)          # estrutura → densidade eletrônica relativa forçada
     bolus: list = field(default_factory=list)               # [{"nome", "espessura_mm", "campos"}]
     pontos: list = field(default_factory=list)              # [{"nome", "xyz"}] pontos de referência
+    campos_setup: list = field(default_factory=list)        # campos de localização (sem dose; SETUP no DICOM)
 
     # ------------------------------------------------------------------ edição controlada
     def _exigir_rascunho(self):
@@ -131,6 +139,15 @@ class Plano:
         for c in d.get("campos", []):           # campo sem descrição: mesmo hash das versões anteriores
             if not c.get("descricao"):
                 c.pop("descricao", None)
+        for k in ("cobertura_volume_pct", "cobertura_dose_pct"):    # idem para campos novos vazios
+            if d["prescricao"].get(k) is None:
+                d["prescricao"].pop(k, None)
+        if not d.get("campos_setup"):
+            d.pop("campos_setup", None)
+        else:
+            for c in d["campos_setup"]:
+                if not c.get("descricao"):
+                    c.pop("descricao", None)
         return _normalizar(d)
 
     def hash_conteudo(self) -> str:

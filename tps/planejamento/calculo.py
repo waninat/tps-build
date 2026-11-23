@@ -110,6 +110,15 @@ def metrica_normalizacao(dose: np.ndarray, plano: Plano, grade: GradeDose, masca
         if mascara_alvo is None or not mascara_alvo.any():
             raise ValueError("Normalização pela média do alvo sem máscara do alvo")
         return float(dose[mascara_alvo].mean())
+    if pr.metodo == "maximo":
+        corpo = grade.eta > 0.3
+        return float(dose[corpo].max()) if corpo.any() else float(dose.max())
+    if pr.metodo == "cobertura":
+        if mascara_alvo is None or not mascara_alvo.any():
+            raise ValueError("Normalização por cobertura sem máscara do alvo")
+        # D_y: dose recebida por pelo menos y% do volume; a prescrição vai para x% nesse nível
+        dy = float(np.percentile(dose[mascara_alvo], 100.0 - pr.cobertura_volume_pct))
+        return dy * 100.0 / pr.cobertura_dose_pct
     if pr.metodo == "isocentro":
         isos = {tuple(np.round(c.isocentro_mm, 1)) for c in plano.campos}
         if len(isos) != 1:

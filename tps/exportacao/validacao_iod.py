@@ -52,7 +52,8 @@ def conferir_rtplan(ds: Dataset) -> list[str]:
     for b in ds.get("BeamSequence", []):
         onde = f"feixe {b.get('BeamNumber', '?')}"
         erros += _faltas(b, _FEIXE, onde)
-        nums.add(int(b.BeamNumber))
+        if str(b.get("TreatmentDeliveryType", "TREATMENT")) != "SETUP":   # setup não entra na fração
+            nums.add(int(b.BeamNumber))
         cps = b.get("ControlPointSequence", [])
         if len(cps) != int(b.get("NumberOfControlPoints", -1)):
             erros.append(f"{onde}: NumberOfControlPoints ≠ itens da sequência")

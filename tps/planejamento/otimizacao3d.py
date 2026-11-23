@@ -142,6 +142,88 @@ def field_in_field(plano: Plano, grade: calculo.GradeDose, doses_um: dict[str, n
                         indice_homogeneidade(dose, alvo), avisos)
 
 
+def field_in_field_filtro(plano: Plano, grade: calculo.GradeDose, doses_um: dict[str, np.ndarray], alvo: np.ndarray,
+                          corpo: np.ndarray, colim: Colimacao, modelo, niveis_pct=(97.0, 94.0, 91.0, 88.0),
+                          peso_pct: float = 3.0, campos_base: list[str] | None = None, area_min_cm2: float = 4.0,
+                          kernels=None, posicao: str = "HFS", permitir_demonstracao: bool = False,
+                          excluir_superficie_mm: float = 5.0, frac_alvo_max: float | None = None) -> ResultadoFiF:
+    """Field-in-field "como filtro" (técnica manual do Eclipse). SRS-PLN-045.
+
+    Com os campos abertos normalizados ao máximo (100% = dose máxima no corpo, longe da pele), para cada nível
+    L (ex.: 97, 94, 91, 88%) cada campo escolhido recebe um subcampo que bloqueia a projeção da isodose ≥ L. As UM
+    dos subcampos de um nível tiram, juntas, `peso_pct`% da dose máxima da região bloqueada (divididas entre os
+    campos escolhidos) e saem do próprio campo-pai (o feixe entrega o mesmo total de UM). Quanto mais quente a
+    região, mais níveis a bloqueiam: 100% perde 4×3%, 95% perde 3×3%… e a região quente fica achatada, como um
+    filtro. A normalização final é a do plano."""
+    plano._exigir_rascunho()
+    eixos = (grade.x, grade.y, grade.z)
+    principais = [c for c in plano.campos if c.campo_pai is None]
+    base = [c for c in principais if campos_base is None or c.nome in campos_base]
+    if not base:
+        raise ValueError("Escolha pelo menos um campo para os subcampos")
+    from scipy.ndimage import binary_erosion
+    passo = abs(grade.x[1] - grade.x[0])
+    interior = binary_erosion(corpo, iterations=max(1, int(round(excluir_superficie_mm / passo))))
+    d0 = calculo.normalizar(plano, doses_um, grade, alvo)
+    rx = plano.prescricao.dose_fracao_gy
+    hi0 = indice_homogeneidade(d0, alvo)
+    dmax0 = float(d0[corpo].max() / rx * 100)
+    ref = float(d0[interior].max()) if interior.any() else float(d0.max())
+    avisos, novos = [], []
+    u, v = grade_bev(colim.jaw_y_max_mm + 5, 1.0)
+    for k, nivel in enumerate(sorted(niveis_pct, reverse=True), start=1):
+        quente = (d0 >= nivel / 100.0 * ref) & interior
+        if quente.sum() * grade.voxel_cc < 0.05:
+            avisos.append(f"Isodose de {nivel:g}% sem volume: nível ignorado")
+            continue
+        cob = float((quente & alvo).sum()) / max(float(alvo.sum()), 1.0)
+        if frac_alvo_max is not None and cob > frac_alvo_max:
+            avisos.append(f"Isodose de {nivel:g}% cobre {cob * 100:.0f}% do alvo: o subcampo só baixaria o alvo "
+                          "inteiro (é o mesmo que renormalizar); nível ignorado")
+            continue
+        for c in base:
+            sub = copy.deepcopy(c)
+            sub.nome = f"{c.nome[:12]}f{k}"
+            sub.mu, sub.campo_pai = None, c.nome
+            pai = raster_da_abertura(c, colim, u, v)
+            try:
+                r = ajustar(sub, colim, alvos=[], blindagens=[], eixos=eixos, op=OpcoesAjuste("area", segmentos="maior"),
+                            posicao=posicao, abertura_base=_menos(pai, quente, eixos, sub, posicao))
+            except ValueError as e:
+                avisos.append(f"{sub.nome}: sem subcampo ({e})")
+                continue
+            if r.abertura.area_cm2() < area_min_cm2:
+                avisos.append(f"{sub.nome}: abertura pequena demais ({r.abertura.area_cm2():.1f} cm²); nível ignorado")
+                continue
+            # UM do subcampo para tirar peso_pct% (da dose máxima) da região quente, dividido entre os campos
+            d_pai = doses_um[c.nome][quente]
+            por_um = float(d_pai.mean()) if d_pai.size else 0.0
+            if por_um <= 0:
+                avisos.append(f"{sub.nome}: o campo não passa pela isodose de {nivel:g}%")
+                continue
+            sub.peso = peso_pct / 100.0 * ref / por_um / len(base)
+            novos.append(sub)
+    if not novos:
+        return ResultadoFiF([], dmax0, dmax0, 0.0, 0.0, hi0, hi0, avisos + ["Nenhum subcampo criado"])
+    doses_um.update(calculo.dose_por_um(grade, novos, colim, modelo, kernels, posicao, permitir_demonstracao))
+    # pesos: o campo-pai cede as UM dos seus subcampos (o feixe entrega o mesmo total)
+    for c in principais:
+        c.peso = float(c.mu)
+    for sub in novos:
+        pai = next(c for c in principais if c.nome == sub.campo_pai)
+        pai.peso -= sub.peso
+        plano.adicionar_campo(sub)
+    for c in principais:
+        if c.peso <= 0.05 * float(c.mu):
+            raise ValueError(f"{c.nome}: os subcampos tomariam todo o peso do campo (diminua o peso por nível)")
+    dose = calculo.normalizar(plano, doses_um, grade, alvo)
+    pequenos = [f"{c.nome} ({c.mu:.1f} UM)" for c in novos if (c.mu or 0) < 2.0]
+    if pequenos:
+        avisos.append("Subcampos com menos de 2 UM (confira a UM mínima do acelerador): " + ", ".join(pequenos))
+    return ResultadoFiF(novos, dmax0, float(dose[corpo].max() / rx * 100), 0.0, 0.0, hi0,
+                        indice_homogeneidade(dose, alvo), avisos)
+
+
 def _menos(pai, quente, eixos, campo, posicao):
     from tps.planejamento.ajuste_mlc import RasterBEV, bev_da_estrutura
     q = bev_da_estrutura(quente, eixos, campo, pai.u, pai.v, posicao=posicao)
