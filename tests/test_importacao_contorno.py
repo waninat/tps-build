@@ -127,3 +127,28 @@ def test_contorno_mascara_poligono_ida_e_volta():
     novos = K.interpolar({0: m, 4: np.zeros_like(m) | K.pincel(np.zeros_like(m), x, y, [[0, 0]], 10, False)},
                          np.arange(5) * 3.0)
     assert set(novos) == {1, 2, 3}
+
+
+def test_aprovar_com_conferencia_fora_exige_justificativa(cli):
+    from tps.app.servidor import SESSOES
+    c, caso, home = cli
+    s = _ok(c.post("/api/caso/ct", json={"pasta": str(caso)}))
+    sid = s["id"]
+    _ok(c.post(f"/api/{sid}/maquina", json={"id": "radioserra_precise"}))
+    _ok(c.post(f"/api/{sid}/plano", json={"rotulo": "JUST", "dose_total": 50, "fracoes": 25, "alvo": "PTV_fantoma"}))
+    for g in (0, 90, 180, 270):
+        _ok(c.post(f"/api/{sid}/campo", json={"gantry": g}))
+    r = _ok(c.post(f"/api/{sid}/calcular", json={"field_in_field": True}))
+    conf = r["resultado"]["conferencia_um"]
+    assert all(k["ok"] for k in conf)                        # Clarkson + subcampos no feixe: tudo dentro de 3%
+    assert any(k.get("informativo") for k in conf) == any(k.get("feixe") for k in conf)
+    SESSOES[sid].resultado["conferencia_um"][0].update(ok=False, dif_pct=4.2)
+    r = c.post(f"/api/{sid}/aprovar", json={"senha": "senha-forte-1"})
+    assert r.status_code == 400 and "justificativa" in r.json()["erro"]
+    r = c.post(f"/api/{sid}/aprovar", json={"senha": "senha-forte-1", "justificativa": "ok"})
+    assert r.status_code == 400
+    r = _ok(c.post(f"/api/{sid}/aprovar", json={"senha": "senha-forte-1",
+                                                 "justificativa": "Campo lateral atravessa osso; conferido à mão"}))
+    assert r["plano"]["aprovacao"]["conferencia_um_justificativa"]["campos"][0]["dif_pct"] == 4.2
+    pdf = c.get(f"/api/{sid}/relatorio.pdf")
+    assert pdf.status_code == 200

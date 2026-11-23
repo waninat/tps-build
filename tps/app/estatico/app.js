@@ -42,13 +42,13 @@ function modal(titulo, html, { ok = "OK", cancelar = true } = {}) {
     $("#modal-titulo").textContent = titulo; $("#modal-corpo").innerHTML = html;
     $("#modal-ok").textContent = ok; $("#modal-cancelar").classList.toggle("oculto", !cancelar);
     $("#modal").classList.remove("oculto");
-    const campos = $$("#modal-corpo input, #modal-corpo select");
+    const campos = $$("#modal-corpo input, #modal-corpo select, #modal-corpo textarea");
     if (campos[0]) setTimeout(() => campos[0].focus(), 50);
     const fechar = (v, erro) => { $("#modal").classList.add("oculto"); $("#modal-ok").onclick = $("#modal-cancelar").onclick = null; erro ? reject(new Error("cancelado")) : resolve(v); };
     const valores = () => Object.fromEntries(campos.filter(c => c.name).map(c => [c.name, c.value]));
     $("#modal-ok").onclick = () => fechar(valores());
     $("#modal-cancelar").onclick = () => fechar(null, true);
-    $("#modal-corpo").onkeydown = (ev) => { if (ev.key === "Enter") fechar(valores()); };
+    $("#modal-corpo").onkeydown = (ev) => { if (ev.key === "Enter" && ev.target.tagName !== "TEXTAREA") fechar(valores()); };
   });
 }
 
@@ -138,8 +138,20 @@ function ligar() {
   $$("[data-arranjo]").forEach(b => b.onclick = () => tentar(() => arranjo(b.dataset.arranjo)));
   $("#b-calc").onclick = () => tentar(calcular);
   $("#b-aprovar").onclick = () => tentar(async () => {
-    const senha = await assinatura("aprovar o plano");
-    atualizar(await api("POST", `/api/${E.sid}/aprovar`, { senha }));
+    const fora = ((E.resumo.resultado || {}).conferencia_um || []).filter(k => !k.ok && !k.compensado);
+    let corpo;
+    if (fora.length) {
+      const v = await modal("Aprovar com conferência de UM fora da tolerância",
+        `<p class="pequeno-txt">Conferência independente fora de ±3% em: <b>${fora.map(k => `${k.campo} (${k.dif_pct >= 0 ? "+" : ""}${f1(k.dif_pct, 1)}%)`).join(", ")}</b>.
+         Só aprove depois de investigar (ex.: heterogeneidade, campo muito irregular, ponto em penumbra). A justificativa fica no plano, no relatório e na auditoria.</p>
+         <label>Justificativa<textarea name="justificativa" rows="3"></textarea></label>
+         <label>Senha<input name="senha" type="password"></label>`, { ok: "Aprovar" });
+      if (!v) return;
+      corpo = v;
+    } else {
+      corpo = { senha: await assinatura("aprovar o plano") };
+    }
+    atualizar(await api("POST", `/api/${E.sid}/aprovar`, corpo));
     aviso("Plano aprovado e bloqueado para edição", true);
   });
   $("#b-desaprovar").onclick = () => tentar(async () => {
@@ -430,7 +442,8 @@ function tabelas() {
   const conf = res ? Object.fromEntries(res.conferencia_um.map(k => [k.campo, k])) : {};
   $("#tab-um tbody").innerHTML = !p ? "" : p.campos.map(c => {
     const k = conf[c.nome];
-    const t = !k ? "—" : `<span class="${k.ok ? "ok" : (k.compensado ? "avisotxt" : "falha")}" title="motor ${f1(k.motor_cgy_um, 4)} × tabela ${f1(k.tabela_cgy_um, 4)} cGy/UM">${k.dif_pct >= 0 ? "+" : ""}${f1(k.dif_pct, 2)}%</span>`;
+    const t = !k ? "—" : k.informativo ? `<span class="pequeno-txt" title="subcampo: conferido junto com o campo principal (mesmo feixe)">no feixe</span>` :
+      `<span class="${k.ok ? "ok" : (k.compensado ? "avisotxt" : "falha")}" title="motor ${f1(k.motor_cgy_um, 4)} × tabela ${f1(k.tabela_cgy_um, 4)} cGy/UM${k.feixe ? " — feixe inteiro (campo + " + k.subcampos.join(", ") + ")" : ""}">${k.dif_pct >= 0 ? "+" : ""}${f1(k.dif_pct, 2)}%${k.feixe ? "*" : ""}</span>`;
     return `<tr class="${c.campo_pai ? "sub" : ""}"><td>${c.nome}</td><td>${f1(c.mu)}</td><td>${c.ssd_mm ? f1(c.ssd_mm / 10) : "—"}</td><td>${t}</td></tr>`;
   }).join("");
 }

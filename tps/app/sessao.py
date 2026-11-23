@@ -970,19 +970,33 @@ class Sessao:
         return self.resumo()
 
     # ================================================================== aprovação e exportação
-    def aprovar(self, usuario: str, papel: str):
+    def aprovar(self, usuario: str, papel: str, justificativa: str = "", pode_justificar: bool = False):
+        """Conferência de UM fora da tolerância (TG-114): só aprova com a justificativa da investigação, escrita por
+        quem pode assinar como físico; a justificativa fica no plano, no histórico e na auditoria."""
         self._exigir_plano()
         self._exigir(self.dose_atualizada, "Calcule a dose antes de aprovar")
         self._exigir(bool(usuario.strip()), "Informe o usuário")
         avisos_um = [k for k in self.resultado.get("conferencia_um", []) if not k["ok"] and not k.get("compensado")]
+        justificativa = (justificativa or "").strip()
         if avisos_um:
-            raise ErroUsuario("Conferência de UM fora da tolerância em " + ", ".join(k["campo"] for k in avisos_um) +
-                              ": verifique o plano")
+            lista = ", ".join(f"{k['campo']} ({k['dif_pct']:+.1f}%)" for k in avisos_um)
+            if not justificativa:
+                raise ErroUsuario(f"Conferência independente de UM fora da tolerância em {lista}. Investigue e, se "
+                                  "a diferença estiver explicada, aprove escrevendo a justificativa.")
+            if not pode_justificar:
+                raise ErroUsuario("Só o físico pode aprovar com a conferência de UM fora da tolerância")
+            if len(justificativa) < 15:
+                raise ErroUsuario("Escreva a justificativa por extenso (o que foi investigado e por que é aceitável)")
         try:
             self.plano.aprovar(usuario.strip(), papel)
         except ValueError as e:
             raise ErroUsuario(str(e)) from e
-        self._registrar(f"Aprovado por {usuario} ({papel})")
+        if avisos_um:
+            self.plano.aprovacao["conferencia_um_justificativa"] = {
+                "campos": [{"campo": k["campo"], "dif_pct": round(k["dif_pct"], 2)} for k in avisos_um],
+                "justificativa": justificativa, "usuario": usuario.strip()}
+        self._registrar(f"Aprovado por {usuario} ({papel})" +
+                        (f" com conferência de UM fora da tolerância — justificativa: {justificativa}" if avisos_um else ""))
 
     def desaprovar(self, usuario: str, motivo: str):
         self._exigir_plano()

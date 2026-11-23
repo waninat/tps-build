@@ -162,6 +162,12 @@ def relatorio_pdf(s, usuario: dict | None = None) -> bytes:
     el.append(Paragraph(f"Aprovado por <b>{ap['usuario']}</b> ({ap['papel']}) em {ap['quando']}<br/>"
                         f"<font size=7>hash do plano: {ap['hash']}</font>" if ap else
                         "<font color='#b00020'><b>PLANO NÃO APROVADO</b></font>", normal))
+    ju = (ap or {}).get("conferencia_um_justificativa")
+    if ju:
+        campos_ju = ", ".join(f"{x['campo']} {x['dif_pct']:+.1f}%" for x in ju["campos"])
+        el.append(Paragraph("<font color='#b06000'><b>Aprovado com conferência independente de UM fora da "
+                            f"tolerância</b> ({campos_ju}) — justificativa de {ju['usuario']}: "
+                            f"{ju['justificativa']}</font>", normal))
     if p.historico:
         el.append(Paragraph("Histórico: " + " · ".join(f"{h['evento']} {h.get('usuario', '')} {h.get('quando', '')}"
                                                        for h in p.historico), normal))

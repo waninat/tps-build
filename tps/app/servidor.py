@@ -419,8 +419,9 @@ def drr(sid: str, nome: str, u: dict = Depends(usuario)):
 def aprovar(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     s = _s(sid)
     a = banco().assinar(u, d.get("senha", ""), PODE_APROVAR, "aprovar planos")
-    s.aprovar(a["login"], PAPEIS[a["papel"]])
-    auditar(u, "plano_aprovado", s, hash=s.plano.aprovacao["hash"])
+    s.aprovar(a["login"], PAPEIS[a["papel"]], d.get("justificativa", ""), a["papel"] in PODE_EXPORTAR)
+    auditar(u, "plano_aprovado", s, hash=s.plano.aprovacao["hash"],
+            justificativa_um=(s.plano.aprovacao.get("conferencia_um_justificativa") or {}).get("justificativa"))
     return s.resumo()
 
 

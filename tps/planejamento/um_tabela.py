@@ -135,6 +135,60 @@ def profundidade_radiologica(eta: np.ndarray, eixos: tuple, origem: np.ndarray, 
     return float(geo), float(np.sum(e[dentro[0]:]) * passo_mm)
 
 
+def _abertura_iso(c: Campo, colim: Colimacao, res: float = 1.0):
+    """Abertura do campo no plano do isocentro: (u, v, máscara[v, u]) — mandíbulas e lâminas."""
+    lim = colim.limites_laminas
+    jx = c.jaw_x if c.jaw_x else (float(np.nanmin(c.mlc_a)), float(np.nanmax(c.mlc_b)))
+    u = np.arange(jx[0] + res / 2, jx[1], res)
+    v = np.arange(c.jaw_y[0] + res / 2, c.jaw_y[1], res)
+    i = np.clip(np.searchsorted(lim, v, side="right") - 1, 0, colim.n_pares - 1)
+    a = np.asarray(c.mlc_a, float)[i]
+    b = np.asarray(c.mlc_b, float)[i]
+    m = (u[None, :] > a[:, None]) & (u[None, :] < b[:, None]) & ((b - a) > colim.gap_minimo_mm + 0.5)[:, None]
+    return u, v, m
+
+
+def clarkson(c: Campo, colim: Colimacao, tab: "TabelasFeixe", u0: float, v0: float, escala: float, prof_rad: float,
+             n_setores: int = 36, passo: float = 1.0) -> tuple[float, float]:
+    """Integração de Clarkson de Sp·TMR sobre a abertura vista do ponto (u0, v0) no plano do isocentro.
+    Cada setor soma g(r_saída) − g(r_entrada) dos trechos abertos (g = Sp·TMR do círculo de raio r ↔ quadrado de
+    lado 1,772·r), com r em cm no plano do ponto (× escala). Devolve (Sp·TMR efetivo, quadrado equivalente)."""
+    u, v, m = _abertura_iso(c, colim)
+    if not m.any():
+        return 0.0, 0.0
+    rmax = float(np.hypot(max(abs(u[0] - u0), abs(u[-1] - u0)), max(abs(v[0] - v0), abs(v[-1] - v0)))) + 2
+    rs = np.arange(passo / 2, rmax, passo)
+    eqs = np.unique(np.r_[np.linspace(0.5, 40, 80)])
+
+    def g(r_mm):
+        eq = np.clip(1.772 * r_mm * escala / 10.0, eqs[0], eqs[-1])
+        return np.array([tab._f(tab.sp, e) * tab.tmr_em(e, prof_rad) for e in np.atleast_1d(eq)])
+    du, dv = u[1] - u[0] if len(u) > 1 else 1.0, v[1] - v[0] if len(v) > 1 else 1.0
+    tot = 0.0
+    bordas = []
+    for th in np.linspace(0, 2 * np.pi, n_setores, endpoint=False):
+        pu, pv = u0 + rs * np.cos(th), v0 + rs * np.sin(th)
+        iu = np.round((pu - u[0]) / du).astype(int)
+        iv = np.round((pv - v[0]) / dv).astype(int)
+        ok = (iu >= 0) & (iu < len(u)) & (iv >= 0) & (iv < len(v))
+        ab = np.zeros(len(rs), bool)
+        ab[ok] = m[iv[ok], iu[ok]]
+        dif = np.diff(np.r_[0, ab.astype(int), 0])
+        ent = np.where(dif == 1)[0]
+        sai = np.where(dif == -1)[0]
+        for e0, s0 in zip(ent, sai):
+            r_in = 0.0 if e0 == 0 else rs[e0] - passo / 2
+            r_out = rs[s0 - 1] + passo / 2
+            bordas.append(r_out)
+            tot += float(g(r_out)[0]) - (float(g(r_in)[0]) if r_in > 0 else 0.0)
+    val = tot / n_setores
+    # quadrado equivalente com o mesmo Sp·TMR (para o relatório)
+    eqv = np.linspace(1.0, 40.0, 157)
+    gv = np.array([tab._f(tab.sp, e) * tab.tmr_em(e, prof_rad) for e in eqv])
+    eq = float(np.interp(val, gv, eqv)) if val > gv[0] else float(eqv[0])
+    return val, eq
+
+
 def dose_por_um_tabela(c: Campo, colim: Colimacao, tab: TabelasFeixe, ponto_mm, eta=None, eixos=None,
                        prof_mm: float | None = None, sad_mm: float = 1000.0, posicao: str = "HFS") -> dict:
     """Dose (cGy) por UM no ponto pelo método de tabelas."""
@@ -149,12 +203,15 @@ def dose_por_um_tabela(c: Campo, colim: Colimacao, tab: TabelasFeixe, ponto_mm, 
     else:
         prof_geo = prof_rad = float(prof_mm)
     eq_col, eq_ab = quadrados_equivalentes(c, colim)
-    eq_p = eq_ab * dist / sad_mm
     isq = ((tab.ssd_cal_mm + tab.dmax_mm) / dist) ** 2
-    sc, sp = tab._f(tab.sc, eq_col), tab._f(tab.sp, eq_p)
-    tmr = tab.tmr_em(eq_p, prof_rad)
+    sc = tab._f(tab.sc, eq_col)
+    # espalhamento no paciente por Clarkson sobre a abertura real (campo conformado irregular, ponto fora do centro,
+    # ponto coberto por lâminas) em vez do quadrado equivalente 4A/P
+    sptmr, eq_p = clarkson(c, colim, tab, u, v, dist / sad_mm, prof_rad)
+    sp = tab._f(tab.sp, eq_p)
+    tmr = sptmr / sp if sp > 0 else 0.0
     oar = tab.oar_em(np.hypot(u, v) * dist / sad_mm, prof_geo)
-    d = tab.cgy_por_um * isq * sc * sp * tmr * oar
+    d = tab.cgy_por_um * isq * sc * sptmr * oar
     return {"cgy_por_um": d, "eq_col_cm": eq_col, "eq_abertura_cm": eq_ab, "prof_geo_mm": prof_geo,
             "prof_rad_mm": prof_rad, "dist_mm": dist, "isq": isq, "sc": sc, "sp": sp, "tmr": tmr, "oar": oar}
 
@@ -179,8 +236,12 @@ def dose_por_um_tabela_segmentos(c: Campo, colim: Colimacao, tab: TabelasFeixe, 
         fr = beam_frame(c.gantry, c.colimador, c.mesa, c.isocentro_mm, 1000.0, posicao)
         r = np.asarray(ponto_mm, float) - fr.source
         u, v = 1000.0 * (r @ fr.u) / (r @ fr.w), 1000.0 * (r @ fr.v) / (r @ fr.w)
-        f = 1.0 if _ponto_aberto(sc, colim, u, v) else transmissao
-        total += s["peso"] * f * t["cgy_por_um"]
+        extra = 0.0
+        if not _ponto_aberto(sc, colim, u, v):
+            # ponto sob as lâminas: Clarkson já dá o espalhamento da parte aberta; soma a transmissão do primário
+            prim = tab._f(tab.sp, 0.5) * tab.tmr_em(0.5, t["prof_rad_mm"])
+            extra = transmissao * tab.cgy_por_um * t["isq"] * t["sc"] * prim * t["oar"]
+        total += s["peso"] * (t["cgy_por_um"] + extra)
         eq.append(t["eq_abertura_cm"])
     t["cgy_por_um"], t["eq_abertura_cm"] = total, float(np.mean(eq))
     return t
@@ -204,4 +265,25 @@ def conferir_plano(plano, colim: Colimacao, tab: TabelasFeixe, doses_um: dict, g
         out.append({"campo": c.nome, "motor_cgy_um": float(motor), "tabela_cgy_um": float(t["cgy_por_um"]),
                     "dif_pct": float(dif), "ok": bool(abs(dif) <= tolerancia_pct),
                     **{k: float(t[k]) for k in ("eq_abertura_cm", "prof_rad_mm", "tmr")}})
+    # field-in-field: o campo e os seus subcampos são entregues como UM feixe (step-and-shoot); a conferência que
+    # vale é a do feixe inteiro (Σ UM·dose/UM). Subcampo sozinho, com o ponto coberto pelas lâminas, não tem
+    # conferência por tabela que faça sentido: fica como informativo.
+    por_nome = {k["campo"]: k for k in out}
+    for c in plano.campos:
+        filhos = [f for f in plano.campos if f.campo_pai == c.nome]
+        if not filhos or c.campo_pai:
+            continue
+        grupo = [c] + filhos
+        mu = {f.nome: float(f.mu or 0.0) for f in grupo}
+        if sum(mu.values()) <= 0:
+            continue
+        mot = sum(por_nome[f.nome]["motor_cgy_um"] * mu[f.nome] for f in grupo)
+        tab_ = sum(por_nome[f.nome]["tabela_cgy_um"] * mu[f.nome] for f in grupo)
+        dif = 100 * (mot / tab_ - 1) if tab_ > 0 else float("nan")
+        k = por_nome[c.nome]
+        k.update({"dif_pct": float(dif), "ok": bool(abs(dif) <= tolerancia_pct), "feixe": True,
+                  "motor_cgy_um": float(mot / sum(mu.values())), "tabela_cgy_um": float(tab_ / sum(mu.values())),
+                  "subcampos": [f.nome for f in filhos]})
+        for f in filhos:
+            por_nome[f.nome].update({"ok": True, "informativo": True})
     return out
