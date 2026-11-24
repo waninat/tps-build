@@ -51,16 +51,19 @@ def test_sequenciamento_do_setor_reproduz_a_fluencia_e_varre_num_sentido():
     ab = np.zeros((nv, len(u)), bool)
     ab[30:50, 4:36] = True
     yy, xx = np.mgrid[0:nv, 0:len(u)]
-    F = np.where(ab, 1.0 + 0.5 * np.sin(xx / 5.0) + 0.3 * np.cos(yy / 4.0), 0.0)
-    for sentido in (1, -1):
-        ap, delta = V.sequenciar_setor(F, ab, u, 8, sentido, col, -60, 60)
-        assert len(ap) == 8
-        entregue = sum(I._cobertura(a, b, u, 2.5)[0] for a, b in ap) * delta
-        assert np.abs(entregue - F)[ab].mean() < 0.6 * delta                # erro de quantização
-        A = np.array([a for a, _ in ap])[:, 30:50]
-        B = np.array([b for _, b in ap])[:, 30:50]
-        # varredura num sentido: as duas lâminas só andam para o mesmo lado
-        assert np.all(np.diff(A, axis=0) * sentido >= -1e-6) and np.all(np.diff(B, axis=0) * sentido >= -1e-6)
+    perfis = (np.where(ab, 1.0 + 0.5 * np.sin(xx / 5.0) + 0.3 * np.cos(yy / 4.0), 0.0),      # vários picos: sweep
+              np.where(ab, 2.0 - ((xx - 20) / 16.0) ** 2 + 0.2 * np.cos(yy / 4.0), 0.0))     # um pico: close-in
+    for F in perfis:
+        for sentido in (1, -1):
+            ap, delta = V.sequenciar_setor(F, ab, u, 8, sentido, col, -60, 60)
+            assert len(ap) == 8
+            entregue = sum(I._cobertura(a, b, u, 2.5)[0] for a, b in ap) * delta
+            assert np.abs(entregue - F)[ab].mean() < 0.6 * delta            # erro de quantização
+            A = np.array([a for a, _ in ap])[:, 30:50]
+            B = np.array([b for _, b in ap])[:, 30:50]
+            # varredura num sentido (ou close-in): cada lâmina percorre no máximo a faixa uma vez por setor
+            for M in (A, B):
+                assert np.abs(np.diff(M, axis=0)).sum(axis=0).max() <= 80 + 5
 
 
 def test_intervalos_do_arco_e_exportacao_dynamic(tmp_path):

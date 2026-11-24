@@ -171,8 +171,9 @@ def _tv(Q: np.ndarray) -> np.ndarray:
 
 def sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sentido: int, colim: Colimacao,
                      lo: float, hi: float, fechados_em: np.ndarray | None = None) -> tuple[list, float]:
-    """Fluência do setor → n aberturas (a, b) de uma janela deslizante unidirecional (sentido +1: da esquerda para a
-    direita) e o nível de fluência de cada abertura. Cada par usa ≤ n intervalos do sweep (Bortfeld) em pontos
+    """Fluência do setor → n aberturas (a, b) e o nível de fluência de cada abertura. Pares com perfil de um pico só:
+    close-in (sentido +1: do mais largo ao mais estreito; −1: o contrário). Os outros: janela deslizante
+    unidirecional (sentido +1: da esquerda para a direita). Cada par usa ≤ n intervalos do sweep (Bortfeld) em pontos
     seguidos; nos outros espera fechado no começo ou no fim da sua própria faixa (lâminas sempre no mesmo sentido).
     Pares sem fluência no setor ficam parados, fechados em `fechados_em` (mm no BEV; padrão: centro)."""
     res = float(u[1] - u[0])
@@ -202,6 +203,30 @@ def sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sent
     B = np.zeros((n, nv))
     aberto = np.zeros((n, nv), bool)
     for i in range(nv):
+        qmax = int(Q[i].max()) if i in linhas_ab else 0
+        if 0 < qmax and _tv(Q[i:i + 1])[0] == qmax:
+            # perfil de um pico só: "close-in" (conjuntos de nível, do mais largo ao mais estreito ou ao contrário);
+            # cada lâmina anda só meia faixa por setor e o setor seguinte começa onde este terminou
+            ivs = []
+            for t in range(1, qmax + 1):
+                cc = np.nonzero(Q[i] >= t)[0]
+                ivs.append((cc[0], cc[-1] + 1))
+            je, jd = ivs[-1]
+            pico = 0.5 * (s_col[je] - res / 2 + s_col[jd - 1] + res / 2)
+            ordem = ivs if sentido > 0 else ivs[::-1]
+            t0 = 0 if sentido > 0 else n - qmax
+            for t in range(n):
+                k = t - t0
+                if 0 <= k < qmax:
+                    e, d = s_col[ordem[k][0]] - res / 2, s_col[ordem[k][1] - 1] + res / 2
+                    if d - e < g:
+                        cc_ = 0.5 * (e + d)
+                        e, d = cc_ - g / 2, cc_ + g / 2
+                    A[t, i], B[t, i] = e, d
+                    aberto[t, i] = True
+                else:
+                    A[t, i], B[t, i] = pico - g / 2, pico + g / 2
+            continue
         ivs = I.intervalos_sweep(Q[i]) if i in linhas_ab else []
         if i in linhas_ab:
             cc = np.nonzero(abs_[i])[0]
@@ -262,7 +287,7 @@ def _fluencia_intervalos(Acp, Bcp, w, arcos, mapas, blocos, n_total, mu0, linhas
 
 
 def otimizar_pontos(arcos, Acp, Bcp, w, mapas, blocos, mod, custo, colim, lim: LimitesVMAT, mu0, linhas_arco,
-                    limites_x, faixas=None, maxiter: int = 120):
+                    limites_x, faixas=None, maxiter: int = 120, passo_mm: float = 10.0):
     """Posições das lâminas em todos os pontos de controle e UM dos intervalos juntos, no modelo rápido calibrado.
     Penalidades: gap, (MLCi) interdigitação e percurso por grau acima do limite (que só alonga a entrega)."""
     g = colim.gap_minimo_mm
@@ -288,6 +313,9 @@ def otimizar_pontos(arcos, Acp, Bcp, w, mapas, blocos, mod, custo, colim, lim: L
                         e0, e1 = max(e[0], lo), min(e[1], hi)
                         bnds += [(e0, max(e1 - g, e0)), (min(e0 + g, e1), e1)]
     nX = len(x0)
+    # região de confiança: o modelo rápido só vale perto das aberturas em que foi calibrado
+    bnds = [(max(lo_, x - passo_mm), min(hi_, x + passo_mm)) if lo_ <= x <= hi_ else (lo_, hi_)
+            for (lo_, hi_), x in zip(bnds, x0)]
     x0 = np.r_[np.asarray(x0, float), np.asarray(w, float)]
     for arco in arcos:
         for dg in arco["dtheta"]:
@@ -619,12 +647,13 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
     w = otimizar_um(M, w)
     hist = [float(custo(M @ w)[0])]
     aviso(f"Custo {hist[-1]:.4f} depois do sequenciamento")
+    passo_mm = 10.0
     for it in range(iteracoes):
         mod.corr[:] = 0.0
         mod.corr = (M @ w) - mod.dose(entregue(Acp, Bcp, w))
         aviso(f"Otimizando as lâminas dos pontos de controle (iteração {it + 1})…")
         Ak, Bk, w2 = otimizar_pontos(arcos, Acp, Bcp, w, mapas, blocos, mod, custo, colim, lim, mu0, linhas_arco,
-                                     limites_x, faixas)
+                                     limites_x, faixas, passo_mm=passo_mm)
         for k in range(len(arcos)):
             lo, hi = limites_x[k]
             for j in range(Ak[k].shape[0]):
@@ -638,9 +667,9 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         if f2 < hist[-1]:
             Acp, Bcp, M, w = Ak, Bk, M2, w2
             hist.append(f2)
-        else:
-            avisos.append(f"Iteração {it + 1} da otimização das lâminas não melhorou o custo ({f2:.4f}): parou")
-            break
+        else:                                                  # passo grande demais para o modelo: encolhe
+            passo_mm /= 2.0
+            avisos.append(f"Iteração {it + 1} das lâminas não melhorou o custo ({f2:.4f}); passo → {passo_mm:g} mm")
 
     # ---- final: pontos de controle nos arcos e dose na grade do plano
     restr_viol = None
