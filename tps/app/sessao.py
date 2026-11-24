@@ -1597,25 +1597,32 @@ class Sessao:
             if e is None or not e.mascara.any():
                 raise ErroUsuario(f"Estrutura {o.get('estrutura')} vazia ou inexistente")
             tipo = o.get("tipo", "max")
-            if tipo not in ("alvo", "max", "media", "dvh", "min"):
+            if tipo not in I.TIPOS:
                 raise ErroUsuario(f"Tipo de objetivo inválido: {tipo}")
             try:
                 dose = float(o["dose_gy"])
             except (KeyError, TypeError, ValueError) as ex:
                 raise ErroUsuario(f"{e.nome}: informe a dose do objetivo") from ex
             vol = o.get("volume_pct")
-            if tipo == "dvh" and vol in (None, ""):
-                raise ErroUsuario(f"{e.nome}: objetivo de DVH precisa do volume (%)")
+            if tipo in ("dvh", "paralelo") and vol in (None, ""):
+                raise ErroUsuario(f"{e.nome}: objetivo de {tipo} precisa do volume (%)")
+            alvos_def = [x for x in (im.get("objetivos") or []) if x.get("tipo") == "alvo"
+                         and x.get("estrutura") in self.estruturas]
             masc = e.mascara
             if tipo != "alvo" and o.get("fora_do_alvo", True):        # a parte do órgão dentro do alvo não briga
-                for a in (x for x in (im.get("objetivos") or []) if x.get("tipo") == "alvo"):
-                    if a["estrutura"] in self.estruturas:
-                        masc = masc & ~self.estruturas[a["estrutura"]].mascara
+                for a in alvos_def:
+                    masc = masc & ~self.estruturas[a["estrutura"]].mascara
                 if not masc.any():
                     masc = e.mascara
+            elif tipo == "alvo":                                       # boost integrado: o alvo de dose maior manda
+                for a in alvos_def:
+                    if a["estrutura"] != e.nome and float(a["dose_gy"]) > dose:
+                        masc = masc & ~self.estruturas[a["estrutura"]].mascara
+                if not masc.any():
+                    raise ErroUsuario(f"{e.nome} está inteiro dentro de um alvo de dose maior")
             objs.append(I.Objetivo(e.nome, masc, tipo, dose, float(vol) if vol not in (None, "") else None,
-                                   float(o.get("peso", 1.0))))
-            guardar.append({k: o.get(k) for k in ("estrutura", "tipo", "dose_gy", "volume_pct", "peso")})
+                                   float(o.get("peso", 1.0)), bool(o.get("restrito")) and tipo != "alvo"))
+            guardar.append({k: o.get(k) for k in ("estrutura", "tipo", "dose_gy", "volume_pct", "peso", "restrito")})
         if not any(o.tipo == "alvo" for o in objs):
             raise ErroUsuario("Defina pelo menos um alvo com dose")
         for c in p.campos:
@@ -1624,23 +1631,35 @@ class Sessao:
 
         def prog(msg):
             self.progresso = msg
+        evitar = []
+        for a in im.get("avoidance") or []:
+            e = self.estruturas.get(a.get("estrutura"))
+            if e is None or not e.mascara.any():
+                raise ErroUsuario(f"Avoidance: estrutura {a.get('estrutura')} vazia ou inexistente")
+            if a.get("modo", "ambos") not in ("entrada", "saida", "ambos"):
+                raise ErroUsuario("Avoidance: modo deve ser entrada, saida ou ambos")
+            evitar.append((e.nome, e.mascara, a.get("modo", "ambos")))
         try:
             r = I.otimizar_imrt(p, g, self.doses_um, objs, corpo, m.colim, m.modelo,
                                 niveis=int(im.get("niveis", 7)), iteracoes=int(im.get("iteracoes", 2)),
                                 um_min_segmento=float(im.get("um_min", 3.0)),
                                 area_min_cm2=float(im.get("area_min_cm2", 4.0)),
-                                peso_nto=float(im.get("peso_nto", 1.0)), progresso=prog)
+                                peso_nto=float(im.get("peso_nto", 1.0)), progresso=prog, evitar=evitar,
+                                flash_mm=float(im.get("flash_mm", 0) or 0),
+                                flash_pele_mm=float(im.get("flash_pele_mm", 5) or 5),
+                                forma_segmentos=bool(im.get("forma_segmentos", True)))
         except ValueError as ex:
             raise ErroUsuario(str(ex)) from ex
         finally:
             self.progresso = None
         p.tecnica = "IMRT"
         p.objetivos_imrt = guardar
+        p.__dict__["_imrt_opcoes"] = {k: im.get(k) for k in ("avoidance", "flash_mm", "flash_pele_mm")}
         self.avisos += r.avisos
         self._registrar(f"IMRT: {sum(r.n_segmentos.values())} segmentos em {len(r.n_segmentos)} campos, "
                         f"{r.um_total:.0f} UM, {r.tempo_s:.0f} s")
         return {"segmentos": r.n_segmentos, "um_total": r.um_total, "custo": r.custo, "avisos": r.avisos,
-                "tempo_s": r.tempo_s}
+                "tempo_s": r.tempo_s, "restricoes": r.restricoes}
 
     def _conferencia_composta(self, alvo, tolerancia_pct: float = 5.0) -> dict:
         """IMRT: conferência independente do plano inteiro num ponto de baixo gradiente dentro do alvo

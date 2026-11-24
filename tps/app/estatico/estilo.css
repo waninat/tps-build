@@ -187,3 +187,5 @@ td.bom { color: var(--ok); } td.ruim { color: var(--perigo); } td.aviso { color:
 #tab-objetivos td:nth-child(2) select { max-width: 92px; }
 #tab-objetivos td:nth-child(3) input, #tab-objetivos td:nth-child(4) input, #tab-objetivos td:nth-child(5) input { width: 40px; }
 #o-tecnica { font-weight: 600; }
+#tab-objetivos td:nth-child(6) input { width: auto; }
+#tab-avoid select { padding: 1px 3px; font-size: 11px; }

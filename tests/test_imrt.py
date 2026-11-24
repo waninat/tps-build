@@ -92,13 +92,15 @@ def test_imrt_de_ponta_a_ponta(cli):
     sug = _ok(c.get(f"/api/{sid}/imrt/objetivos"))
     assert sug[0]["tipo"] == "alvo"
     obj = [{"estrutura": "PTV_fantoma", "tipo": "alvo", "dose_gy": 50, "peso": 5},
-           {"estrutura": "Osso_inserto", "tipo": "media", "dose_gy": 0.6 * osso0, "peso": 2}]
+           {"estrutura": "Osso_inserto", "tipo": "media", "dose_gy": 0.75 * osso0, "peso": 1, "restrito": True}]
     r = _ok(c.post(f"/api/{sid}/calcular", json={"metodo": "media_alvo", "imrt": {
         "objetivos": obj, "niveis": 5, "iteracoes": 1, "um_min": 2, "area_min_cm2": 2}}))
     im = r["resultado"]["info"]["imrt"]
     assert sum(im["segmentos"].values()) >= len(im["segmentos"]) and r["plano"]["tecnica"] == "IMRT"
     est = r["resultado"]["estatisticas"]
     assert est["Osso_inserto"]["Dmean"] < osso0                         # o órgão protegido recebe menos
+    (viol,) = im["restricoes"].values()                                  # restrito (Monaco): cumprido
+    assert viol < 3.0
     assert est["PTV_fantoma"]["D95"] > 0.9 * 50
     conf = r["resultado"]["conferencia_um"]
     comp = [k for k in conf if k.get("composta")]
@@ -126,3 +128,82 @@ def test_imrt_de_ponta_a_ponta(cli):
     for b in rp.BeamSequence:
         pesos = [float(cp.CumulativeMetersetWeight) for cp in b.ControlPointSequence]
         assert pesos[0] == 0 and abs(pesos[-1] - 1) < 1e-6 and pesos == sorted(pesos)
+
+
+def test_gradientes_dos_termos():
+    rng = np.random.default_rng(0)
+    d = rng.uniform(20, 60, 200)
+    m = np.ones(1, bool)
+    for tipo, vol in (("alvo", None), ("min", None), ("max", None), ("media", None), ("dvh", 30),
+                      ("serial", 8), ("paralelo", 20)):
+        o = I.Objetivo("x", m, tipo, 45.0, vol)
+        f0, g = I._termo(o, d)
+        h = 1e-4
+        for k in rng.choice(200, 5, replace=False):
+            dd = d.copy()
+            dd[k] += h
+            num = (I._termo(o, dd)[0] - f0) / h
+            assert num == pytest.approx(g[k], rel=2e-2, abs=1e-8), (tipo, k)
+
+
+def test_lagrangiano_aumentado_cumpre_a_restricao():
+    """Problema de brinquedo: dois 'campos'; o órgão só é poupado sacrificando a homogeneidade do alvo."""
+    rng = np.random.default_rng(1)
+    A_alvo = np.column_stack([rng.uniform(0.98, 1.02, 100), rng.uniform(0.6, 1.4, 100)])
+    A_oar = np.column_stack([np.full(50, 0.9), np.full(50, 0.1)])
+    A = np.vstack([A_alvo, A_oar])
+    m = np.ones(1, bool)
+    alvo = I.Objetivo("alvo", m, "alvo", 50.0)
+    for restrito, deve in ((False, False), (True, True)):
+        oar = I.Objetivo("oar", m, "media", 20.0, peso=0.1, restrito=restrito)
+        cu = I.Custo([alvo, oar], [np.arange(100), np.arange(100, 150)], None)
+
+        def fun(w):
+            f, gD = cu(A @ w)
+            return f, A.T @ gD
+        w = I._minimizar_al(fun, np.array([25.0, 25.0]), [(0, None)] * 2, cu, lambda w: A @ w, 8, 300)
+        media_oar = float((A_oar @ w).mean())
+        assert (media_oar <= 20.0 * 1.01) == deve, (restrito, media_oar)
+
+
+def test_avoidance_entrada_e_saida():
+    from tps.planejamento.calculo import GradeDose
+    x = y = np.arange(-100, 101, 4.0)
+    z = np.arange(-40, 41, 4.0)
+    Z, Y, X = np.meshgrid(z, y, x, indexing="ij")
+    g = GradeDose(x, y, z, np.ones(Z.shape, np.float32))
+    alvo = (np.abs(X) < 20) & (np.abs(Y) < 20) & (np.abs(Z) < 20)
+    anterior = (np.abs(X) < 20) & (Y > -60) & (Y < -35) & (np.abs(Z) < 20)      # y < 0 = anterior (HFS)
+    colim = Colimacao.mlci()
+    c = campo_de_retangulo(CampoRetangular(nome="AP", gantry=0, x1_mm=40, x2_mm=40, y1_mm=40, y2_mm=40), colim,
+                           (0, 0, 0), 6)
+    u, v, ab = I._grade_fluencia(c, colim, 2.5)
+    ent = I.bloqueio_avoidance(g, c, u, v, "HFS", alvo, [(anterior, "entrada")])
+    sai = I.bloqueio_avoidance(g, c, u, v, "HFS", alvo, [(anterior, "saida")])
+    centro = (np.abs(v) < 10)[:, None] & (np.abs(u) < 10)[None, :]
+    assert ent[centro].all() and not sai[centro].any()
+    c.gantry = 180.0                                        # PA: a mesma estrutura agora está na saída
+    ent = I.bloqueio_avoidance(g, c, u, v, "HFS", alvo, [(anterior, "entrada")])
+    sai = I.bloqueio_avoidance(g, c, u, v, "HFS", alvo, [(anterior, "saida")])
+    assert not ent[centro].any() and sai[centro].all()
+
+
+def test_auto_flash_abre_para_fora_da_pele():
+    from tps.planejamento.ajuste_mlc import bev_da_estrutura, raster_da_abertura
+    from tps.planejamento.calculo import GradeDose
+    x = y = np.arange(-120, 121, 3.0)
+    z = np.arange(-45, 46, 3.0)
+    Z, Y, X = np.meshgrid(z, y, x, indexing="ij")
+    corpo = (X ** 2 + Y ** 2 <= 100 ** 2)
+    g = GradeDose(x, y, z, corpo.astype(np.float32))
+    alvo = corpo & (Y < -70) & (np.abs(X) < 30) & (np.abs(Z) < 30)          # encosta na pele anterior
+    colim = Colimacao.mlci()
+    c = campo_de_retangulo(CampoRetangular(nome="LAT", gantry=90, x1_mm=50, x2_mm=50, y1_mm=40, y2_mm=40), colim,
+                           (0, -80, 0), 6)
+    from tps.planejamento.ajuste_mlc import grade_bev
+    uu, vv = grade_bev(150, 2.0)
+    antes = raster_da_abertura(c, colim, uu, vv).m
+    fora = ~bev_da_estrutura(corpo, (x, y, z), c, uu, vv).m
+    assert I.aplicar_flash(c, colim, g, corpo, alvo, 20.0, 5.0, "HFS")
+    depois = raster_da_abertura(c, colim, uu, vv).m
+    assert (depois & fora).sum() > (antes & fora).sum() + 50              # abriu para o ar

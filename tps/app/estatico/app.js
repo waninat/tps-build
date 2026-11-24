@@ -181,6 +181,7 @@ function ligar() {
   });
   $("#b-obj-add").onclick = () => { E.objetivos = E.objetivos || []; E.objetivos.push({ estrutura: "", tipo: "max", dose_gy: "", volume_pct: "", peso: 1 }); listarObjetivos(); };
   $("#b-obj-sug").onclick = () => tentar(sugerirObjetivos);
+  $("#b-avoid-add").onclick = () => { E.avoid = E.avoid || []; E.avoid.push({ estrutura: "", modo: "ambos" }); listarAvoid(); };
   $("#b-qa").onclick = () => tentar(async () => {
     const pr = $("#qa-prof").value.trim();
     const r = await api("POST", `/api/${E.sid}/qa_paciente`, { fantoma: $("#qa-fan").value, modo: $("#qa-modo").value,
@@ -713,9 +714,12 @@ async function calcular() {
     campos: Array.from($("#o-fil-campos").selectedOptions).map(o => o.value) };
   if ($("#o-tecnica").value === "IMRT") {
     const objetivos = (E.objetivos || []).map(o => ({ estrutura: o.estrutura, tipo: o.tipo, dose_gy: +String(o.dose_gy).replace(",", "."),
-      volume_pct: o.volume_pct === "" || o.volume_pct == null ? null : +String(o.volume_pct).replace(",", "."), peso: +o.peso || 1 }));
+      volume_pct: o.volume_pct === "" || o.volume_pct == null ? null : +String(o.volume_pct).replace(",", "."), peso: +o.peso || 1,
+      restrito: !!o.restrito }));
     const corpo = { ...normalizacaoDoForm(), imrt: { objetivos, niveis: +$("#im-niveis").value, um_min: +$("#im-ummin").value,
-      area_min_cm2: +$("#im-area").value, peso_nto: +$("#im-nto").value, iteracoes: +$("#im-it").value } };
+      area_min_cm2: +$("#im-area").value, peso_nto: +$("#im-nto").value, iteracoes: +$("#im-it").value,
+      forma_segmentos: $("#im-forma").checked, avoidance: (E.avoid || []).filter(a => a.estrutura),
+      flash_mm: $("#im-flash").checked ? +$("#im-flash-mm").value : 0, flash_pele_mm: +$("#im-flash-pele").value } };
     const t = setInterval(async () => {                    // etapa da otimização (o servidor responde sem a trava)
       try { const pr = await fetch(`/api/${E.sid}/progresso`, { headers: { "X-Token": E.token } }).then(x => x.json());
         if (pr.progresso) $("#ocupado-txt").textContent = pr.progresso; } catch (e) { /* ok */ }
@@ -724,7 +728,11 @@ async function calcular() {
     try { r = await api("POST", `/api/${E.sid}/calcular`, corpo, "Otimizando IMRT (pode levar alguns minutos)…"); } finally { clearInterval(t); }
     atualizar(r);
     const im = r.resultado.info.imrt;
-    if (im) aviso(`IMRT: ${Object.values(im.segmentos).reduce((a, b) => a + b, 0)} segmentos em ${Object.keys(im.segmentos).length} campos · ${im.um_total} UM · ${Math.round(im.tempo_s)} s`, true);
+    if (im) {
+      const viol = Object.entries(im.restricoes || {}).filter(([, v]) => v > 1);
+      aviso(`IMRT: ${Object.values(im.segmentos).reduce((a, b) => a + b, 0)} segmentos em ${Object.keys(im.segmentos).length} campos · ${im.um_total} UM · ${Math.round(im.tempo_s)} s` +
+        (Object.keys(im.restricoes || {}).length ? (viol.length ? ` · restrições NÃO cumpridas: ${viol.map(([n, v]) => `${n} (+${v}%)`).join(", ")}` : " · restrições cumpridas") : ""), !viol.length);
+    }
     return;
   }
   if (fif && fif.modo === "filtro") fif.ajuste_fino = $("#o-fil-fino").checked;
@@ -781,18 +789,30 @@ async function sugerirObjetivos() {
   E.objetivos = await api("GET", `/api/${E.sid}/imrt/objetivos`);
   listarObjetivos();
 }
+function listarAvoid() {
+  const nomes = (E.resumo.estruturas || []).map(e => e.nome);
+  $("#tab-avoid tbody").innerHTML = (E.avoid || []).map((a, k) => `<tr data-k="${k}">
+    <td><select data-c="estrutura"><option value=""></option>${nomes.map(n => `<option ${n === a.estrutura ? "selected" : ""}>${n}</option>`).join("")}</select></td>
+    <td><select data-c="modo">${[["entrada", "só entrada"], ["saida", "só saída"], ["ambos", "entrada e saída"]].map(([v, t]) => `<option value="${v}" ${v === a.modo ? "selected" : ""}>${t}</option>`).join("")}</select></td>
+    <td><button class="pequeno" data-rem-av="${k}">×</button></td></tr>`).join("");
+  $$("#tab-avoid [data-c]").forEach(i => i.onchange = () => { E.avoid[+i.closest("tr").dataset.k][i.dataset.c] = i.value; });
+  $$("[data-rem-av]").forEach(b => b.onclick = () => { E.avoid.splice(+b.dataset.remAv, 1); listarAvoid(); });
+}
 function listarObjetivos() {
   const nomes = (E.resumo.estruturas || []).map(e => e.nome);
-  const tipos = { alvo: "alvo (uniforme)", min: "mínimo ≥", max: "máximo ≤", media: "média ≤", dvh: "DVH: V(Gy) ≤ vol%" };
+  const tipos = { alvo: "alvo (uniforme)", min: "mínimo ≥", max: "máximo ≤", media: "média ≤", dvh: "DVH: V(Gy) ≤ vol%",
+    serial: "serial: EUD(k) ≤", paralelo: "paralelo: ≤ v% acima" };
   $("#tab-objetivos tbody").innerHTML = (E.objetivos || []).map((o, k) => `<tr data-k="${k}">
     <td><select data-c="estrutura">${nomes.map(n => `<option ${n === o.estrutura ? "selected" : ""}>${n}</option>`).join("")}</select></td>
     <td><select data-c="tipo">${Object.entries(tipos).map(([v, t]) => `<option value="${v}" ${v === o.tipo ? "selected" : ""}>${t}</option>`).join("")}</select></td>
     <td><input data-c="dose_gy" value="${o.dose_gy ?? ""}"></td>
-    <td><input data-c="volume_pct" value="${o.volume_pct ?? ""}" ${o.tipo === "dvh" ? "" : "disabled"}></td>
+    <td><input data-c="volume_pct" value="${o.volume_pct ?? (o.tipo === "serial" ? 8 : "")}" ${["dvh", "paralelo", "serial"].includes(o.tipo) ? "" : "disabled"}></td>
     <td><input data-c="peso" type="number" min="0.1" step="0.5" value="${o.peso ?? 1}"></td>
+    <td><input data-c="restrito" type="checkbox" ${o.restrito ? "checked" : ""} ${o.tipo === "alvo" ? "disabled" : ""}></td>
     <td><button class="pequeno" data-rem-obj="${k}">×</button></td></tr>`).join("");
   $$("#tab-objetivos [data-c]").forEach(i => i.onchange = () => {
-    const k = +i.closest("tr").dataset.k; E.objetivos[k][i.dataset.c] = i.value; if (i.dataset.c === "tipo") listarObjetivos();
+    const k = +i.closest("tr").dataset.k; E.objetivos[k][i.dataset.c] = i.type === "checkbox" ? i.checked : i.value;
+    if (i.dataset.c === "tipo") { if (i.value === "serial" && !E.objetivos[k].volume_pct) E.objetivos[k].volume_pct = 8; listarObjetivos(); }
   });
   $$("[data-rem-obj]").forEach(b => b.onclick = () => { E.objetivos.splice(+b.dataset.remObj, 1); listarObjetivos(); });
 }
