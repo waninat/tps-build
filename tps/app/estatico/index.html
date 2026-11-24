@@ -37,7 +37,7 @@
     </div>
     <div class="painel-aba" id="aba-ct">
       <label>Pasta com CT e RTSTRUCT (neste computador)
-        <input id="ct-pasta" placeholder="C:\Exportados\Paciente123"></label>
+        <span class="linha-inline"><input id="ct-pasta" placeholder="C:\Exportados\Paciente123"><button class="pequeno so-janela oculto" data-pasta="ct-pasta" title="procurar a pasta">📁</button></span></label>
       <button id="b-ct" class="primario">Carregar pasta</button>
       <label class="arquivo">ou escolher a pasta…
         <input id="ct-upload" type="file" webkitdirectory multiple></label>
@@ -236,7 +236,7 @@
       <select id="e-modo"><option value="step_and_shoot" selected>step-and-shoot num campo (como o Monaco)</option>
         <option value="campos_separados">um campo por segmento</option></select></label>
     <label class="check"><input type="checkbox" id="e-rs" checked> exportar também as estruturas (RTSTRUCT)</label>
-    <label>Pasta de destino (vazio = pasta do TPS)<input id="e-pasta"></label>
+    <label>Pasta de destino (vazio = pasta do TPS)<span class="linha-inline"><input id="e-pasta"><button class="pequeno so-janela oculto" data-pasta="e-pasta" title="procurar a pasta">📁</button></span></label>
     <details class="sub"><summary>Enviar ao Mosaiq (DICOM)</summary>
       <div class="linha3">
         <label>Host/IP<input id="m-host"></label>

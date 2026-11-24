@@ -87,6 +87,96 @@ def _registro_inicio():
     return etapa
 
 
+def _carregar(etapa):
+    etapa("carregando numpy/scipy…")
+    import numpy  # noqa: F401
+    import scipy.ndimage  # noqa: F401
+    etapa("carregando numba (núcleo de cálculo)…")
+    import numba  # noqa: F401
+    etapa("carregando matplotlib…")
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot  # noqa: F401
+    etapa("carregando pydicom/servidor…")
+    import fastapi  # noqa: F401
+    import pydicom  # noqa: F401
+    etapa("carregando o TPS…")
+
+
+def _janela_propria():
+    """Abre o TPS na janela própria (WebView2). Devolve o código de saída, ou None para voltar ao navegador."""
+    import argparse
+    try:
+        from tps.app import janela
+        if not janela.disponivel():
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    ap = argparse.ArgumentParser(add_help=False)
+    ap.add_argument("--porta", type=int, default=8770)
+    ap.add_argument("--rede", action="store_true")
+    ap.add_argument("--home")
+    ap.add_argument("--teste-janela", action="store_true")
+    a, _ = ap.parse_known_args()
+    from tps import paths
+    if a.home:
+        paths.set_home(a.home)
+    etapa_log = _registro_inicio()
+
+    def preparar(etapa_tela):
+        def etapa(msg):
+            etapa_log(msg)
+            etapa_tela(msg)
+        _carregar(etapa)
+        from tps.app import servidor
+        etapa("iniciando o servidor…")
+        porta = servidor.escolher_porta(a.porta)
+        return ("0.0.0.0" if a.rede else "127.0.0.1"), porta, f"http://127.0.0.1:{porta}"
+
+    def iniciar(host, porta):
+        from tps.app import servidor
+        return servidor.servidor_em_paralelo(host, porta)
+
+    try:
+        return janela.rodar(preparar, iniciar, teste=a.teste_janela)
+    except Exception as e:  # noqa: BLE001
+        print(f"Janela própria indisponível ({e}); abrindo no navegador.", flush=True)
+        if a.teste_janela:
+            import traceback
+            traceback.print_exc()
+            return 2
+        return None
+
+
+def _console_se_preciso(saida_em_arquivo: bool = False):
+    """O TPS.exe não tem console (abre na janela própria). Sem janela, cria um console para o usuário ver o servidor
+    e poder fechá-lo; com janela, manda a saída para <dados>/tps_saida.log (sys.stdout é None num programa sem
+    console e o uvicorn tentaria escrever nele)."""
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    if saida_em_arquivo:
+        try:
+            from tps import paths
+            paths.ensure_home()
+            f = open(paths.home() / "tps_saida.log", "w", encoding="utf-8", buffering=1)
+            sys.stdout = sys.stdout or f
+            sys.stderr = sys.stderr or f
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    if os.name == "nt":
+        import ctypes
+        if ctypes.windll.kernel32.AllocConsole():
+            sys.stdout = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+            sys.stderr = sys.stdout
+            sys.stdin = open("CONIN$", "r", encoding="utf-8")
+            ctypes.windll.kernel32.SetConsoleTitleW("TPS (feche esta janela para encerrar)")
+            return
+    nulo = open(os.devnull, "w")
+    sys.stdout = sys.stdout or nulo
+    sys.stderr = sys.stderr or nulo
+
+
 def main() -> int:
     if "--autoteste" in sys.argv:
         return autoteste()
@@ -100,21 +190,20 @@ def main() -> int:
         from tps.version import __version__
         print(__version__)
         return 0
+    if not any(f in sys.argv for f in ("--navegador", "--sem-navegador")):
+        _console_se_preciso(saida_em_arquivo=True)
+        r = _janela_propria()
+        if r is not None:
+            return r
+        if "--teste-janela" in sys.argv:
+            print("janela própria indisponível (pywebview/WebView2)", flush=True)
+            return 2
+        if getattr(sys.stdout, "name", "").endswith("tps_saida.log"):   # sem janela: volta a ter console
+            sys.stdout = sys.stderr = None
+    _console_se_preciso()
     try:
         etapa = _registro_inicio()
-        etapa("carregando numpy/scipy…")
-        import numpy  # noqa: F401
-        import scipy.ndimage  # noqa: F401
-        etapa("carregando numba (núcleo de cálculo)…")
-        import numba  # noqa: F401
-        etapa("carregando matplotlib…")
-        import matplotlib
-        matplotlib.use("Agg")
-        import matplotlib.pyplot  # noqa: F401
-        etapa("carregando pydicom/servidor web…")
-        import fastapi  # noqa: F401
-        import pydicom  # noqa: F401
-        etapa("carregando o TPS…")
+        _carregar(etapa)
         from tps.app.servidor import main as servidor
         etapa("iniciando o servidor…")
         servidor()

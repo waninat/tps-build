@@ -166,6 +166,17 @@ function ligar() {
     aviso("Plano renormalizado (dose relativa igual, UM novas)", true);
   });
   $("#b-iso-cfg").onclick = () => tentar(configurarIsodoses);
+  // janela própria (pywebview): seletor de pasta do sistema e "abrir pasta"
+  const comJanela = () => {
+    if (!(window.pywebview && window.pywebview.api)) return;
+    E.janela = true;
+    $$(".so-janela").forEach(b => b.classList.remove("oculto"));
+    $$("[data-pasta]").forEach(b => b.onclick = () => tentar(async () => {
+      const alvo = $("#" + b.dataset.pasta), p = await window.pywebview.api.escolher_pasta(alvo.value || "");
+      if (p) { alvo.value = p; if (b.dataset.pasta === "ct-pasta") $("#b-ct").click(); }
+    }));
+  };
+  window.addEventListener("pywebviewready", comJanela); comJanela();
   $("#mod-sel").onchange = () => {
     const m = (E.modelos || []).find(x => x.id === $("#mod-sel").value); if (!m) return;
     $("#mod-desc").textContent = `${m.descricao} Sugestão: ${m.dose_total} Gy / ${m.fracoes} fx.`;
@@ -639,7 +650,9 @@ async function exportar() {
   if ($("#e-imagens").checked) corpo.incluir_imagens = true;
   const r = await api("POST", `/api/${E.sid}/exportar`, corpo, "Exportando…");
   $("#exportados").innerHTML = r.arquivos.filter(a => !/imagens_/.test(a)).map(a => `<div><a href="/api/${E.sid}/arquivo?t=${encodeURIComponent(E.token)}&caminho=${encodeURIComponent(a)}">${a.split(/[\\/]/).pop()}</a></div>`).join("") +
-    (r.envio ? `<div class="ok">Enviado: ${r.envio.enviados.length} arquivo(s)</div>` : "") + `<div class="pequeno-txt">${r.pasta}</div>`;
+    (r.envio ? `<div class="ok">Enviado: ${r.envio.enviados.length} arquivo(s)</div>` : "") + `<div class="pequeno-txt">${r.pasta}</div>` +
+    (E.janela ? `<button class="pequeno" id="b-abrir-exp">Abrir a pasta</button>` : "");
+  if (E.janela) $("#b-abrir-exp").onclick = () => window.pywebview.api.abrir_pasta(r.pasta);
   aviso("RTPLAN exportado e conferido", true);
 }
 

@@ -16,3 +16,5 @@ pillow>=10.0
 pynetdicom>=2.0
 httpx>=0.27
 reportlab>=4.0
+# janela própria (WebView2 no Windows; no Windows também instala pythonnet)
+pywebview>=5.0

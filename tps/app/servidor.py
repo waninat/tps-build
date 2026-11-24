@@ -594,13 +594,40 @@ def relatorio(sid: str, u: dict = Depends(usuario)):
     return _s(sid).relatorio_html()
 
 
-def main():
+def argumentos(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--porta", type=int, default=8770)
     ap.add_argument("--rede", action="store_true", help="aceita conexões de outros computadores da rede")
     ap.add_argument("--home", help="pasta de dados do TPS (padrão: ~/TPS ou %%ProgramData%%\\TPS)")
-    ap.add_argument("--sem-navegador", action="store_true")
-    a = ap.parse_args()
+    ap.add_argument("--sem-navegador", action="store_true", help="só o servidor (sem janela nem navegador)")
+    ap.add_argument("--navegador", action="store_true", help="abre no navegador em vez da janela própria")
+    ap.add_argument("--teste-janela", action="store_true", help="abre a janela, confere a página e fecha")
+    a, _ = ap.parse_known_args(argv)
+    return a
+
+
+def escolher_porta(porta: int) -> int:
+    import socket
+    for _ in range(10):                      # porta ocupada (outro TPS aberto?): tenta a seguinte
+        with socket.socket() as so:
+            if so.connect_ex(("127.0.0.1", porta)) != 0:
+                return porta
+        print(f"A porta {porta} já está em uso; tentando {porta + 1}.", flush=True)
+        porta += 1
+    return porta
+
+
+def servidor_em_paralelo(host: str, porta: int):
+    """Servidor uvicorn numa linha paralela (para a janela própria ficar na linha principal)."""
+    import uvicorn
+    srv = uvicorn.Server(uvicorn.Config(app, host=host, port=porta, log_level="warning"))
+    srv.install_signal_handlers = lambda: None
+    threading.Thread(target=srv.run, daemon=True, name="servidor").start()
+    return srv
+
+
+def main(argv=None):
+    a = argumentos(argv)
     if a.home:
         paths.set_home(a.home)
     paths.ensure_home()
@@ -608,13 +635,7 @@ def main():
 
     import uvicorn
     host = "0.0.0.0" if a.rede else "127.0.0.1"
-    porta = a.porta
-    for _ in range(10):                      # porta ocupada (outro TPS aberto?): tenta a seguinte
-        with socket.socket() as so:
-            if so.connect_ex(("127.0.0.1", porta)) != 0:
-                break
-        print(f"A porta {porta} já está em uso; tentando {porta + 1}.", flush=True)
-        porta += 1
+    porta = escolher_porta(a.porta)
     url = f"http://127.0.0.1:{porta}"
 
     def abrir_quando_pronto():

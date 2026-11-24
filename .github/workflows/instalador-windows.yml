@@ -75,6 +75,15 @@ jobs:
           Get-Content "$env:RUNNER_TEMP\srv.txt","$env:RUNNER_TEMP\srv_err.txt" -ErrorAction SilentlyContinue | Select-Object -Last 30
           if (-not $ok) { Write-Error "o servidor compilado não respondeu"; exit 1 }
 
+      - name: Janela própria (WebView2)
+        shell: pwsh
+        run: |
+          $exe = "empacotar\saida\TPS\TPS-cmd.exe"
+          $p = Start-Process $exe -ArgumentList "--teste-janela","--porta","8125","--home","$env:RUNNER_TEMP\homej" -PassThru -Wait `
+                 -RedirectStandardOutput "$env:RUNNER_TEMP\jan.txt" -RedirectStandardError "$env:RUNNER_TEMP\jan_err.txt"
+          Get-Content "$env:RUNNER_TEMP\jan.txt","$env:RUNNER_TEMP\jan_err.txt" -ErrorAction SilentlyContinue | Select-Object -Last 40
+          if (-not (Select-String -Path "$env:RUNNER_TEMP\jan.txt" -Pattern "janela ok" -Quiet)) { Write-Error "a janela própria não abriu a página"; exit 1 }
+
       - name: Instalador (Inno Setup)
         shell: pwsh
         run: |
@@ -118,6 +127,7 @@ jobs:
           retention-days: 30
 
       - name: Release
+        if: github.ref == 'refs/heads/main'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

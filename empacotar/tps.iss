@@ -50,6 +50,7 @@ Name: "{commonappdata}\TPS"; Permissions: users-modify; Flags: uninsneveruninsta
 
 [Icons]
 Name: "{group}\TPS"; Filename: "{app}\TPS.exe"; IconFilename: "{app}\tps.ico"
+Name: "{group}\TPS no navegador"; Filename: "{app}\TPS-cmd.exe"; Parameters: "--navegador"; IconFilename: "{app}\tps.ico"
 Name: "{group}\Gerar casos de teste (Documentos)"; Filename: "{app}\TPS-cmd.exe"; Parameters: "--casos-teste ""{userdocs}\TPS casos de teste"""; IconFilename: "{app}\tps.ico"
 Name: "{group}\Pasta de dados do TPS"; Filename: "{commonappdata}\TPS"
 Name: "{group}\Instalar contorno por IA (TotalSegmentator)"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -NoExit -File ""{app}\ia\instalar_ia.ps1"""
