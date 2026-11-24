@@ -53,7 +53,7 @@ def plano_verificacao(plano: Plano, colim, modelo, fantoma: str | FantomaVirtual
     qa.referencia_ct = {}
     qa.tecnica = "2D"                                   # fantoma virtual: sem CT
     qa.campos_setup = []
-    qa.prescricao = Prescricao(plano.prescricao.dose_fracao_gy, 1, None, "um_fixas")
+    qa.prescricao = Prescricao(plano.prescricao.dose_fracao_gy, 1, "QA", "um_fixas")
     for c in qa.campos:
         c.isocentro_mm = iso
         if modo == "gantry0":
