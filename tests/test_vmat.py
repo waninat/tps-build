@@ -164,3 +164,41 @@ def test_vmat_de_ponta_a_ponta(cli):
     w = [float(cp.CumulativeMetersetWeight) for cp in cps]
     assert w[0] == 0 and w[-1] == 1 and w == sorted(w)
     assert all(len(cp.BeamLimitingDevicePositionSequence) == 3 for cp in cps)        # ASYMX, ASYMY, MLCX
+
+
+def test_gradiente_do_modelo_por_intervalo():
+    from tps.planejamento.calculo import GradeDose
+    col = _colim("oncomed_synergy_154828")
+    x = y = z = np.arange(-40, 41, 4.0)
+    g = GradeDose(x, y, z, np.ones((len(z), len(y), len(x)), np.float32))
+    rng = np.random.default_rng(2)
+    idx = np.sort(rng.choice(g.eta.size, 400, replace=False))
+    u = np.arange(-30, 30, 2.5) + 1.25
+    lim = np.asarray(col.limites_laminas)
+    v = 0.5 * (lim[1:] + lim[:-1])
+    ab = np.zeros((col.n_pares, len(u)), bool)
+    ab[34:46, 2:22] = True
+    arcos = [{"ofs_w": [0, 1], "setor_int": ["S", "S"]}]
+    abertos = [Campo("a", gg, isocentro_mm=(0.0, 0.0, 0.0)) for gg in (0.0, 4.0)]
+    d0 = [rng.uniform(0.5, 1.0, len(idx)) for _ in abertos]
+    mod = V.ModeloIntervalos(arcos, {"S": (u, v, ab)}, abertos, d0, g, idx, (0.6, 1.2), "HFS")
+    A = [np.tile(np.linspace(-12, -8, 3)[:, None], (1, col.n_pares)) + rng.uniform(-3, 3, (3, col.n_pares))]
+    B = [A[0] + 18 + rng.uniform(0, 4, (3, col.n_pares))]
+    w = np.array([2.0, 3.0])
+    alvo = rng.uniform(1, 3, len(idx))
+
+    def custo(D):
+        r = D - alvo
+        return float(r @ r) / len(r), 2 * r / len(r)
+    f0, gA, gB, gw, _ = mod.avaliar(A, B, w, custo)
+    h = 1e-3
+    for (j, i) in ((0, 38), (1, 40), (2, 44)):
+        A2 = [A[0].copy()]
+        A2[0][j, i] += h
+        assert (mod.avaliar(A2, B, w, custo)[0] - f0) / h == pytest.approx(gA[0][j, i], rel=5e-2, abs=1e-7)
+        B2 = [B[0].copy()]
+        B2[0][j, i] += h
+        assert (mod.avaliar(A, B2, w, custo)[0] - f0) / h == pytest.approx(gB[0][j, i], rel=5e-2, abs=1e-7)
+    w2 = w.copy()
+    w2[1] += h
+    assert (mod.avaliar(A, B, w2, custo)[0] - f0) / h == pytest.approx(gw[1], rel=1e-2)
