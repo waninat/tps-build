@@ -170,10 +170,11 @@ def _tv(Q: np.ndarray) -> np.ndarray:
 
 
 def sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sentido: int, colim: Colimacao,
-                     lo: float, hi: float) -> tuple[list, float]:
+                     lo: float, hi: float, fechados_em: np.ndarray | None = None) -> tuple[list, float]:
     """Fluência do setor → n aberturas (a, b) de uma janela deslizante unidirecional (sentido +1: da esquerda para a
     direita) e o nível de fluência de cada abertura. Cada par usa ≤ n intervalos do sweep (Bortfeld) em pontos
-    seguidos; nos outros espera fechado no início ou no fim da varredura (lâminas sempre no mesmo sentido)."""
+    seguidos; nos outros espera fechado no começo ou no fim da sua própria faixa (lâminas sempre no mesmo sentido).
+    Pares sem fluência no setor ficam parados, fechados em `fechados_em` (mm no BEV; padrão: centro)."""
     res = float(u[1] - u[0])
     g = colim.gap_minimo_mm
     P = np.where(ab, np.maximum(Fc, 0.0), 0.0)
@@ -192,15 +193,19 @@ def sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sent
         if _tv(Q).max() <= n:
             break
         delta *= 1.04
-    linhas_ab = np.nonzero(ab.any(axis=1))[0]
-    cols = np.nonzero(ab.any(axis=0))[0]
-    s_ini = (s_col[cols].min() - res / 2) if len(cols) else 0.0
-    s_fim = (s_col[cols].max() + res / 2) if len(cols) else 0.0
+    linhas_ab = set(np.nonzero(ab.any(axis=1))[0].tolist())
+    abs_ = ab[:, ::-1] if sentido < 0 else ab
+    if fechados_em is None:
+        fechados_em = np.full(nv, 0.5 * (lo + hi))
+    parado = np.asarray(fechados_em, float) * (1 if sentido > 0 else -1)      # no referencial da varredura
     A = np.zeros((n, nv))
     B = np.zeros((n, nv))
     aberto = np.zeros((n, nv), bool)
     for i in range(nv):
-        ivs = I.intervalos_sweep(Q[i]) if i in set(linhas_ab.tolist()) else []
+        ivs = I.intervalos_sweep(Q[i]) if i in linhas_ab else []
+        if i in linhas_ab:
+            cc = np.nonzero(abs_[i])[0]
+            s_ini, s_fim = s_col[cc[0]] - res / 2, s_col[cc[-1]] + res / 2
         m = len(ivs)
         # intervalos em pontos seguidos, centrados no setor; antes deles o par espera fechado no início da
         # varredura e depois, no fim — assim as duas lâminas só andam num sentido
@@ -222,9 +227,8 @@ def sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sent
                 A[t, i], B[t, i] = s_fim - g, s_fim
             elif ts:
                 A[t, i], B[t, i] = s_ini, s_ini + g
-            else:                                            # par sem fluência: acompanha a frente da varredura
-                x = s_ini + (s_fim - s_ini) * (t + 0.5) / n
-                A[t, i], B[t, i] = x - g / 2, x + g / 2
+            else:                                            # par sem fluência: parado, fechado
+                A[t, i], B[t, i] = parado[i] - g / 2, parado[i] + g / 2
     out = []
     for t in range(n):
         if sentido < 0:                                      # de volta às coordenadas do BEV
@@ -258,7 +262,7 @@ def _fluencia_intervalos(Acp, Bcp, w, arcos, mapas, blocos, n_total, mu0, linhas
 
 
 def otimizar_pontos(arcos, Acp, Bcp, w, mapas, blocos, mod, custo, colim, lim: LimitesVMAT, mu0, linhas_arco,
-                    limites_x, maxiter: int = 120):
+                    limites_x, faixas=None, maxiter: int = 120):
     """Posições das lâminas em todos os pontos de controle e UM dos intervalos juntos, no modelo rápido calibrado.
     Penalidades: gap, (MLCi) interdigitação e percurso por grau acima do limite (que só alonga a entrega)."""
     g = colim.gap_minimo_mm
@@ -272,7 +276,17 @@ def otimizar_pontos(arcos, Acp, Bcp, w, mapas, blocos, mod, custo, colim, lim: L
         lo, hi = limites_x[k]
         blk = np.stack([Acp[k][:, L], Bcp[k][:, L]], axis=-1).ravel()
         x0 += blk.tolist()
-        bnds += [(lo, hi - g), (lo + g, hi)] * (ncp * len(L))
+        if faixas is None:
+            bnds += [(lo, hi - g), (lo + g, hi)] * (ncp * len(L))
+        else:
+            for j in range(ncp):
+                for i in L:
+                    e = faixas[k][j, i]
+                    if np.isnan(e[0]):                       # par fechado neste setor: parado
+                        bnds += [(Acp[k][j, i], Acp[k][j, i]), (Bcp[k][j, i], Bcp[k][j, i])]
+                    else:
+                        e0, e1 = max(e[0], lo), min(e[1], hi)
+                        bnds += [(e0, max(e1 - g, e0)), (min(e0 + g, e1), e1)]
     nX = len(x0)
     x0 = np.r_[np.asarray(x0, float), np.asarray(w, float)]
     for arco in arcos:
@@ -523,6 +537,7 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         A = np.zeros((N + 1, colim.n_pares))
         B = np.zeros((N + 1, colim.n_pares))
         lo, hi = limites_x[k]
+        parado = np.full(colim.n_pares, 0.5 * (lo + hi))
         for q, (s0, s1, cs) in enumerate(arco["setores"]):
             bl = blocos[cs.nome]
             u, v, ab = mapas[cs.nome]
@@ -531,13 +546,14 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
             if zf is not None and zf.any() and (ab & ~zf).any():
                 _, (ii, jj) = distance_transform_edt(~(ab & ~zf), return_indices=True)
                 Fc = np.where(zf, Fc[ii, jj], Fc)
-            ap, delta = sequenciar_setor(Fc, ab, u, s1 - s0, 1 if q % 2 == 0 else -1, colim, lo, hi)
+            ap, delta = sequenciar_setor(Fc, ab, u, s1 - s0, 1 if q % 2 == 0 else -1, colim, lo, hi, parado)
             if not ap:                                         # setor sem fluência: fechado no centro
                 cc = 0.5 * (lo + hi)
                 ap = [(np.full(colim.n_pares, cc - colim.gap_minimo_mm / 2),
                        np.full(colim.n_pares, cc + colim.gap_minimo_mm / 2))] * (s1 - s0)
             for t, (a, b) in enumerate(ap):
                 A[s0 + t], B[s0 + t] = a, b
+            parado = 0.5 * (ap[-1][0] + ap[-1][1])
             for t in range(s1 - s0):
                 w[arco["ofs_w"][s0 + t]] = delta * mu0
         A[N], B[N] = A[N - 1], B[N - 1]
@@ -545,6 +561,21 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         Bcp.append(B)
     w = np.clip(w, np.concatenate([lim.um_por_grau_min * a["dtheta"] for a in arcos]),
                 np.concatenate([lim.um_por_grau_max * a["dtheta"] for a in arcos]))
+    # faixa de cada par em cada ponto de controle (abertura do setor do ponto); fora dela o modelo rápido não enxerga
+    # a dose, então a otimização direta não pode abrir ali; pares fechados no setor ficam parados
+    faixas = []
+    for k, arco in enumerate(arcos):
+        N = len(arco["setor_int"])
+        fx_ = np.full((N + 1, colim.n_pares, 2), np.nan)
+        for s0, s1, cs in arco["setores"]:
+            u, v, ab = mapas[cs.nome]
+            res = u[1] - u[0]
+            env = np.full((colim.n_pares, 2), np.nan)
+            for i in np.nonzero(ab.any(axis=1))[0]:
+                cc = np.nonzero(ab[i])[0]
+                env[i] = (u[cc[0]] - res / 2, u[cc[-1]] + res / 2)
+            fx_[s0:s1 + (1 if s1 == N else 0)] = env
+        faixas.append(fx_)
     linhas_arco = []
     for arco in arcos:
         rows = np.zeros(colim.n_pares, bool)
@@ -593,7 +624,7 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         mod.corr = (M @ w) - mod.dose(entregue(Acp, Bcp, w))
         aviso(f"Otimizando as lâminas dos pontos de controle (iteração {it + 1})…")
         Ak, Bk, w2 = otimizar_pontos(arcos, Acp, Bcp, w, mapas, blocos, mod, custo, colim, lim, mu0, linhas_arco,
-                                     limites_x)
+                                     limites_x, faixas)
         for k in range(len(arcos)):
             lo, hi = limites_x[k]
             for j in range(Ak[k].shape[0]):
