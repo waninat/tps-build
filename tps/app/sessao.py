@@ -1660,13 +1660,20 @@ class Sessao:
         self._exigir(bool(usuario.strip()), "Informe o usuário")
         avisos_um = [k for k in self.resultado.get("conferencia_um", []) if not k["ok"] and not k.get("compensado")]
         justificativa = (justificativa or "").strip()
+        from tps.app.checklist import checklist
+        lista_chk = checklist(self)
+        erros_chk = [i for i in lista_chk if i["estado"] == "erro" and i["id"] != "conferencia_um"]
         if avisos_um:
             lista = ", ".join(f"{k['campo']} ({k['dif_pct']:+.1f}%)" for k in avisos_um)
             if not justificativa:
                 raise ErroUsuario(f"Conferência independente de UM fora da tolerância em {lista}. Investigue e, se "
                                   "a diferença estiver explicada, aprove escrevendo a justificativa.")
+        if erros_chk and not justificativa:
+            raise ErroUsuario("Checklist com pendências: " + "; ".join(f"{i['titulo']}: {i['detalhe']}" for i in erros_chk)
+                              + ". Corrija ou aprove escrevendo a justificativa.")
+        if avisos_um or erros_chk:
             if not pode_justificar:
-                raise ErroUsuario("Só o físico pode aprovar com a conferência de UM fora da tolerância")
+                raise ErroUsuario("Só o físico pode aprovar com pendências (conferência de UM ou checklist)")
             if len(justificativa) < 15:
                 raise ErroUsuario("Escreva a justificativa por extenso (o que foi investigado e por que é aceitável)")
         try:
@@ -1677,8 +1684,14 @@ class Sessao:
             self.plano.aprovacao["conferencia_um_justificativa"] = {
                 "campos": [{"campo": k["campo"], "dif_pct": round(k["dif_pct"], 2)} for k in avisos_um],
                 "justificativa": justificativa, "usuario": usuario.strip()}
+        self.plano.aprovacao["checklist"] = [{k: i[k] for k in ("id", "estado", "detalhe")} for i in lista_chk]
+        if erros_chk:
+            self.plano.aprovacao["checklist_justificativa"] = {"itens": [i["titulo"] for i in erros_chk],
+                                                               "justificativa": justificativa,
+                                                               "usuario": usuario.strip()}
         self._registrar(f"Aprovado por {usuario} ({papel})" +
-                        (f" com conferência de UM fora da tolerância — justificativa: {justificativa}" if avisos_um else ""))
+                        (f" com pendências ({', '.join(['UM'] * bool(avisos_um) + [i['titulo'] for i in erros_chk])})"
+                         f" — justificativa: {justificativa}" if (avisos_um or erros_chk) else ""))
 
     def desaprovar(self, usuario: str, motivo: str):
         self._exigir_plano()

@@ -446,6 +446,20 @@ def dose_ponto(sid: str, x: float, y: float, z: float, u: dict = Depends(usuario
     return _s(sid).dose_em((x, y, z))
 
 
+@app.get("/api/{sid}/relatorio_medico.pdf")
+def relatorio_medico(sid: str, u: dict = Depends(usuario)):
+    from tps.app.relatorio_pdf import relatorio_medico_pdf
+    s = _s(sid)
+    with TRAVA:
+        try:
+            pdf = relatorio_medico_pdf(s, u)
+        except ValueError as e:
+            raise ErroUsuario(str(e)) from e
+    auditar(u, "relatorio_medico_pdf", s)
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="medico_{s.plano.rotulo}.pdf"'})
+
+
 @app.get("/api/{sid}/relatorio.pdf")
 def relatorio_pdf(sid: str, u: dict = Depends(usuario)):
     from tps.app.relatorio_pdf import relatorio_pdf as gerar
@@ -526,6 +540,13 @@ def sobreposicao(sid: str, vista: str, idx: int, isodoses: bool = True, niveis: 
     return _s(sid).sobreposicao(vista, idx, None, isodoses, lista, "max" if ref == "max" else "rx",
                                 "gy" if unidade == "gy" else "pct",
                                 fonte if fonte in ("plano", "soma", "dif") else "plano")
+
+
+@app.get("/api/{sid}/checklist")
+def checklist(sid: str, u: dict = Depends(usuario)):
+    from tps.app.checklist import checklist as chk
+    with TRAVA:
+        return chk(_s(sid))
 
 
 @app.post("/api/{sid}/soma_planos")

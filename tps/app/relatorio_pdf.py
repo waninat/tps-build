@@ -168,6 +168,25 @@ def relatorio_pdf(s, usuario: dict | None = None) -> bytes:
         el.append(Paragraph("<font color='#b06000'><b>Aprovado com conferência independente de UM fora da "
                             f"tolerância</b> ({campos_ju}) — justificativa de {ju['usuario']}: "
                             f"{ju['justificativa']}</font>", normal))
+    jc = (ap or {}).get("checklist_justificativa")
+    if jc:
+        el.append(Paragraph("<font color='#b06000'><b>Aprovado com pendências no checklist</b> ("
+                            f"{', '.join(jc['itens'])}) — justificativa de {jc['usuario']}: {jc['justificativa']}</font>",
+                            normal))
+    try:
+        from tps.app.checklist import checklist
+        chk = checklist(s) if s.dose_atualizada else []
+    except Exception:  # noqa: BLE001
+        chk = []
+    if chk:
+        el.append(Paragraph("Checklist do plano", sub))
+        lin = [["", "Item", "Detalhe"]]
+        for i in chk:
+            lin.append([{"ok": "OK", "aviso": "!", "erro": "X"}[i["estado"]], i["titulo"],
+                        Paragraph(f"<font size=7>{i['detalhe']}</font>", normal)])
+        t = Table(lin, repeatRows=1, colWidths=[8 * mm, 60 * mm, 112 * mm])
+        t.setStyle(estilo_tab)
+        el.append(t)
     if p.historico:
         el.append(Paragraph("Histórico: " + " · ".join(f"{h['evento']} {h.get('usuario', '')} {h.get('quando', '')}"
                                                        for h in p.historico), normal))
@@ -181,4 +200,145 @@ def relatorio_pdf(s, usuario: dict | None = None) -> bytes:
         canvas.restoreState()
     SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=14 * mm,
                       bottomMargin=14 * mm, title=f"Plano {p.rotulo}").build(el, onFirstPage=rodape, onLaterPages=rodape)
+    return buf.getvalue()
+
+
+# ------------------------------------------------------------------ relatório para o médico
+def _fig_tres_vistas(s) -> bytes:
+    """Axial, coronal e sagital pelo isocentro: CT, contornos, colorwash da dose e isodoses 95/100/105/107%."""
+    g, p = s.grade, s.plano
+    cx, cy, cz = s.ct.axes()
+    iso = np.asarray(s.isocentro or p.campos[0].isocentro_mm, float)
+    rx = p.prescricao.dose_total_gy
+    tot = s.dose_fx * p.prescricao.fracoes / rx * 100 if s.dose_atualizada else None
+    fig, axs = plt.subplots(1, 3, figsize=(10.5, 3.9), dpi=150, gridspec_kw={"width_ratios": [1.2, 1, 1]})
+    niveis = [95, 100, 105, 107]
+    cores = ["#00c8ff", "#ffae00", "#ff2d55", "#ff00c8"]
+    vistas = [("axial", int(np.argmin(np.abs(cz - iso[2]))), int(np.argmin(np.abs(g.z - iso[2])))),
+              ("coronal", int(np.argmin(np.abs(cy - iso[1]))), int(np.argmin(np.abs(g.y - iso[1])))),
+              ("sagital", int(np.argmin(np.abs(cx - iso[0]))), int(np.argmin(np.abs(g.x - iso[0]))))]
+    for ax, (v, kc, kg) in zip(axs, vistas):
+        if v == "axial":
+            img, ext, hh, vv = s.ct.hu[kc], [cx[0], cx[-1], cy[-1], cy[0]], (g.x, g.y), None
+            dd = tot[kg] if tot is not None else None
+            masc = lambda m: m[kg]  # noqa: E731
+            pi = (iso[0], iso[1])
+        elif v == "coronal":
+            img, ext = s.ct.hu[:, kc, :], [cx[0], cx[-1], cz[0], cz[-1]]
+            hh = (g.x, g.z)
+            dd = tot[:, kg, :] if tot is not None else None
+            masc = lambda m: m[:, kg, :]  # noqa: E731
+            pi = (iso[0], iso[2])
+        else:
+            img, ext = s.ct.hu[:, :, kc], [cy[0], cy[-1], cz[0], cz[-1]]
+            hh = (g.y, g.z)
+            dd = tot[:, :, kg] if tot is not None else None
+            masc = lambda m: m[:, :, kg]  # noqa: E731
+            pi = (iso[1], iso[2])
+        origem = "upper" if v == "axial" else "lower"
+        ax.imshow(np.clip(img, -200, 300), cmap="gray", extent=ext, origin=origem if v != "axial" else None,
+                  aspect="equal")
+        if dd is not None:
+            wash = np.ma.masked_less(dd, 50)
+            ax.imshow(wash, cmap="jet", alpha=0.35, vmin=50, vmax=max(110, float(np.nanmax(dd))),
+                      extent=[hh[0][0], hh[0][-1], hh[1][-1], hh[1][0]] if v == "axial" else
+                      [hh[0][0], hh[0][-1], hh[1][0], hh[1][-1]], origin=None if v == "axial" else "lower")
+            ax.contour(hh[0], hh[1], dd, levels=niveis, colors=cores, linewidths=0.9)
+        for n, e in s.estruturas.items():
+            if e.tipo.upper() == "EXTERNAL":
+                continue
+            m = masc(e.mascara)
+            if m.any():
+                ax.contour(hh[0], hh[1], m.astype(float), levels=[0.5], colors=[np.array(e.cor) / 255],
+                           linewidths=0.8)
+        ax.plot(*pi, "r+", ms=8)
+        ax.set_title(v.capitalize(), fontsize=8)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        if v == "axial":
+            ax.set_ylim(ext[2], ext[3])
+    from matplotlib.lines import Line2D
+    fig.legend([Line2D([0], [0], color=c, lw=1.2) for c in cores], [f"{n}%" for n in niveis], loc="lower center",
+               ncol=4, fontsize=7, frameon=False)
+    fig.tight_layout(rect=(0, 0.06, 1, 1))
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+def relatorio_medico_pdf(s, usuario: dict | None = None) -> bytes:
+    """Resumo para o médico aprovar ou pedir mudanças sem abrir o TPS: 1–2 páginas."""
+    p = s.plano
+    if p is None or not s.dose_atualizada:
+        raise ValueError("Calcule a dose antes de gerar o relatório para o médico")
+    est = getSampleStyleSheet()
+    normal = ParagraphStyle("n", parent=est["Normal"], fontSize=8.5, leading=11)
+    titulo = ParagraphStyle("t", parent=est["Heading1"], fontSize=13, spaceAfter=2)
+    sub = ParagraphStyle("s", parent=est["Heading2"], fontSize=10, spaceBefore=6, spaceAfter=3)
+    estilo_tab = TableStyle([("FONTSIZE", (0, 0), (-1, -1), 7.5), ("GRID", (0, 0), (-1, -1), 0.3, colors.grey),
+                             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8edf3")),
+                             ("ALIGN", (1, 0), (-1, -1), "CENTER"), ("VALIGN", (0, 0), (-1, -1), "MIDDLE")])
+    pr = p.prescricao
+    r = s.resultado
+    corpo = s._corpo()
+    el = [Paragraph(f"{s.paciente.get('nome', '')} ({s.paciente.get('id', '')}) — plano {p.rotulo}", titulo),
+          Paragraph(f"<b>{pr.dose_total_gy:g} Gy em {pr.fracoes} frações</b> ({pr.dose_fracao_gy:.2f} Gy/fx) · alvo "
+                    f"{pr.estrutura_alvo or '—'} · {len([c for c in p.campos if not c.campo_pai])} campos "
+                    f"({', '.join(f'{c.gantry:.0f}°' for c in p.campos if not c.campo_pai)}) · {s.maquina.energia} · "
+                    f"Dmax {r['dmax_gy']:.2f} Gy ({r['dmax_gy'] / pr.dose_total_gy * 100:.1f}%) · "
+                    f"{'APROVADO pela física' if p.aprovacao else 'em revisão'} · {dt.datetime.now():%d/%m/%Y %H:%M}"
+                    f" · TPS {__version__} (não liberado para uso clínico)", normal),
+          Spacer(1, 3), Image(io.BytesIO(_fig_tres_vistas(s)), 180 * mm, 67 * mm)]
+    # cobertura do alvo
+    if pr.estrutura_alvo and pr.estrutura_alvo in r["dvh"]:
+        h = r["dvh"][pr.estrutura_alvo]
+        m = s.estruturas[pr.estrutura_alvo].mascara
+        tot = s.dose_fx * pr.fracoes
+        v95 = float((tot[m] >= 0.95 * pr.dose_total_gy).mean() * 100)
+        lin = [["Alvo", "V95%", "D98", "D95", "D50", "D2", "Dmax"],
+               [pr.estrutura_alvo, f"{v95:.1f}%", *(f"{h.get(k, float('nan')):.2f} Gy" for k in ("D98", "D95", "D50", "D2",
+                                                                                                   "Dmax"))]]
+        t = Table(lin)
+        t.setStyle(estilo_tab)
+        el += [Paragraph("Cobertura", sub), t]
+    el.append(KeepTogether([Paragraph("Histograma dose-volume", sub), Image(io.BytesIO(_fig_dvh(s)), 160 * mm, 70 * mm)]))
+    rr = (r.get("restricoes") or {}).get("resultados") or []
+    orgaos = [q for q in rr if q.get("tg263") != "alvo"]
+    if orgaos:
+        lin = [["Órgão", "Métrica", "Limite", "Valor", ""]]
+        estilos = list(estilo_tab.getCommands())
+        for i, q in enumerate(orgaos, start=1):
+            sit = "OK" if q["ok"] else ("NÃO CUMPRE" if q["tipo"] == "limite" else "acima do objetivo")
+            cor = "#d9f2d9" if q["ok"] else ("#f8d0d0" if q["tipo"] == "limite" else "#fff0c0")
+            estilos.append(("BACKGROUND", (4, i), (4, i), colors.HexColor(cor)))
+            lin.append([q["estrutura"][:24], q["metrica"], f"{q['op'].replace('<=', '≤').replace('>=', '≥')} "
+                        f"{q['limite']:g} {q['unidade'] if q['unidade'] != 'Gy' else 'Gy'}", f"{q['valor']:.2f}", sit])
+        t = Table(lin, repeatRows=1, colWidths=[45 * mm, 25 * mm, 35 * mm, 22 * mm, 30 * mm])
+        t.setStyle(TableStyle(estilos))
+        el += [Paragraph("Órgãos de risco", sub), t]
+    try:
+        from tps.app.checklist import checklist
+        pend = [i for i in checklist(s) if i["estado"] != "ok"]
+    except Exception:  # noqa: BLE001
+        pend = []
+    if pend:
+        el.append(Paragraph("Pontos de atenção da física", sub))
+        for i in pend:
+            el.append(Paragraph(f"{'✗' if i['estado'] == 'erro' else '!'} <b>{i['titulo']}</b>: {i['detalhe']}", normal))
+    el += [Spacer(1, 10), Paragraph("Parecer médico", sub),
+           Paragraph("(  ) Aprovo o plano &nbsp;&nbsp;&nbsp; (  ) Solicito alterações: "
+                     "________________________________________________", normal), Spacer(1, 14),
+           Paragraph("Assinatura / CRM: ______________________________ &nbsp;&nbsp; Data: ____/____/______", normal)]
+    buf = io.BytesIO()
+
+    def rodape(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 7)
+        canvas.drawString(15 * mm, 8 * mm, f"Relatório para o médico — {p.rotulo} — {s.paciente.get('id', '')}")
+        canvas.drawRightString(195 * mm, 8 * mm, f"página {doc.page}")
+        canvas.restoreState()
+    SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=12 * mm,
+                      bottomMargin=14 * mm, title=f"Plano {p.rotulo} — médico").build(el, onFirstPage=rodape,
+                                                                                    onLaterPages=rodape)
     return buf.getvalue()

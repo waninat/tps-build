@@ -210,9 +210,18 @@ def test_densidade_bolus_pontos_e_pdf(cli):
     assert s2["plano"]["campos"][0]["mu"] < um_agua
     d = _ok(c.get(f"/api/{sid}/dose", params={"x": 0, "y": -50, "z": 0}))
     assert d["total_gy"] == pytest.approx(10.0, rel=3e-3) and "AP" in d["campos"]
-    _ok(c.post(f"/api/{sid}/aprovar", json={"senha": "senha-forte-1"}))
+    # campo único com prescrição a 5 cm: Dmax ~113% → o checklist exige justificativa
+    chk = {i["id"]: i for i in _ok(c.get(f"/api/{sid}/checklist"))}
+    assert chk["dmax"]["estado"] == "erro" and chk["densidades"]["estado"] == "aviso" and chk["bolus"]
+    r = c.post(f"/api/{sid}/aprovar", json={"senha": "senha-forte-1"})
+    assert r.status_code == 400 and "Checklist" in r.json()["erro"]
+    a = _ok(c.post(f"/api/{sid}/aprovar", json={"senha": "senha-forte-1",
+                                                "justificativa": "Campo direto paliativo: máximo em dmax aceito"}))
+    assert a["plano"]["aprovacao"]["checklist_justificativa"]["itens"] == ["Dose máxima"]
     pdf = c.get(f"/api/{sid}/relatorio.pdf")
     assert pdf.status_code == 200 and pdf.content[:5] == b"%PDF-" and len(pdf.content) > 30000
+    med = c.get(f"/api/{sid}/relatorio_medico.pdf")
+    assert med.status_code == 200 and med.content[:5] == b"%PDF-" and len(med.content) > 30000
     # salvar e reabrir: bolus e densidade voltam e o plano aprovado continua íntegro
     arq = _ok(c.post(f"/api/{sid}/salvar"))["arquivo"]
     s3 = _ok(c.post("/api/caso/abrir", json={"arquivo": arq}))

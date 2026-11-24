@@ -21,6 +21,7 @@
   <span class="nao-clinico" title="Em desenvolvimento — não usar em paciente">não clínico</span>
   <button id="b-salvar" disabled title="salva todos os planos desta TC">Salvar</button>
   <button id="b-relatorio" disabled>Relatório PDF</button>
+  <button id="b-rel-medico" disabled title="1–2 páginas para o médico aprovar: imagens com isodoses, DVH, órgãos de risco e pontos de atenção">Para o médico</button>
   <button id="b-checkfilm" disabled title="DRR de cada campo com MLC e escala, para comparar com o filme de verificação">Check film</button>
   <button id="b-auditoria" title="Trilha de auditoria e usuários">Auditoria</button>
   <span id="usuario-txt" class="usuario"></span>
@@ -227,6 +228,7 @@
   </details>
 
   <details id="sec-aprov"><summary>5 · Aprovação e exportação</summary>
+    <div id="checklist" class="checklist"></div>
     <div class="pequeno-txt">Aprovar, desaprovar e exportar pedem a sua senha (assinatura).</div>
     <div class="botoes">
       <button id="b-aprovar" class="primario" disabled>Aprovar</button>

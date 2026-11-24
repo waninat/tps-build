@@ -326,11 +326,14 @@ function ligar() {
   $("#b-calc").onclick = () => tentar(calcular);
   $("#b-aprovar").onclick = () => tentar(async () => {
     const fora = ((E.resumo.resultado || {}).conferencia_um || []).filter(k => !k.ok && !k.compensado);
+    const chk = await carregarChecklist();
+    const errs = chk.filter(i => i.estado === "erro" && i.id !== "conferencia_um");
     let corpo;
-    if (fora.length) {
-      const v = await modal("Aprovar com conferência de UM fora da tolerância",
-        `<p class="pequeno-txt">Conferência independente fora de ±3% em: <b>${fora.map(k => `${k.campo} (${k.dif_pct >= 0 ? "+" : ""}${f1(k.dif_pct, 1)}%)`).join(", ")}</b>.
-         Só aprove depois de investigar (ex.: heterogeneidade, campo muito irregular, ponto em penumbra). A justificativa fica no plano, no relatório e na auditoria.</p>
+    if (fora.length || errs.length) {
+      const v = await modal("Aprovar com pendências",
+        `${fora.length ? `<p class="pequeno-txt">Conferência independente fora de ±3% em: <b>${fora.map(k => `${k.campo} (${k.dif_pct >= 0 ? "+" : ""}${f1(k.dif_pct, 1)}%)`).join(", ")}</b>.</p>` : ""}
+         ${errs.length ? `<ul class="pequeno-txt falha">${errs.map(i => `<li><b>${i.titulo}:</b> ${i.detalhe}</li>`).join("")}</ul>` : ""}
+         <p class="pequeno-txt">Só aprove depois de investigar. A justificativa fica no plano, no relatório e na auditoria.</p>
          <label>Justificativa<textarea name="justificativa" rows="3"></textarea></label>
          <label>Senha<input name="senha" type="password"></label>`, { ok: "Aprovar" });
       if (!v) return;
@@ -352,6 +355,7 @@ function ligar() {
   $("#b-relatorio").onclick = () => window.open(`/api/${E.sid}/relatorio.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
   $("#t-wash").onchange = () => desenharTudo();
   $("#wash-min").onchange = () => desenharTudo();
+  $("#b-rel-medico").onclick = () => window.open(`/api/${E.sid}/relatorio_medico.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
   $("#b-checkfilm").onclick = () => window.open(`/api/${E.sid}/checkfilm.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
   $("#b-sair").onclick = () => tentar(async () => {
     await api("POST", "/api/logout"); E.token = null;
@@ -551,7 +555,7 @@ function atualizar(r) {
   $("#b-aprovar").disabled = !temPlano || aprovado || !r.dose_atualizada;
   $("#b-desaprovar").disabled = !aprovado;
   $("#b-exportar").disabled = !aprovado;
-  $("#b-salvar").disabled = !temPlano; $("#b-relatorio").disabled = !temPlano;
+  $("#b-salvar").disabled = !temPlano; $("#b-relatorio").disabled = !temPlano; $("#b-rel-medico").disabled = !(temPlano && r.dose_atualizada);
   $("#b-checkfilm").disabled = !(temPlano && E.resumo.plano.campos.length);
   const pd = r.planos_dicom || [];
   $("#planos-dicom").classList.toggle("oculto", !pd.length);
@@ -588,6 +592,7 @@ function atualizar(r) {
   listarCampos(); tabelas();
   $("#avisos").innerHTML = (r.avisos || []).map(a => `<li>${a}</li>`).join("");
   $("#n-avisos").textContent = (r.avisos || []).length || "";
+  if (p && r.dose_atualizada) carregarChecklist(); else $("#checklist").innerHTML = p ? `<div class="pequeno-txt">Calcule a dose para conferir o plano.</div>` : "";
   { const res = r.resultado, b = $("#dmax-topo");
     const ok = r.dose_atualizada && res && res.dmax_gy != null && p;
     b.classList.toggle("oculto", !ok);
@@ -729,6 +734,18 @@ function listarOars() {
     E.oarCfg[n] = o; listarOars();
   }));
 }
+async function carregarChecklist() {
+  const el = $("#checklist");
+  if (!E.sid || !E.resumo || !E.resumo.plano) { el.innerHTML = ""; return []; }
+  let lista = [];
+  try { lista = await api("GET", `/api/${E.sid}/checklist`); } catch (e) { return []; }
+  const ic = { ok: "✓", aviso: "!", erro: "✗" };
+  const n = lista.filter(i => i.estado === "erro").length, a = lista.filter(i => i.estado === "aviso").length;
+  el.innerHTML = `<div class="chk-titulo">Checklist do plano ${n ? `<span class="falha">${n} pendência(s)</span>` : (a ? `<span class="avisotxt">${a} aviso(s)</span>` : `<span class="ok">tudo certo</span>`)}</div>` +
+    lista.map(i => `<div class="chk chk-${i.estado}" title="${i.detalhe.replace(/"/g, "&quot;")}"><span>${ic[i.estado]}</span> ${i.titulo}<small>${i.detalhe}</small></div>`).join("");
+  return lista;
+}
+
 function mostrarIA() {
   const ia = (E.info && E.info.ia) || {};
   $("#ia-estado").textContent = ia.disponivel ? "instalado" : (ia.motivo || "não instalado neste computador");

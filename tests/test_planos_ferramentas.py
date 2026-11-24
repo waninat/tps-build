@@ -182,3 +182,26 @@ def test_soma_e_comparacao_de_planos(cli):
     assert sob["iso_ref"]["dif"] and any(q["nivel"] < 0 for q in sob["isodoses"])
     assert c.get(f"/api/{sid}/dose_corte/axial/{k}.png?fonte=dif").status_code == 200
     assert c.post(f"/api/{sid}/soma_planos", json={"rotulos": ["FASE1"]}).status_code == 400
+
+
+def test_checklist_detecta_colisao_e_normalizacao(cli):
+    from tps.app import checklist as CK
+    from tps.app.servidor import SESSOES
+    c, sid, _ = cli
+    _ok(c.post(f"/api/{sid}/plano/trocar", json={"rotulo": "FASE1"}))
+    lista = {i["id"]: i for i in _ok(c.get(f"/api/{sid}/checklist"))}
+    assert lista["dose"]["estado"] == "ok" and lista["normalizacao"]["estado"] == "ok"
+    assert lista["colisao"]["estado"] == "ok" and lista["isocentro"]["estado"] == "ok"
+    s = SESSOES[sid]
+    antes = CK.FOLGA_CABECOTE_MM
+    try:
+        CK.FOLGA_CABECOTE_MM = 50.0                       # cabeçote "encostando": todo campo colide
+        assert CK.colisoes(s)
+    finally:
+        CK.FOLGA_CABECOTE_MM = antes
+    s.plano.prescricao.isodose_pct = 90.0                 # prescrição mexida sem recalcular
+    try:
+        lista = {i["id"]: i for i in _ok(c.get(f"/api/{sid}/checklist"))}
+        assert lista["normalizacao"]["estado"] == "erro"
+    finally:
+        s.plano.prescricao.isodose_pct = 100.0
