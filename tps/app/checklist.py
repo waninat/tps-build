@@ -34,12 +34,18 @@ def colisoes(sessao) -> list[str]:
     for c in sessao.plano.campos + list(sessao.plano.campos_setup):
         if c.campo_pai:
             continue
-        fr = beam_frame(c.gantry, c.colimador, c.mesa, c.isocentro_mm, 1000.0, "HFS")
-        rel = pts - np.asarray(c.isocentro_mm, float)
-        ao_longo = rel @ (-fr.w)                              # positivo = na direção da fonte
-        radial = np.linalg.norm(rel - np.outer(rel @ fr.w, fr.w), axis=1)
-        if np.any((ao_longo > FOLGA_CABECOTE_MM) & (radial < RAIO_CABECOTE_MM)):
-            ruins.append(f"{c.nome} (G{c.gantry:.0f} M{c.mesa:.0f})")
+        angulos = [c.gantry]
+        if c.e_arco:                                          # arco: confere a cada 5° do caminho do gantry
+            from tps.planejamento.vmat import angulos_cp
+            angulos = list(angulos_cp(c.gantry, c.arco_fim, c.sentido, 5.0))
+        for gan in angulos:
+            fr = beam_frame(gan, c.colimador, c.mesa, c.isocentro_mm, 1000.0, "HFS")
+            rel = pts - np.asarray(c.isocentro_mm, float)
+            ao_longo = rel @ (-fr.w)                          # positivo = na direção da fonte
+            radial = np.linalg.norm(rel - np.outer(rel @ fr.w, fr.w), axis=1)
+            if np.any((ao_longo > FOLGA_CABECOTE_MM) & (radial < RAIO_CABECOTE_MM)):
+                ruins.append(f"{c.nome} (G{gan:.0f} M{c.mesa:.0f})")
+                break
     return ruins
 
 
@@ -141,6 +147,16 @@ def checklist(sessao) -> list[dict]:
         out.append(_item("imrt_qa", "IMRT: QA de paciente antes do 1º tratamento", "aviso",
                          f"{nseg} segmentos, {sum(float(c.mu or 0) for c in p.campos):.0f} UM — gere o plano de verificação "
                          "no fantoma e meça (gama)"))
+    if p.tecnica == "VMAT":
+        arcos = [c for c in p.campos if c.e_arco]
+        out.append(_item("imrt_qa", "VMAT: QA de paciente antes do 1º tratamento", "aviso",
+                         f"{len(arcos)} arco(s), {sum(float(c.mu or 0) for c in arcos):.0f} UM — gere o plano de "
+                         "verificação no fantoma e meça (gama)"))
+        info = (s.resultado.get("info") or {}).get("vmat") or {}
+        lentos = [f"{n} {a['tempo_s']:.0f} s" for n, a in (info.get("arcos") or {}).items()
+                  if a.get("tempo_s", 0) > 240]
+        if lentos:
+            out.append(_item("vmat_tempo", "VMAT: tempo de entrega", "aviso", ", ".join(lentos)))
     if not p.campos_setup:
         out.append(_item("setup", "Campos de localização", "aviso", "nenhum campo de setup (imagem de posicionamento)"))
     return out

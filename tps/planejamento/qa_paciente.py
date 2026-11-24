@@ -4,6 +4,7 @@ Os campos (segmentos e UM de uma fração) são copiados para um fantoma de águ
 escolhido. Dois modos, como nos sistemas comerciais:
   * "real": ângulos do plano (fantoma cilíndrico/cúbico, ex.: Octavius, ArcCHECK, Delta4);
   * "gantry0": todos os campos com gantry 0 e mesa 0 (arranjo plano no isocentro, ex.: MapCHECK, MatriXX, filme).
+    Arcos VMAT: o RTPLAN é o arco real (detector preso ao gantry) e só o cálculo junta os pontos no gantry 0.
 Saídas: o RTPLAN de verificação (para entregar no acelerador pelo Mosaiq), o RTDOSE 3D no fantoma (para o software
 do detector comparar com a medida) e o plano coronal no isocentro (CSV, Gy) para o filme / gama no próprio TPS.
 """
@@ -51,14 +52,22 @@ def plano_verificacao(plano: Plano, colim, modelo, fantoma: str | FantomaVirtual
     qa.rotulo = ("QA_" + plano.rotulo)[:16]
     qa.estado, qa.aprovacao, qa.historico = "RASCUNHO", {}, []
     qa.referencia_ct = {}
-    qa.tecnica = "2D"                                   # fantoma virtual: sem CT
+    qa.tecnica = "2D"                                   # fantoma virtual: sem CT (a sessão grava a técnica real)
     qa.campos_setup = []
     qa.prescricao = Prescricao(plano.prescricao.dose_fracao_gy, 1, "QA", "um_fixas")
     for c in qa.campos:
         c.isocentro_mm = iso
-        if modo == "gantry0":
-            c.gantry, c.mesa = 0.0, 0.0
-    doses = calculo.dose_por_um(g, qa.campos, colim, modelo, kernels, "HFS", permitir_demonstracao)
+    calc = qa.campos
+    if modo == "gantry0":
+        # arco: entregue como no paciente (detector preso ao gantry); o cálculo junta tudo no gantry 0
+        calc = copy.deepcopy(qa.campos)
+        for c, cc in zip(qa.campos, calc):
+            cc.gantry, cc.mesa = 0.0, 0.0
+            for p in cc.pontos_controle or []:
+                p["gantry"] = 0.0
+            if not c.e_arco:
+                c.gantry, c.mesa = 0.0, 0.0
+    doses = calculo.dose_por_um(g, calc, colim, modelo, kernels, "HFS", permitir_demonstracao)
     d = sum(float(c.mu) * doses[c.nome] for c in qa.campos)
     jy = int(np.argmin(np.abs(g.y - iso[1])))
     return ResultadoQA(qa, g, d.astype(np.float32), iso, d[:, jy, :].astype(np.float32), (g.x, g.z))

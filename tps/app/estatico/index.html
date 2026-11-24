@@ -196,9 +196,25 @@
       <select id="o-tecnica">
         <option value="3D">3D conformada</option>
         <option value="IMRT">IMRT step-and-shoot (inverso)</option>
+        <option value="VMAT">VMAT (arcos)</option>
       </select></label>
     <div id="o-imrt" class="oculto">
-      <div class="caixa-import">
+      <div class="caixa-import so-vmat">
+        <div class="pequeno-txt"><b>Arcos</b> — conformados ao alvo + margem (substituem os campos atuais); o 2º arco volta
+          no sentido contrário. Elekta: o gantry vai de −185° a +185° (cheio = 181→179).</div>
+        <div class="linha3">
+          <label>Nº<select id="vm-n"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+          <label>Início (°)<input id="vm-ini" type="number" value="181" step="1"></label>
+          <label>Fim (°)<input id="vm-fim" type="number" value="179" step="1"></label>
+        </div>
+        <div class="linha3">
+          <label>Sentido<select id="vm-sent"><option value="CW">horário (CW)</option><option value="CC">anti-horário (CC)</option></select></label>
+          <label title="um valor por arco, separados por vírgula">Colimador (°)<input id="vm-col" value="0, 90"></label>
+          <label>Margem (mm)<input id="vm-mg" type="number" value="5" min="0" max="20"></label>
+        </div>
+        <button id="b-vm-arcos" class="pequeno">Criar arcos</button>
+      </div>
+      <div class="caixa-import so-imrt">
         <div class="pequeno-txt"><b>Campos</b> — equiespaçados, conformados ao alvo + margem (substituem os atuais)</div>
         <div class="linha3">
           <label>Nº<select id="im-n"><option>5</option><option selected>7</option><option>9</option></select></label>
@@ -216,16 +232,21 @@
         <button id="b-obj-add" class="pequeno">+ objetivo</button>
         <button id="b-obj-sug" class="pequeno" title="alvo da prescrição + limites do protocolo (QUANTEC/clínica) e restrições próprias">Sugerir pelas restrições</button>
       </div>
-      <div class="linha3">
+      <div class="linha3 so-vmat">
+        <label title="cada setor do arco vira um mapa de fluência; menor = mais modulação e mais tempo">Setor (°)<select id="vm-setor"><option>16</option><option selected>24</option><option>32</option></select></label>
+        <label>Iterações<select id="vm-it"><option value="1">1 (rápido)</option><option value="2" selected>2</option><option value="3">3</option></select></label>
+        <label>Tecido normal<select id="vm-nto"><option value="0">não</option><option value="0.5">leve</option><option value="1" selected>normal</option><option value="3">forte</option></select></label>
+      </div>
+      <div class="linha3 so-imrt">
         <label>Níveis<input id="im-niveis" type="number" value="7" min="3" max="15" title="níveis de intensidade por campo no sequenciamento: mais níveis = mais segmentos"></label>
         <label>UM mín/seg<input id="im-ummin" type="number" value="3" step="0.5" min="1"></label>
         <label>Área mín (cm²)<input id="im-area" type="number" value="4" step="1" min="1"></label>
       </div>
-      <div class="linha2">
+      <div class="linha2 so-imrt">
         <label>Tecido normal<select id="im-nto"><option value="0">não</option><option value="0.5">leve</option><option value="1" selected>normal</option><option value="3">forte</option></select></label>
         <label>Iterações<select id="im-it"><option value="1">1 (rápido)</option><option value="2" selected>2</option><option value="3">3</option></select></label>
       </div>
-      <label class="check" title="ajusta as posições das lâminas e os pesos de todos os segmentos juntos (Monaco SSO): menos UM e melhor custo com os mesmos segmentos"><input type="checkbox" id="im-forma" checked> otimizar a forma dos segmentos</label>
+      <label class="check so-imrt" title="ajusta as posições das lâminas e os pesos de todos os segmentos juntos (Monaco SSO): menos UM e melhor custo com os mesmos segmentos"><input type="checkbox" id="im-forma" checked> otimizar a forma dos segmentos</label>
       <details class="sub"><summary>Avoidance e auto-flash</summary>
         <div class="pequeno-txt"><b>Avoidance</b> (como no Eclipse): os raios que passam pela estrutura antes do alvo
           (entrada), depois dele (saída) ou em qualquer ponto (ambos) ficam sem fluência.</div>

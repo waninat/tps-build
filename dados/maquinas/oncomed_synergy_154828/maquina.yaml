@@ -8,7 +8,7 @@ dicom_machine_names: ["CONFIRMAR"]   # TreatmentMachineName EXATO cadastrado no 
 sad_mm: 1000.0
 energies_mv: [6]                     # CONFIRMAR outras energias
 fff: false
-techniques: ["3D", "STEP&SHOOT"]      # CONFIRMAR licença de IMRT da máquina
+techniques: ["3D", "STEP&SHOOT", "VMAT"]   # CONFIRMAR licenças de IMRT e VMAT da máquina
 collimation:
   # Agility confirmado em 8/11/2026 (o relatório Monaco de 2018, "SynergyP06x", é da época do MLCi2).
   jaw_x: {present: false, dicom_types: []}
@@ -22,6 +22,14 @@ collimation:
     max_overtravel_mm: 150.0
     min_gap_mm: 0.0                   # CONFIRMAR
     interdigitation: true
+vmat:                                 # limites usados na otimização e na estimativa do tempo de entrega — CONFIRMAR
+  gantry_vel_max_graus_s: 6.0
+  lamina_vel_max_mm_s: 35.0           # Agility (sem contar o guia dinâmico)
+  taxa_dose_max_um_min: 500.0
+  um_por_grau_min: 0.1
+  um_por_grau_max: 20.0
+  deslocamento_max_mm_grau: 6.0
+  espacamento_cp_graus: 4.0
 cunha_motorizada: null           # fora do escopo: o serviço não usa cunha
 dados_de_feixe:
   "6MV":

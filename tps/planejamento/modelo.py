@@ -85,6 +85,15 @@ class Campo:
     campo_pai: str | None = None         # sub-campo (field-in-field) de qual campo
     segmentos: list | None = None        # compensador: [{"mlc_a","mlc_b","jaw_x","jaw_y","peso"}], Σ peso = 1
     descricao: str = ""                  # BeamDescription (ex.: "LD", "ANT" — como o Monaco grava)
+    # VMAT: arco de `gantry` a `arco_fim` no sentido CW/CC; pontos de controle [{"gantry","mlc_a","mlc_b","jaw_x",
+    # "jaw_y","mw"}] com mw = peso de UM acumulado (0 → 1). mlc_a/mlc_b/jaws do campo = envelope do arco.
+    arco_fim: float | None = None
+    sentido: str = ""
+    pontos_controle: list | None = None
+
+    @property
+    def e_arco(self) -> bool:
+        return self.arco_fim is not None
 
     def abertura_definida(self) -> bool:
         return self.jaw_y is not None and self.mlc_a is not None and self.mlc_b is not None
@@ -143,6 +152,7 @@ class Plano:
         for c in d.get("campos", []):           # campo sem descrição: mesmo hash das versões anteriores
             if not c.get("descricao"):
                 c.pop("descricao", None)
+            _sem_arco(c)
         for k in ("cobertura_volume_pct", "cobertura_dose_pct"):    # idem para campos novos vazios
             if d["prescricao"].get(k) is None:
                 d["prescricao"].pop(k, None)
@@ -152,6 +162,7 @@ class Plano:
             for c in d["campos_setup"]:
                 if not c.get("descricao"):
                     c.pop("descricao", None)
+                _sem_arco(c)
         return _normalizar(d)
 
     def hash_conteudo(self) -> str:
@@ -171,6 +182,11 @@ class Plano:
                 erros.append(f"Campo {c.nome}: UM não calculada")
             if len(c.nome) > 16:
                 erros.append(f"Campo {c.nome}: nome com mais de 16 caracteres")
+            if c.e_arco:
+                if c.sentido not in ("CW", "CC"):
+                    erros.append(f"Arco {c.nome}: sentido deve ser CW ou CC")
+                if not c.pontos_controle or len(c.pontos_controle) < 3:
+                    erros.append(f"Arco {c.nome}: sem pontos de controle (otimize o VMAT)")
         if not self.modelo_feixe.get("hash"):
             erros.append("Dose não calculada com um modelo de feixe identificado")
         return erros
@@ -208,6 +224,13 @@ class Plano:
         p.rotulo, p.estado, p.aprovacao = novo_rotulo, "RASCUNHO", None
         p.historico = [{"evento": "copiado", "de": self.rotulo, "hash_origem": self.hash_conteudo()}]
         return p
+
+
+def _sem_arco(c: dict) -> None:
+    """Campo estático: sem as chaves de arco (mesmo hash das versões sem VMAT)."""
+    if c.get("arco_fim") is None:
+        for k in ("arco_fim", "sentido", "pontos_controle"):
+            c.pop(k, None)
 
 
 def _normalizar(x):

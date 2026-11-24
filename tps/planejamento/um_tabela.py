@@ -247,6 +247,32 @@ def dose_por_um_tabela_segmentos(c: Campo, colim: Colimacao, tab: TabelasFeixe, 
     return t
 
 
+def dose_por_um_tabela_arco(c: Campo, colim: Colimacao, tab: TabelasFeixe, ponto_mm, eta=None, eixos=None,
+                            posicao: str = "HFS") -> dict:
+    """Arco VMAT: soma, com as frações de UM, a dose/UM por tabela de cada intervalo entre pontos de controle (gantry
+    do meio, abertura média), com a transmissão do MLC quando o ponto está coberto."""
+    from tps.planejamento.calculo import intervalos_arco
+    total, eq, t = 0.0, [], None
+    for s in intervalos_arco(c):
+        sc = Campo(c.nome, s["gantry"], c.colimador, c.mesa, c.isocentro_mm, jaw_x=s.get("jaw_x"), jaw_y=s["jaw_y"],
+                   mlc_a=s["mlc_a"], mlc_b=s["mlc_b"], segmentos=[s])
+        t = dose_por_um_tabela_segmentos(sc, colim, tab, ponto_mm, eta, eixos, posicao=posicao)
+        total += t["cgy_por_um"]
+        eq.append(t["eq_abertura_cm"])
+    t["cgy_por_um"], t["eq_abertura_cm"] = total, float(np.mean(eq))
+    return t
+
+
+def dose_por_um_tabela_campo(c: Campo, colim: Colimacao, tab: TabelasFeixe, ponto_mm, eta=None, eixos=None,
+                             posicao: str = "HFS") -> dict:
+    """Qualquer campo: estático, com segmentos ou arco."""
+    if c.pontos_controle:
+        return dose_por_um_tabela_arco(c, colim, tab, ponto_mm, eta, eixos, posicao)
+    if c.segmentos:
+        return dose_por_um_tabela_segmentos(c, colim, tab, ponto_mm, eta, eixos, posicao=posicao)
+    return dose_por_um_tabela(c, colim, tab, ponto_mm, eta, eixos, posicao=posicao)
+
+
 def conferir_plano(plano, colim: Colimacao, tab: TabelasFeixe, doses_um: dict, grade, ponto_mm=None,
                    tolerancia_pct: float = 3.0) -> list[dict]:
     """Compara, campo a campo, a dose/UM do motor com a das tabelas no ponto (padrão: isocentro de cada campo)."""
@@ -254,12 +280,8 @@ def conferir_plano(plano, colim: Colimacao, tab: TabelasFeixe, doses_um: dict, g
     out = []
     for c in plano.campos:
         p = np.asarray(ponto_mm if ponto_mm is not None else c.isocentro_mm, float)
-        if c.segmentos:
-            t = dose_por_um_tabela_segmentos(c, colim, tab, p, grade.eta, (grade.x, grade.y, grade.z),
-                                             posicao=plano.posicao_paciente)
-        else:
-            t = dose_por_um_tabela(c, colim, tab, p, grade.eta, (grade.x, grade.y, grade.z),
-                                   posicao=plano.posicao_paciente)
+        t = dose_por_um_tabela_campo(c, colim, tab, p, grade.eta, (grade.x, grade.y, grade.z),
+                                     posicao=plano.posicao_paciente)
         motor = valor_em_ponto(doses_um[c.nome], grade, p) * 100.0
         dif = 100 * (motor / t["cgy_por_um"] - 1) if t["cgy_por_um"] > 0 else float("nan")
         out.append({"campo": c.nome, "motor_cgy_um": float(motor), "tabela_cgy_um": float(t["cgy_por_um"]),

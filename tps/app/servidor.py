@@ -312,6 +312,19 @@ def imrt_campos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     return r
 
 
+@app.post("/api/{sid}/vmat/arcos")
+def vmat_arcos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    cols = d.get("colimadores")
+    if isinstance(cols, str):
+        cols = [float(x) for x in cols.replace(";", ",").split(",") if x.strip()]
+    with TRAVA:
+        r = s.campos_vmat(int(d.get("n", 1)), float(d.get("inicio", 181)), float(d.get("fim", 179)),
+                          d.get("sentido", "CW"), d.get("alvo") or None, float(d.get("margem_mm", 5)), cols)
+    auditar(u, "vmat_arcos", s, n=d.get("n"), inicio=d.get("inicio"), fim=d.get("fim"), sentido=d.get("sentido"))
+    return r
+
+
 @app.get("/api/{sid}/imrt/objetivos")
 def imrt_objetivos(sid: str, u: dict = Depends(usuario)):
     return _s(sid).objetivos_imrt_sugeridos()

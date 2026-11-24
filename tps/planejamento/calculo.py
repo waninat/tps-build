@@ -70,8 +70,34 @@ def segmento_do_campo(c: Campo, colim: Colimacao, mu: float = 1.0, sad_mm: float
                    leaf_boundaries=np.asarray(colim.limites_laminas, float), sad=sad_mm)
 
 
+def intervalos_arco(c: Campo) -> list[dict]:
+    """Arco VMAT: um item por intervalo entre pontos de controle — gantry no meio, abertura média (as lâminas andam
+    linearmente com a UM entre os pontos, como no Elekta) e peso = fração da UM do arco."""
+    pc = c.pontos_controle
+    out = []
+    for k in range(len(pc) - 1):
+        p0, p1 = pc[k], pc[k + 1]
+        w = float(p1["mw"]) - float(p0["mw"])
+        if w <= 1e-9:
+            continue
+        d = (float(p1["gantry"]) - float(p0["gantry"]) + 180.0) % 360.0 - 180.0
+        med = lambda a, b: None if a is None else [0.5 * (x + y) for x, y in zip(a, b)]  # noqa: E731
+        out.append({"gantry": (float(p0["gantry"]) + d / 2) % 360.0, "peso": w,
+                    "mlc_a": med(p0["mlc_a"], p1["mlc_a"]), "mlc_b": med(p0["mlc_b"], p1["mlc_b"]),
+                    "jaw_x": med(p0.get("jaw_x"), p1.get("jaw_x")), "jaw_y": med(p0["jaw_y"], p1["jaw_y"])})
+    return out
+
+
 def segmentos_do_campo(c: Campo, colim: Colimacao, sad_mm: float = 1000.0) -> list[Segment]:
-    """Segmentos do campo para o motor, com mu = fração da UM do campo (campo simples: um segmento, mu = 1)."""
+    """Segmentos do campo para o motor, com mu = fração da UM do campo (campo simples: um segmento, mu = 1).
+    Arco VMAT: um segmento por intervalo entre pontos de controle, no gantry do meio do intervalo."""
+    if c.pontos_controle:
+        return [Segment(gantry=s["gantry"], collimator=c.colimador, couch=c.mesa,
+                        isocenter=np.asarray(c.isocentro_mm, float), mu=s["peso"],
+                        jaw_x=tuple(s["jaw_x"]) if s.get("jaw_x") else None, jaw_y=tuple(s["jaw_y"]),
+                        mlc_a=np.asarray(s["mlc_a"], float), mlc_b=np.asarray(s["mlc_b"], float),
+                        leaf_boundaries=np.asarray(colim.limites_laminas, float), sad=sad_mm)
+                for s in intervalos_arco(c)]
     if not c.segmentos:
         return [segmento_do_campo(c, colim, 1.0, sad_mm)]
     out = []

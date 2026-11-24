@@ -752,6 +752,14 @@ class Sessao:
         if c.ssd_mm is None:
             raise ErroUsuario(f"{nome}: o eixo central não cruza o paciente")
         c.alvo_conformado = spec.get("alvo") if spec.get("modo", "conformado") != "retangular" else None
+        if existente is not None and existente.e_arco:           # editar um arco não o transforma em campo fixo
+            c.arco_fim, c.sentido = existente.arco_fim, existente.sentido
+        if spec.get("arco_fim") not in (None, ""):
+            from tps.planejamento.vmat import validar_arco
+            c.arco_fim, c.sentido = float(spec["arco_fim"]) % 360.0, spec.get("sentido", "CW")
+            erros = validar_arco(c.gantry, c.arco_fim, c.sentido)
+            if erros:
+                raise ErroUsuario("; ".join(erros))
         self._remover_derivados()
         if existente:
             idx = p.campos.index(existente)
@@ -812,6 +820,9 @@ class Sessao:
         for c in p.campos:
             if c.segmentos:
                 c.segmentos = None
+                self.doses_um.pop(c.nome, None)
+            if c.pontos_controle:                # arco VMAT: os pontos de controle saem, o arco fica
+                c.pontos_controle = None
                 self.doses_um.pop(c.nome, None)
             if p.tecnica == "IMRT":
                 p.tecnica = "3D"
@@ -1457,7 +1468,7 @@ class Sessao:
             self._exigir(bool(self.doses_um) and all(c.nome in self.doses_um for c in p.campos),
                          "Calcule a dose antes de renormalizar")
             opcoes = {k: v for k, v in opcoes.items() if k not in ("otimizar_pesos", "field_in_field", "compensador",
-                                                                    "proteger_oars", "imrt")}
+                                                                    "proteger_oars", "imrt", "vmat")}
         if opcoes.get("metodo"):
             pr.metodo = opcoes["metodo"]
             if pr.metodo == "ponto":
@@ -1474,12 +1485,18 @@ class Sessao:
         if pr.metodo in ("media_alvo", "cobertura") and alvo is None:
             raise ErroUsuario("Normalização pelo alvo sem estrutura alvo")
         manter_imrt = p.tecnica == "IMRT" and not opcoes.get("imrt")   # recálculo de um IMRT pronto: mesmos segmentos
-        if pr.metodo != "um_fixas" and not so_normalizar and not manter_imrt:
+        arcos = [c for c in p.campos if c.e_arco]
+        manter_vmat = bool(arcos) and not opcoes.get("vmat")             # idem para o VMAT: mesmos pontos de controle
+        if manter_vmat and not all(c.pontos_controle for c in arcos):
+            raise ErroUsuario("Plano com arcos: otimize o VMAT (os arcos ainda não têm pontos de controle)")
+        if opcoes.get("vmat") and not arcos:
+            raise ErroUsuario("Crie os arcos antes de otimizar o VMAT")
+        if pr.metodo != "um_fixas" and not so_normalizar and not manter_imrt and not manter_vmat:
             self._remover_derivados()                           # importado: segmentos e UM são os do plano original
         p.modelo_feixe = self._info_modelo()
         self.avisos = []
         try:
-            faltam = [c for c in p.campos if c.nome not in self.doses_um]
+            faltam = [c for c in p.campos if c.nome not in self.doses_um and not (c.e_arco and not c.pontos_controle)]
             if faltam:
                 self.doses_um.update(calculo.dose_por_um(g, faltam, m.colim, m.modelo))
             for n in list(self.doses_um):
@@ -1520,6 +1537,12 @@ class Sessao:
                 info["field_in_field"] = {"subcampos": [c.nome for c in r.subcampos], "hi_antes": r.hi_antes,
                                           "hi_depois": r.hi_depois, "avisos": r.avisos}
                 self.avisos = list(r.avisos)
+            vm = opcoes.get("vmat")
+            if vm:
+                if fif or opcoes.get("compensador") or opcoes.get("proteger_oars") or opcoes.get("imrt") or \
+                        opcoes.get("otimizar_pesos"):
+                    raise ErroUsuario("VMAT não se combina com field-in-field, compensador, proteção de OARs ou IMRT")
+                info["vmat"] = self._otimizar_vmat(vm, corpo)
             im = opcoes.get("imrt")
             if im:
                 if fif or opcoes.get("compensador") or opcoes.get("proteger_oars"):
@@ -1556,7 +1579,7 @@ class Sessao:
                 self.avisos = list(r.avisos)
             if pr.metodo == "um_fixas":
                 if (opcoes.get("otimizar_pesos") or opcoes.get("field_in_field") or opcoes.get("compensador")
-                        or opcoes.get("proteger_oars") or opcoes.get("imrt")):
+                        or opcoes.get("proteger_oars") or opcoes.get("imrt") or opcoes.get("vmat")):
                     raise ErroUsuario("Plano com UM fixas (importado): troque a normalização antes de otimizar, "
                                       "fazer field-in-field ou compensador")
                 faltam_um = [c.nome for c in p.campos if not c.mu]
@@ -1573,8 +1596,8 @@ class Sessao:
                               ponto_mm=pr.ponto_mm if pr.metodo == "ponto" else None) if m.tabelas else []
         for k in conf:
             c = self._campo(k["campo"])
-            k["compensado"] = bool(c.segmentos)
-        if p.tecnica == "IMRT" and m.tabelas and alvo is not None:
+            k["compensado"] = bool(c.segmentos or c.pontos_controle)
+        if p.tecnica in ("IMRT", "VMAT") and m.tabelas and alvo is not None:
             conf.append(self._conferencia_composta(alvo))
         hi = indice_homogeneidade(total, alvo) if alvo is not None and alvo.any() else None
         self.resultado = {"dvh": hist, "conferencia_um": conf, "info": info, "hi": hi,
@@ -1587,10 +1610,9 @@ class Sessao:
         self._registrar(f"Dose calculada ({len(p.campos)} campos)")
         return self.resumo()
 
-    def _otimizar_imrt(self, im: dict, corpo) -> dict:
-        """IMRT step-and-shoot nos campos do plano (já conformados aos alvos). SRS-IMR-001."""
+    def _objetivos_otimizacao(self, im: dict) -> tuple[list, list, list]:
+        """Objetivos (imrt.Objetivo), o que fica gravado no plano e a avoidance, a partir do pedido da tela."""
         from tps.planejamento import imrt as I
-        p, m, g = self.plano, self.maquina, self.grade
         objs, guardar = [], []
         for o in im.get("objetivos") or []:
             e = self.estruturas.get(o.get("estrutura"))
@@ -1625,12 +1647,6 @@ class Sessao:
             guardar.append({k: o.get(k) for k in ("estrutura", "tipo", "dose_gy", "volume_pct", "peso", "restrito")})
         if not any(o.tipo == "alvo" for o in objs):
             raise ErroUsuario("Defina pelo menos um alvo com dose")
-        for c in p.campos:
-            if c.campo_pai is None and "_abertura_conformada" not in c.__dict__:
-                c.__dict__["_abertura_conformada"] = (list(c.mlc_a), list(c.mlc_b), c.jaw_x, c.jaw_y)
-
-        def prog(msg):
-            self.progresso = msg
         evitar = []
         for a in im.get("avoidance") or []:
             e = self.estruturas.get(a.get("estrutura"))
@@ -1639,6 +1655,82 @@ class Sessao:
             if a.get("modo", "ambos") not in ("entrada", "saida", "ambos"):
                 raise ErroUsuario("Avoidance: modo deve ser entrada, saida ou ambos")
             evitar.append((e.nome, e.mascara, a.get("modo", "ambos")))
+        return objs, guardar, evitar
+
+    def _otimizar_vmat(self, vm: dict, corpo) -> dict:
+        """VMAT nos arcos do plano. SRS-VMT-001."""
+        from tps.planejamento import vmat as V
+        p, m, g = self.plano, self.maquina, self.grade
+        objs, guardar, evitar = self._objetivos_otimizacao(vm)
+
+        def prog(msg):
+            self.progresso = msg
+        try:
+            r = V.otimizar_vmat(p, g, self.doses_um, objs, corpo, m.colim, m.modelo, V.LimitesVMAT.da_maquina(m.raw),
+                                setor_graus=float(vm.get("setor_graus", 24)), iteracoes=int(vm.get("iteracoes", 2)),
+                                peso_nto=float(vm.get("peso_nto", 1.0)), progresso=prog, evitar=evitar,
+                                flash_mm=float(vm.get("flash_mm", 0) or 0),
+                                flash_pele_mm=float(vm.get("flash_pele_mm", 5) or 5))
+        except ValueError as ex:
+            raise ErroUsuario(str(ex)) from ex
+        finally:
+            self.progresso = None
+        p.tecnica = "VMAT"
+        p.objetivos_imrt = guardar
+        self.avisos += r.avisos
+        self._registrar(f"VMAT: {len(r.arcos)} arco(s), {r.um_total:.0f} UM, entrega estimada "
+                        f"{sum(a['tempo_s'] for a in r.arcos.values()):.0f} s, otimização {r.tempo_s:.0f} s")
+        return {"arcos": r.arcos, "um_total": r.um_total, "custo": r.custo, "avisos": r.avisos,
+                "tempo_s": r.tempo_s, "restricoes": r.restricoes}
+
+    def campos_vmat(self, n_arcos: int = 1, inicio: float = 181.0, fim: float = 179.0, sentido: str = "CW",
+                    alvo: str | None = None, margem_mm: float = 5.0, colimadores: list | None = None) -> dict:
+        """Troca os campos do plano por arcos (o 2º arco volta no sentido contrário), conformados ao alvo (+ margem)
+        no ângulo inicial; a conformação por setor é refeita na otimização."""
+        from tps.planejamento.vmat import validar_arco
+        self._exigir_plano()
+        p = self.plano
+        p._exigir_rascunho()
+        alvo = alvo or p.prescricao.estrutura_alvo
+        if alvo not in self.estruturas:
+            raise ErroUsuario("Escolha o alvo dos arcos")
+        if not 1 <= int(n_arcos) <= 4:
+            raise ErroUsuario("Use de 1 a 4 arcos")
+        erros = validar_arco(float(inicio), float(fim), sentido)
+        if erros:
+            raise ErroUsuario("; ".join(erros))
+        cols = list(colimadores or [])
+        for c in list(p.campos):
+            p.campos.remove(c)
+            self.doses_um.pop(c.nome, None)
+        for k in range(int(n_arcos)):
+            ida = k % 2 == 0
+            ini, fi = (float(inicio), float(fim)) if ida else (float(fim), float(inicio))
+            sen = sentido if ida else ("CC" if sentido == "CW" else "CW")
+            col = float(cols[k]) if k < len(cols) else (0.0 if ida else 90.0)
+            nome = f"ARCO{k + 1}"
+            self.salvar_campo({"nome": nome, "gantry": ini, "colimador": col, "modo": "conformado", "alvo": alvo,
+                               "margem": {q: margem_mm for q in ("x1", "x2", "y1", "y2")}, "ponto_encontro": "fora"})
+            c = self._campo(nome)
+            c.arco_fim, c.sentido = fi % 360.0, sen
+        p.tecnica = "VMAT"
+        self.dose_atualizada = False
+        self._registrar(f"{n_arcos} arco(s) VMAT {inicio:g}→{fim:g} {sentido} (alvo {alvo} + {margem_mm:g} mm)")
+        return self.resumo()
+
+    def _otimizar_imrt(self, im: dict, corpo) -> dict:
+        """IMRT step-and-shoot nos campos do plano (já conformados aos alvos). SRS-IMR-001."""
+        from tps.planejamento import imrt as I
+        p, m, g = self.plano, self.maquina, self.grade
+        if any(c.e_arco for c in p.campos):
+            raise ErroUsuario("O plano tem arcos: use VMAT ou troque por campos estáticos")
+        objs, guardar, evitar = self._objetivos_otimizacao(im)
+        for c in p.campos:
+            if c.campo_pai is None and "_abertura_conformada" not in c.__dict__:
+                c.__dict__["_abertura_conformada"] = (list(c.mlc_a), list(c.mlc_b), c.jaw_x, c.jaw_y)
+
+        def prog(msg):
+            self.progresso = msg
         try:
             r = I.otimizar_imrt(p, g, self.doses_um, objs, corpo, m.colim, m.modelo,
                                 niveis=int(im.get("niveis", 7)), iteracoes=int(im.get("iteracoes", 2)),
@@ -1666,7 +1758,7 @@ class Sessao:
         (Σ UM · dose/UM por tabela, Clarkson por segmento), tolerância de 5% (TG-114/TG-218 para IMRT)."""
         from scipy.ndimage import binary_erosion, gaussian_gradient_magnitude
 
-        from tps.planejamento.um_tabela import dose_por_um_tabela_segmentos
+        from tps.planejamento.um_tabela import dose_por_um_tabela_campo
         g, p, m = self.grade, self.plano, self.maquina
         nucleo = binary_erosion(alvo, iterations=2)
         if not nucleo.any():
@@ -1679,12 +1771,8 @@ class Sessao:
         mot, tab = 0.0, 0.0
         for c in p.campos:
             mot += float(c.mu or 0) * calculo.valor_em_ponto(self.doses_um[c.nome], g, ponto) * 100.0
-            if c.segmentos:
-                t = dose_por_um_tabela_segmentos(c, m.colim, m.tabelas, ponto, g.eta, (g.x, g.y, g.z),
-                                                 posicao=p.posicao_paciente)
-            else:
-                from tps.planejamento.um_tabela import dose_por_um_tabela
-                t = dose_por_um_tabela(c, m.colim, m.tabelas, ponto, g.eta, (g.x, g.y, g.z), posicao=p.posicao_paciente)
+            t = dose_por_um_tabela_campo(c, m.colim, m.tabelas, ponto, g.eta, (g.x, g.y, g.z),
+                                         posicao=p.posicao_paciente)
             tab += float(c.mu or 0) * t["cgy_por_um"]
         dif = 100 * (mot / tab - 1) if tab > 0 else float("nan")
         return {"campo": "PLANO (soma)", "motor_cgy_um": mot, "tabela_cgy_um": tab, "dif_pct": float(dif),
@@ -2106,8 +2194,9 @@ class Sessao:
         return c
 
     def _campo_json(self, c: Campo) -> dict:
-        d = {k: v for k, v in dataclasses.asdict(c).items() if not k.startswith("_")}
+        d = {k: v for k, v in dataclasses.asdict(c).items() if not k.startswith("_") and k != "pontos_controle"}
         d["n_segmentos"] = len(c.segmentos) if c.segmentos else 0
+        d["n_pontos"] = len(c.pontos_controle) if c.pontos_controle else 0
         d["spec"] = c.__dict__.get("_spec")
         return d
 

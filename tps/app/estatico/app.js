@@ -168,11 +168,20 @@ function ligar() {
   });
   $("#b-iso-cfg").onclick = () => tentar(configurarIsodoses);
   $("#o-tecnica").onchange = () => {
-    const im = $("#o-tecnica").value === "IMRT";
+    const t = $("#o-tecnica").value, im = t !== "3D";
     $("#o-imrt").classList.toggle("oculto", !im); $("#o-3d").classList.toggle("oculto", im);
-    $("#b-calc").textContent = im ? "Otimizar IMRT" : "Calcular dose";
+    $$("#o-imrt .so-imrt").forEach(e => e.classList.toggle("oculto", t !== "IMRT"));
+    $$("#o-imrt .so-vmat").forEach(e => e.classList.toggle("oculto", t !== "VMAT"));
+    $("#b-calc").textContent = t === "IMRT" ? "Otimizar IMRT" : t === "VMAT" ? "Otimizar VMAT" : "Calcular dose";
     if (im && !(E.objetivos || []).length) tentar(sugerirObjetivos);
   };
+  $("#b-vm-arcos").onclick = () => tentar(async () => {
+    if (E.resumo.plano.campos.length && !confirm("Substituir os campos atuais pelos arcos?")) return;
+    E.campoSel = null;
+    atualizar(await api("POST", `/api/${E.sid}/vmat/arcos`, { n: +$("#vm-n").value, inicio: +$("#vm-ini").value,
+      fim: +$("#vm-fim").value, sentido: $("#vm-sent").value, colimadores: $("#vm-col").value, margem_mm: +$("#vm-mg").value },
+      "Criando os arcos…"));
+  });
   $("#b-im-campos").onclick = () => tentar(async () => {
     if (E.resumo.plano.campos.length && !confirm("Substituir os campos atuais por campos equiespaçados?")) return;
     E.campoSel = null;
@@ -617,7 +626,7 @@ function atualizar(r) {
   listarCampos(); tabelas();
   $("#avisos").innerHTML = (r.avisos || []).map(a => `<li>${a}</li>`).join("");
   $("#n-avisos").textContent = (r.avisos || []).length || "";
-  if (p && p.tecnica === "IMRT" && $("#o-tecnica").value !== "IMRT") { $("#o-tecnica").value = "IMRT"; $("#o-tecnica").onchange(); }
+  if (p && (p.tecnica === "IMRT" || p.tecnica === "VMAT") && $("#o-tecnica").value !== p.tecnica) { $("#o-tecnica").value = p.tecnica; $("#o-tecnica").onchange(); }
   if (p && p.objetivos_imrt && p.objetivos_imrt.length && !(E.objetivos || []).length) { E.objetivos = p.objetivos_imrt; listarObjetivos(); }
   if (E.objetivos && E.objetivos.length) listarObjetivos();
   if (p && r.dose_atualizada) carregarChecklist(); else $("#checklist").innerHTML = p ? `<div class="pequeno-txt">Calcule a dose para conferir o plano.</div>` : "";
@@ -646,8 +655,8 @@ function atualizar(r) {
 function listarCampos() {
   const p = E.resumo && E.resumo.plano;
   $("#tab-campos tbody").innerHTML = !p ? "" : p.campos.map(c => `<tr data-campo="${c.nome}" class="${c.campo_pai ? "sub" : ""} ${c.nome === E.campoSel ? "sel" : ""}">
-    <td>${c.nome}</td><td>${c.gantry.toFixed(0)}</td><td>${c.colimador.toFixed(0)}</td><td>${c.mu != null ? c.mu.toFixed(1) : "—"}</td>
-    <td>${c.n_segmentos || (c.campo_pai ? "sub" : 1)}</td></tr>`).join("");
+    <td>${c.nome}</td><td>${c.arco_fim != null ? `${c.gantry.toFixed(0)}→${c.arco_fim.toFixed(0)} ${c.sentido}` : c.gantry.toFixed(0)}</td><td>${c.colimador.toFixed(0)}</td><td>${c.mu != null ? c.mu.toFixed(1) : "—"}</td>
+    <td title="${c.arco_fim != null ? "pontos de controle" : "segmentos"}">${c.arco_fim != null ? (c.n_pontos ? c.n_pontos + " PC" : "arco") : (c.n_segmentos || (c.campo_pai ? "sub" : 1))}</td></tr>`).join("");
   $$("#tab-campos tbody tr").forEach(tr => tr.onclick = () => {
     E.campoSel = tr.dataset.campo; const c = p.campos.find(x => x.nome === E.campoSel);
     preencherForm(c); listarCampos(); $("#bev-campo").value = c.nome; carregarBev(c.nome).catch(e => aviso(e.message));
@@ -712,21 +721,33 @@ async function calcular() {
   if (modo === "otimizado") fif = true;
   if (modo === "filtro") fif = { modo: "filtro", niveis: lerNiveis($("#o-fil-niveis").value), peso_pct: +$("#o-fil-peso").value,
     campos: Array.from($("#o-fil-campos").selectedOptions).map(o => o.value) };
-  if ($("#o-tecnica").value === "IMRT") {
+  const tec = $("#o-tecnica").value;
+  if (tec === "IMRT" || tec === "VMAT") {
     const objetivos = (E.objetivos || []).map(o => ({ estrutura: o.estrutura, tipo: o.tipo, dose_gy: +String(o.dose_gy).replace(",", "."),
       volume_pct: o.volume_pct === "" || o.volume_pct == null ? null : +String(o.volume_pct).replace(",", "."), peso: +o.peso || 1,
       restrito: !!o.restrito }));
-    const corpo = { ...normalizacaoDoForm(), imrt: { objetivos, niveis: +$("#im-niveis").value, um_min: +$("#im-ummin").value,
-      area_min_cm2: +$("#im-area").value, peso_nto: +$("#im-nto").value, iteracoes: +$("#im-it").value,
-      forma_segmentos: $("#im-forma").checked, avoidance: (E.avoid || []).filter(a => a.estrutura),
-      flash_mm: $("#im-flash").checked ? +$("#im-flash-mm").value : 0, flash_pele_mm: +$("#im-flash-pele").value } };
+    const comum = { objetivos, avoidance: (E.avoid || []).filter(a => a.estrutura),
+      flash_mm: $("#im-flash").checked ? +$("#im-flash-mm").value : 0, flash_pele_mm: +$("#im-flash-pele").value };
+    const corpo = tec === "VMAT"
+      ? { ...normalizacaoDoForm(), vmat: { ...comum, setor_graus: +$("#vm-setor").value, iteracoes: +$("#vm-it").value,
+          peso_nto: +$("#vm-nto").value } }
+      : { ...normalizacaoDoForm(), imrt: { ...comum, niveis: +$("#im-niveis").value, um_min: +$("#im-ummin").value,
+          area_min_cm2: +$("#im-area").value, peso_nto: +$("#im-nto").value, iteracoes: +$("#im-it").value,
+          forma_segmentos: $("#im-forma").checked } };
     const t = setInterval(async () => {                    // etapa da otimização (o servidor responde sem a trava)
       try { const pr = await fetch(`/api/${E.sid}/progresso`, { headers: { "X-Token": E.token } }).then(x => x.json());
         if (pr.progresso) $("#ocupado-txt").textContent = pr.progresso; } catch (e) { /* ok */ }
     }, 2000);
     let r;
-    try { r = await api("POST", `/api/${E.sid}/calcular`, corpo, "Otimizando IMRT (pode levar alguns minutos)…"); } finally { clearInterval(t); }
+    try { r = await api("POST", `/api/${E.sid}/calcular`, corpo, `Otimizando ${tec} (pode levar alguns minutos)…`); } finally { clearInterval(t); }
     atualizar(r);
+    const vm = r.resultado.info.vmat;
+    if (vm) {
+      const viol = Object.entries(vm.restricoes || {}).filter(([, v]) => v > 1);
+      const arcos = Object.entries(vm.arcos).map(([n, a]) => `${n} ${f1(a.um, 0)} UM ~${Math.round(a.tempo_s)} s`).join(" · ");
+      aviso(`VMAT: ${arcos} · otimização ${Math.round(vm.tempo_s)} s` +
+        (Object.keys(vm.restricoes || {}).length ? (viol.length ? ` · restrições NÃO cumpridas: ${viol.map(([n, v]) => `${n} (+${v}%)`).join(", ")}` : " · restrições cumpridas") : ""), !viol.length);
+    }
     const im = r.resultado.info.imrt;
     if (im) {
       const viol = Object.entries(im.restricoes || {}).filter(([, v]) => v > 1);

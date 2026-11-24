@@ -56,6 +56,9 @@ def _feixes_para_exportar(plano: Plano, modo_segmentos: str) -> list[tuple]:
     principais = [c for c in plano.campos if not c.campo_pai]
     for c in principais:
         filhos = [f for f in plano.campos if f.campo_pai == c.nome]
+        if c.pontos_controle:                                  # arco VMAT: um feixe DYNAMIC, sempre
+            out.append((c.nome, c, float(c.mu), None, [(c, float(c.mu))]))
+            continue
         if modo_segmentos == "step_and_shoot":
             formas, membros, total = [], [(c, float(c.mu))], float(c.mu)
             if c.segmentos:
@@ -224,7 +227,8 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
         b.TreatmentMachineName = plano.nome_dicom_maquina
         b.PrimaryDosimeterUnit = "MU"
         b.SourceAxisDistance = float(sad_mm)
-        b.BeamType, b.RadiationType = "STATIC", "PHOTON"
+        arco = formas is None
+        b.BeamType, b.RadiationType = ("DYNAMIC" if arco else "STATIC"), "PHOTON"
         b.TreatmentDeliveryType = "SETUP" if e_setup else "TREATMENT"
         b.PrimaryFluenceModeSequence = Sequence([_ds(FluenceMode="STANDARD")])
         dist = ex.get("distancia_fonte_mm") or {}
@@ -253,9 +257,16 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
         cp0.ControlPointIndex = 0
         cp0.NominalBeamEnergy = float(c.energia_mv)
         cp0.DoseRateSet = float(c.taxa_dose)
-        cp0.BeamLimitingDevicePositionSequence = posicoes(*formas[0][:4])
-        cp0.GantryAngle = float(c.gantry) % 360
-        cp0.GantryRotationDirection = "NONE"
+        pcs = c.pontos_controle if arco else None
+        if arco:
+            p0 = pcs[0]
+            cp0.BeamLimitingDevicePositionSequence = posicoes(p0.get("jaw_x"), p0["jaw_y"], p0["mlc_a"], p0["mlc_b"])
+            cp0.GantryAngle = round(float(p0["gantry"]) % 360, 2)
+            cp0.GantryRotationDirection = c.sentido
+        else:
+            cp0.BeamLimitingDevicePositionSequence = posicoes(*formas[0][:4])
+            cp0.GantryAngle = float(c.gantry) % 360
+            cp0.GantryRotationDirection = "NONE"
         cp0.BeamLimitingDeviceAngle = float(c.colimador) % 360
         cp0.BeamLimitingDeviceRotationDirection = "NONE"
         cp0.PatientSupportAngle = float(c.mesa) % 360
@@ -282,6 +293,16 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
         cp0.ReferencedDoseReferenceSequence = refdose(0.0)
         cps = [cp0]
         acum = 0.0
+        if arco:                                         # VMAT: gantry, lâminas e UM acumulada em cada ponto
+            for k, pk in enumerate(pcs[1:], start=1):
+                cpk = _ds(ControlPointIndex=k)
+                cpk.BeamLimitingDevicePositionSequence = posicoes(pk.get("jaw_x"), pk["jaw_y"], pk["mlc_a"], pk["mlc_b"])
+                cpk.GantryAngle = round(float(pk["gantry"]) % 360, 2)
+                cpk.GantryRotationDirection = c.sentido if k < len(pcs) - 1 else "NONE"
+                cpk.CumulativeMetersetWeight = 1.0 if k == len(pcs) - 1 else round(float(pk["mw"]), 6)
+                cpk.ReferencedDoseReferenceSequence = refdose(float(cpk.CumulativeMetersetWeight))
+                cps.append(cpk)
+            formas = []
         for k, (jx, jy, ma, mb, peso) in enumerate(formas):
             if k > 0:                                    # início do segmento k: mesma UM acumulada, nova forma
                 cpi = _ds(ControlPointIndex=len(cps), CumulativeMetersetWeight=round(acum, 6))
