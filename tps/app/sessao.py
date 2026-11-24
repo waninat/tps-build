@@ -1667,7 +1667,7 @@ class Sessao:
             self.progresso = msg
         try:
             r = V.otimizar_vmat(p, g, self.doses_um, objs, corpo, m.colim, m.modelo, V.LimitesVMAT.da_maquina(m.raw),
-                                setor_graus=float(vm.get("setor_graus", 24)), iteracoes=int(vm.get("iteracoes", 2)),
+                                setor_graus=float(vm.get("setor_graus", 40)), iteracoes=int(vm.get("iteracoes", 2)),
                                 peso_nto=float(vm.get("peso_nto", 1.0)), progresso=prog, evitar=evitar,
                                 flash_mm=float(vm.get("flash_mm", 0) or 0),
                                 flash_pele_mm=float(vm.get("flash_pele_mm", 5) or 5))
@@ -1753,9 +1753,41 @@ class Sessao:
         return {"segmentos": r.n_segmentos, "um_total": r.um_total, "custo": r.custo, "avisos": r.avisos,
                 "tempo_s": r.tempo_s, "restricoes": r.restricoes}
 
+    def _fracao_borda(self, ponto, folga_mm: float = 4.0) -> float:
+        """Fração das UM do plano em que o ponto fica a menos de folga_mm de uma ponta de lâmina ou dentro de um par
+        fechado (abertura ≤ gap mínimo + 1 mm)."""
+        from tps.engine.geometry import beam_frame
+        colim = self.maquina.colim
+        lim = np.asarray(colim.limites_laminas)
+        g_min = colim.gap_minimo_mm
+        tot, ruim = 0.0, 0.0
+        for c in self.plano.campos:
+            if c.pontos_controle:
+                formas = [(s["gantry"], s["peso"], s) for s in calculo.intervalos_arco(c)]
+            elif c.segmentos:
+                formas = [(c.gantry, s["peso"], s) for s in c.segmentos]
+            else:
+                formas = [(c.gantry, 1.0, {"mlc_a": c.mlc_a, "mlc_b": c.mlc_b, "jaw_y": c.jaw_y})]
+            for gan, w, s in formas:
+                fr = beam_frame(gan, c.colimador, c.mesa, c.isocentro_mm, 1000.0, self.plano.posicao_paciente)
+                r = np.asarray(ponto, float) - fr.source
+                u, v = 1000.0 * (r @ fr.u) / (r @ fr.w), 1000.0 * (r @ fr.v) / (r @ fr.w)
+                i = int(np.searchsorted(lim, v, side="right") - 1)
+                peso = float(c.mu or 0) * w
+                tot += peso
+                if not (0 <= i < colim.n_pares) or not (s["jaw_y"][0] <= v <= s["jaw_y"][1]):
+                    continue
+                a, b = float(s["mlc_a"][i]), float(s["mlc_b"][i])
+                if b - a <= g_min + 1.0 and a - folga_mm <= u <= b + folga_mm:
+                    ruim += peso
+                elif a < u < b and min(u - a, b - u) < folga_mm:
+                    ruim += peso
+        return ruim / tot if tot > 0 else 0.0
+
     def _conferencia_composta(self, alvo, tolerancia_pct: float = 5.0) -> dict:
-        """IMRT: conferência independente do plano inteiro num ponto de baixo gradiente dentro do alvo
-        (Σ UM · dose/UM por tabela, Clarkson por segmento), tolerância de 5% (TG-114/TG-218 para IMRT)."""
+        """IMRT/VMAT: conferência independente do plano inteiro num ponto de baixo gradiente dentro do alvo, longe de
+        pontas de lâmina e de pares fechados (Σ UM · dose/UM por tabela, Clarkson por segmento ou intervalo do arco),
+        tolerância de 5% (TG-114/TG-218 para IMRT)."""
         from scipy.ndimage import binary_erosion, gaussian_gradient_magnitude
 
         from tps.planejamento.um_tabela import dose_por_um_tabela_campo
@@ -1766,8 +1798,21 @@ class Sessao:
         grad = gaussian_gradient_magnitude(self.dose_fx, 1.0)
         med = float(np.median(self.dose_fx[nucleo]))
         custo = np.where(nucleo, grad / max(med, 1e-9) + np.abs(self.dose_fx - med) / max(med, 1e-9), np.inf)
-        k, j, i = np.unravel_index(int(np.argmin(custo)), custo.shape)
-        ponto = (float(g.x[i]), float(g.y[j]), float(g.z[k]))
+        # entre os 40 melhores pontos, o que menos fica perto de ponta de lâmina ou de par fechado (fendas de gap
+        # mínimo e penumbra de lâmina: onde a tabela e o motor divergem por construção)
+        cand = np.argsort(custo, axis=None)[:40]
+        cand = cand[np.isfinite(custo.ravel()[cand])]
+        melhor, ponto = None, None
+        for q in cand:
+            k, j, i = np.unravel_index(int(q), custo.shape)
+            pt = (float(g.x[i]), float(g.y[j]), float(g.z[k]))
+            bordas = self._fracao_borda(pt)
+            nota = bordas * 5.0 + float(custo.ravel()[q])
+            if melhor is None or nota < melhor:
+                melhor, ponto = nota, pt
+        if ponto is None:
+            k, j, i = np.unravel_index(int(np.argmin(custo)), custo.shape)
+            ponto = (float(g.x[i]), float(g.y[j]), float(g.z[k]))
         mot, tab = 0.0, 0.0
         for c in p.campos:
             mot += float(c.mu or 0) * calculo.valor_em_ponto(self.doses_um[c.nome], g, ponto) * 100.0
@@ -1777,6 +1822,7 @@ class Sessao:
         dif = 100 * (mot / tab - 1) if tab > 0 else float("nan")
         return {"campo": "PLANO (soma)", "motor_cgy_um": mot, "tabela_cgy_um": tab, "dif_pct": float(dif),
                 "ok": bool(abs(dif) <= tolerancia_pct), "composta": True, "ponto_mm": [round(v, 1) for v in ponto],
+                "fracao_borda_pct": round(100 * self._fracao_borda(ponto), 1),
                 "tolerancia_pct": tolerancia_pct, "eq_abertura_cm": 0.0, "prof_rad_mm": 0.0, "tmr": 0.0}
 
     def campos_imrt(self, n: int, inicio: float = 0.0, alvo: str | None = None, margem_mm: float = 5.0,

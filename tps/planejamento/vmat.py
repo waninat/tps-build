@@ -1,7 +1,7 @@
 """VMAT para Elekta (Precise MLCi e Synergy Agility): arcos com MLC dinâmico e taxa de dose variável. SRS-VMT-001.
 
 Três etapas, como os sistemas comerciais (Monaco e Eclipse fazem variantes disso):
-  1. Fluência por setor: o arco é dividido em setores (padrão 24°); cada setor vira um "campo" no meio do setor,
+  1. Fluência por setor: o arco é dividido em setores (padrão 40°); cada setor vira um "campo" no meio do setor,
      conformado ao alvo, e as fluências de todos são otimizadas juntas com o mesmo custo do IMRT (objetivos
      ponderados ou restritos, serial, paralelo, tecido normal, avoidance e auto-flash).
   2. Sequenciamento em arco: a fluência de cada setor vira uma janela deslizante unidirecional distribuída pelos
@@ -425,7 +425,7 @@ def otimizar_pontos(arcos, Acp, Bcp, w, modelo: ModeloIntervalos, custo, colim, 
 
 # ------------------------------------------------------------------ otimização completa
 def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objetivos: list, corpo: np.ndarray,
-                  colim: Colimacao, modelo, limites: LimitesVMAT | None = None, setor_graus: float = 24.0,
+                  colim: Colimacao, modelo, limites: LimitesVMAT | None = None, setor_graus: float = 40.0,
                   iteracoes: int = 2, margem_mm: float = 5.0, res_u_mm: float = 2.5, sigma_mm: tuple = (3.0, 3.5),
                   peso_nto: float = 1.0, suavidade: float = 0.2, kernels=None, posicao: str = "HFS",
                   permitir_demonstracao: bool = False, progresso=None, evitar: list | None = None,
