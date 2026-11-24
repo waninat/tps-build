@@ -13,7 +13,7 @@ Modelo misto Eclipse + Monaco:
    "segment shape optimization" do Monaco): posições das lâminas e pesos otimizados juntos no modelo calibrado,
    com a mecânica como penalidade, e as formas novas recalculadas no CCC.
 
-Custo: objetivos ponderados (Eclipse) ou **restritos** (Monaco "constrained"): os restritos são tratados por
+penalidade adaptativa (o peso sobe até cumprir) — o otimizador cumpre os limites dos órgãos e busca o melhor alvo possível.
 Lagrangiano aumentado — o otimizador primeiro cumpre os limites dos órgãos e depois busca o melhor alvo possível.
 Tipos: alvo (uniforme), mínimo, máximo, média, ponto de DVH, **serial** (EUD generalizado com expoente k, órgãos em
 série: medula, tronco) e **paralelo** (fração do volume acima da dose ≤ v%, órgãos em paralelo: pulmão, parótida),
@@ -112,15 +112,19 @@ def _termo(o: Objetivo, d: np.ndarray):
 
 
 class Custo:
-    """Custo sobre as doses (Gy, dose total) nos voxels amostrados, com gradiente por voxel. Objetivos restritos entram
-    pelo Lagrangiano aumentado: λ·g + ρ/2·g², g = √(penalidade) ≈ excesso relativo RMS; `atualizar` sobe os λ."""
+    """Custo sobre as doses (Gy, dose total) nos voxels amostrados, com gradiente por voxel. Objetivos restritos
+    (Monaco "constrained") entram com um peso adaptativo: começa no peso comum e é multiplicado a cada rodada em que a
+    violação (excesso relativo RMS, √penalidade) passa da tolerância — penalidade crescente, suave para o L-BFGS
+    (a versão λ·√penalidade, não diferenciável no limite, travava a busca de linha e piorava o alvo)."""
+
+    FATOR = 4.0
 
     def __init__(self, objetivos: list[Objetivo], idx_por_obj: list[np.ndarray], nto: tuple | None,
-                 rho: float = 50.0, tolerancia: float = 0.005):
+                 rho: float = FATOR, tolerancia: float = 0.005):
         self.obj = objetivos
         self.idx = idx_por_obj
         self.nto = nto                # (índices, limite por voxel em Gy, peso)
-        self.lam = np.array([10.0 * o.peso if o.restrito else 0.0 for o in objetivos])
+        self.lam = np.array([ESCALA[o.tipo] * o.peso for o in objetivos])
         self.rho = rho
         self.tol = tolerancia
 
@@ -133,7 +137,7 @@ class Custo:
 
     def atualizar(self, D: np.ndarray) -> float:
         g = self.violacoes(D)
-        self.lam += self.rho * g
+        self.lam[g > self.tol] *= self.rho
         return float(g.max()) if len(g) else 0.0
 
     def __call__(self, D: np.ndarray):
@@ -143,15 +147,9 @@ class Custo:
             if len(ii) == 0:
                 continue
             v, gv = _termo(o, D[ii])
-            if o.restrito:
-                g = np.sqrt(v)
-                if g > 1e-9:
-                    f += self.lam[k] * g + 0.5 * self.rho * g * g
-                    np.add.at(gD, ii, (self.lam[k] + self.rho * g) * gv / (2 * g))
-            else:
-                esc = ESCALA[o.tipo] * o.peso
-                f += esc * v
-                np.add.at(gD, ii, esc * gv)
+            esc = self.lam[k] if o.restrito else ESCALA[o.tipo] * o.peso
+            f += esc * v
+            np.add.at(gD, ii, esc * gv)
         if self.nto is not None:
             ii, lim, p = self.nto
             e = np.maximum(D[ii] / lim - 1.0, 0.0)
@@ -160,8 +158,8 @@ class Custo:
         return f, gD
 
 
-def _minimizar_al(fun, x0, bounds, custo: Custo, dose_de, rodadas: int = 6, maxiter: int = 300, aviso=None):
-    """L-BFGS-B dentro do laço do Lagrangiano aumentado (só faz várias rodadas se houver objetivo restrito)."""
+def _minimizar_al(fun, x0, bounds, custo: Custo, dose_de, rodadas: int = 8, maxiter: int = 300, aviso=None):
+    """L-BFGS-B com os pesos dos restritos subindo até cumprirem (só faz várias rodadas se houver objetivo restrito)."""
     x = x0
     tem = any(o.restrito for o in custo.obj)
     for r in range(rodadas if tem else 1):
