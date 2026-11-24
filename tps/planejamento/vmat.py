@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass, field
 
 import numpy as np
-from scipy.ndimage import distance_transform_edt
+from scipy.ndimage import distance_transform_edt, gaussian_filter
 from scipy.optimize import minimize
 
 from tps.planejamento import calculo
@@ -266,31 +266,78 @@ def sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sent
     return out, delta
 
 
-# ------------------------------------------------------------------ otimização das posições dos pontos de controle
-def _fluencia_intervalos(Acp, Bcp, w, arcos, mapas, blocos, n_total, mu0, linhas_arco):
-    """Fluência entregue (modelo rápido) e cache para o gradiente. Acp/Bcp: por arco, [n_cp, n_pares] (mm)."""
-    F = np.zeros(n_total)
-    cache = []
-    for k, arco in enumerate(arcos):
-        L = linhas_arco[k]
-        for j, (o, s_nome) in enumerate(zip(arco["ofs_w"], arco["setor_int"])):
-            u, v, ab = mapas[s_nome]
-            bl = blocos[s_nome]
-            a = 0.5 * (Acp[k][j, L] + Acp[k][j + 1, L])
-            b = 0.5 * (Bcp[k][j, L] + Bcp[k][j + 1, L])
+# ------------------------------------------------------------------ modelo rápido por intervalo
+class ModeloIntervalos:
+    """Dose rápida de cada intervalo entre pontos de controle no seu próprio gantry:
+    D = correção + Σ_j UM_j · d_j · interp(G ∗ cobertura_j), d_j = dose/UM do campo aberto do setor nesse gantry
+    (motor CCC) e cobertura_j = fração de cada célula (par × coluna) aberta pela abertura média do intervalo. Fora da
+    abertura do setor a célula vale a vizinha de dentro (sem penumbra dupla, como no IMRT)."""
+
+    def __init__(self, arcos, mapas, abertos: list[Campo], d0: list[np.ndarray], grade, idx, sigma_px, posicao):
+        self.mapas = mapas
+        self.sigma = sigma_px
+        self.n = len(idx)
+        self.corr = np.zeros(self.n)
+        self.perto = {}
+        for nome, (u, v, ab) in mapas.items():
+            _, (ii, jj) = distance_transform_edt(~ab, return_indices=True)
+            self.perto[nome] = (ii * len(u) + jj).ravel()
+        self.itens = []
+        for k, arco in enumerate(arcos):
+            for j, (o, s_nome) in enumerate(zip(arco["ofs_w"], arco["setor_int"])):
+                u, v, ab = mapas[s_nome]
+                i, j0, t, ok = I._raios(grade, idx, abertos[o], u, v, posicao)
+                dd = d0[o] * ok
+                sel = np.nonzero(dd > 1e-5 * max(float(dd.max()), 1e-30))[0].astype(np.int32)
+                k0 = (i * len(u) + j0)[sel].astype(np.int32)
+                self.itens.append((k, j, o, s_nome, sel, k0, t[sel].astype(np.float32), dd[sel].astype(np.float32)))
+
+    def avaliar(self, Ak, Bk, w, custo=None):
+        """(custo, gA, gB, gw, D); sem custo devolve só a dose."""
+        D = self.corr.copy()
+        cache = []
+        for (k, j, o, s_nome, sel, k0, t, dd) in self.itens:
+            u, v, ab = self.mapas[s_nome]
+            a = 0.5 * (Ak[k][j] + Ak[k][j + 1])
+            b = 0.5 * (Bk[k][j] + Bk[k][j + 1])
             m, da, db = I._cobertura(a, b, u, u[1] - u[0])
-            abL = ab[L]
-            m = m * abL
-            Fc = F[bl["ofs"]:bl["ofs"] + bl["n"]].reshape(bl["shape"])
-            Fc[L] += w[o] / mu0 * m
-            cache.append((k, j, s_nome, m, da * abL, db * abL))
-    return F, cache
+            nn = m.size
+            Fe = gaussian_filter(m.ravel()[self.perto[s_nome]].reshape(m.shape), self.sigma, mode="nearest").ravel()
+            k1 = np.minimum(k0 + 1, nn - 1)
+            val = (1 - t) * Fe[k0] + t * Fe[k1]
+            D[sel] += w[o] * dd * val
+            cache.append((da, db, val, k1, m.shape))
+        if custo is None:
+            return D
+        f, gD = custo(D)
+        gw = np.zeros(len(w))
+        gA = [np.zeros_like(A) for A in Ak]
+        gB = [np.zeros_like(B) for B in Bk]
+        for (k, j, o, s_nome, sel, k0, t, dd), (da, db, val, k1, shape) in zip(self.itens, cache):
+            gx = gD[sel] * dd
+            gw[o] = float(gx @ val)
+            nn = shape[0] * shape[1]
+            ge = np.zeros(nn)
+            np.add.at(ge, k0, w[o] * gx * (1 - t))
+            np.add.at(ge, k1, w[o] * gx * t)
+            ge = gaussian_filter(ge.reshape(shape), self.sigma, mode="nearest").ravel()
+            gm = np.zeros(nn)
+            np.add.at(gm, self.perto[s_nome], ge)
+            gm = gm.reshape(shape)
+            ga = 0.5 * (gm * da).sum(axis=1)
+            gb = 0.5 * (gm * db).sum(axis=1)
+            gA[k][j] += ga
+            gA[k][j + 1] += ga
+            gB[k][j] += gb
+            gB[k][j + 1] += gb
+        return f, gA, gB, gw, D
 
 
-def otimizar_pontos(arcos, Acp, Bcp, w, mapas, blocos, mod, custo, colim, lim: LimitesVMAT, mu0, linhas_arco,
+def otimizar_pontos(arcos, Acp, Bcp, w, modelo: ModeloIntervalos, custo, colim, lim: LimitesVMAT, linhas_arco,
                     limites_x, faixas=None, maxiter: int = 120, passo_mm: float = 10.0):
-    """Posições das lâminas em todos os pontos de controle e UM dos intervalos juntos, no modelo rápido calibrado.
-    Penalidades: gap, (MLCi) interdigitação e percurso por grau acima do limite (que só alonga a entrega)."""
+    """Posições das lâminas em todos os pontos de controle e UM dos intervalos juntos, no modelo rápido por intervalo
+    calibrado pela dose real, numa região de confiança de ±passo_mm. Penalidades: gap, (MLCi) interdigitação e
+    percurso por grau acima do limite (que só alonga a entrega)."""
     g = colim.gap_minimo_mm
     interdig = getattr(colim, "interdigitacao", True)
     lay = []                                                  # por arco: (ofs, n_cp, nL)
@@ -338,24 +385,11 @@ def otimizar_pontos(arcos, Acp, Bcp, w, mapas, blocos, mod, custo, colim, lim: L
     def fun(x):
         Ak, Bk = desempacotar(x)
         wv = x[nX:]
-        F, cache = _fluencia_intervalos(Ak, Bk, wv, arcos, mapas, blocos, mod.n, mu0, linhas_arco)
-        f, gD = custo(mod.dose(F))
-        gF = mod.grad(gD)
+        f, gA_t, gB_t, gw, _ = modelo.avaliar(Ak, Bk, wv, custo)
         gx = np.zeros_like(x)
-        gA = [np.zeros((ncp, nL)) for (_, ncp, nL) in lay]
-        gB = [np.zeros((ncp, nL)) for (_, ncp, nL) in lay]
-        for (k, j, s_nome, m, da, db) in cache:
-            bl = blocos[s_nome]
-            gFc = gF[bl["ofs"]:bl["ofs"] + bl["n"]].reshape(bl["shape"])[linhas_arco[k]]
-            o = arcos[k]["ofs_w"][j]
-            wk = wv[o] / mu0
-            ga = 0.5 * wk * (gFc * da).sum(axis=1)
-            gb = 0.5 * wk * (gFc * db).sum(axis=1)
-            gA[k][j] += ga
-            gA[k][j + 1] += ga
-            gB[k][j] += gb
-            gB[k][j + 1] += gb
-            gx[nX + o] += (gFc * m).sum() / mu0
+        gx[nX:] = gw
+        gA = [gA_t[k][:, linhas_arco[k]] for k in range(len(lay))]
+        gB = [gB_t[k][:, linhas_arco[k]] for k in range(len(lay))]
         pen = 0.0
         for k, arco in enumerate(arcos):
             L = linhas_arco[k]
@@ -641,23 +675,36 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         return I._minimizar_al(obj_w, np.clip(w0, [b[0] for b in bnds_w], [b[1] for b in bnds_w]), bnds_w, custo,
                                lambda x: M @ x, 4, 500)
 
-    def entregue(Ak, Bk, wv):
-        return _fluencia_intervalos(Ak, Bk, wv, arcos, mapas, blocos, mod.n, mu0, linhas_arco)[0]
-
-    etapas["sequenciada_modelo"] = round(float(custo(mod.dose(entregue(Acp, Bcp, w)))[0]), 5)
     M = doses_intervalos(Acp, Bcp, "Calculando os pontos de controle com o motor completo")
     etapas["sequenciada_motor"] = round(float(custo(M @ w)[0]), 5)
     aviso("Otimizando a UM dos pontos de controle…")
     w = otimizar_um(M, w)
     hist = [float(custo(M @ w)[0])]
     aviso(f"Custo {hist[-1]:.4f} depois do sequenciamento")
+    modelo_cp = None
+    if iteracoes > 0:
+        # modelo rápido por intervalo: campo aberto do setor no gantry de cada intervalo (motor, grade grossa)
+        abertos_int = []
+        for k, arco in enumerate(arcos):
+            c, angs = arco["campo"], arco["angs"]
+            setor_de = {cs.nome: cs for _, _, cs in arco["setores"]}
+            for j in range(len(angs) - 1):
+                cs = setor_de[arco["setor_int"][j]]
+                d = (angs[j + 1] - angs[j] + 180.0) % 360.0 - 180.0
+                abertos_int.append(Campo(f"{c.nome}^{j:03d}", float((angs[j] + d / 2) % 360.0), c.colimador, c.mesa,
+                                         c.isocentro_mm, jaw_x=cs.jaw_x, jaw_y=cs.jaw_y, mlc_a=cs.mlc_a,
+                                         mlc_b=cs.mlc_b))
+        am = amostrar(abertos_int, "Calculando o campo aberto em cada ponto de controle")
+        modelo_cp = ModeloIntervalos(arcos, mapas, abertos_int, [fx * am[cs.nome] for cs in abertos_int], grade, idx,
+                                     sig, posicao)
+        etapas["modelo_sem_correcao"] = round(float(custo(modelo_cp.avaliar(Acp, Bcp, w))[0]), 5)
     passo_mm = 10.0
     for it in range(iteracoes):
-        mod.corr[:] = 0.0
-        mod.corr = (M @ w) - mod.dose(entregue(Acp, Bcp, w))
+        modelo_cp.corr[:] = 0.0
+        modelo_cp.corr = (M @ w) - modelo_cp.avaliar(Acp, Bcp, w)
         aviso(f"Otimizando as lâminas dos pontos de controle (iteração {it + 1})…")
-        Ak, Bk, w2 = otimizar_pontos(arcos, Acp, Bcp, w, mapas, blocos, mod, custo, colim, lim, mu0, linhas_arco,
-                                     limites_x, faixas, passo_mm=passo_mm)
+        Ak, Bk, w2 = otimizar_pontos(arcos, Acp, Bcp, w, modelo_cp, custo, colim, lim, linhas_arco, limites_x, faixas,
+                                     passo_mm=passo_mm)
         for k in range(len(arcos)):
             lo, hi = limites_x[k]
             for j in range(Ak[k].shape[0]):
