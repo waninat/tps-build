@@ -19,7 +19,9 @@ e o "tecido normal" automático (dose fora do alvo caindo com a distância, como
 from __future__ import annotations
 
 import copy
+import tempfile
 import time
+from pathlib import Path
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -322,7 +324,8 @@ def otimizar_imrt(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
     hist = []
     melhor = None
     abertos_orig = {c.nome: (list(c.mlc_a), list(c.mlc_b), c.jaw_x, c.jaw_y) for c in campos}
-    ver = {}
+    ver = {}                                             # chave do segmento → (dose/UM nas amostras, arquivo do volume)
+    pasta_tmp = tempfile.TemporaryDirectory(prefix="tps_imrt_")
 
     def suav(Fv):
         f, g = 0.0, np.zeros_like(Fv)
@@ -384,11 +387,15 @@ def otimizar_imrt(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
                 cs = Campo(f"{c.nome}#s{j}", c.gantry, c.colimador, c.mesa, c.isocentro_mm, jaw_x=s["jaw_x"],
                            jaw_y=s["jaw_y"], mlc_a=s["mlc_a"], mlc_b=s["mlc_b"])
                 tmp.append((cs, ch))
-            doses = calculo.dose_por_um(grade, [t[0] for t in tmp], colim, modelo, kernels, posicao,
-                                        permitir_demonstracao)
-            for cs, ch in tmp:
-                ver[ch] = doses[cs.nome].astype(np.float32)
-        A = np.column_stack([fx * ver[ch].ravel()[idx] for _, _, _, _, ch in lista])   # Gy por UM (total)
+            for j, (cs, ch) in enumerate(tmp):       # um por vez: na memória só as amostras; o volume vai p/ disco
+                if j % 10 == 0:
+                    aviso(f"Calculando os segmentos com o motor completo… {j}/{len(tmp)}")
+                d = calculo.dose_por_um(grade, [cs], colim, modelo, kernels, posicao, permitir_demonstracao)[cs.nome]
+                arq = Path(pasta_tmp.name) / f"s{len(ver):05d}.npy"
+                np.save(arq, d.astype(np.float32))
+                ver[ch] = (d.ravel()[idx].astype(np.float32), arq)
+                del d
+        A = np.column_stack([fx * ver[ch][0] for _, _, _, _, ch in lista])   # Gy por UM (total)
         # pesos iniciais: unidades de nível × escala da fluência (UM do campo aberto × delta)
         w0 = np.array([s["peso"] * d * mu0[c.nome] for c, k, s, d, ch in lista])
         ativo = np.ones(len(lista), bool)
@@ -447,12 +454,13 @@ def otimizar_imrt(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         c.peso = tot
         c.mlc_a = [min(s["mlc_a"][i] for s, _ in meus) for i in range(colim.n_pares)]
         c.mlc_b = [max(s["mlc_b"][i] for s, _ in meus) for i in range(colim.n_pares)]
-        doses_um[c.nome] = sum((wi / tot) * ver[(c.nome, tuple(s["mlc_a"]), tuple(s["mlc_b"]), tuple(s["jaw_y"]))]
-                               for s, wi in meus)
+        doses_um[c.nome] = sum((wi / tot) * np.load(ver[(c.nome, tuple(s["mlc_a"]), tuple(s["mlc_b"]),
+                                                          tuple(s["jaw_y"]))][1]) for s, wi in meus)
     sem = [c for c in campos if c.segmentos is None]
     for c in sem:
         plano.campos.remove(c)
         doses_um.pop(c.nome, None)
+    pasta_tmp.cleanup()
     calculo.normalizar(plano, doses_um, grade, alvos[0].mascara)
     return ResultadoIMRT({c.nome: len(c.segmentos) for c in plano.campos if c.segmentos},
                          round(sum(float(c.mu or 0) for c in plano.campos), 1), hist, {}, avisos,
