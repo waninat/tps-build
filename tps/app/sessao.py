@@ -118,6 +118,7 @@ class Sessao:
         self.isocentro: tuple | None = None
         self.doses_um: dict = {}
         self.dose_fx: np.ndarray | None = None
+        self.dose_vista: dict = {}                       # "soma" / "dif": doses só para ver (não são planos)
         self.resultado: dict = {}
         self.dose_atualizada = False
         self.avisos: list[str] = []
@@ -303,6 +304,124 @@ class Sessao:
         self._registrar(f"Plano {rot} importado de {arquivo} ({len(p.campos)} campos, máquina {alvo_maq}, "
                         f"{r['dose_total']:g} Gy/{r['fracoes']} fx, alvo {alvo})")
         return self.resumo()
+
+    # ---------------------------------------------------------------- soma e comparação de planos
+    def _dose_de(self, rotulo: str):
+        """(dose total em Gy, plano) de um plano da sessão — o da frente ou um guardado — já calculado."""
+        if self.plano is not None and rotulo == self.plano.rotulo:
+            self._exigir(self.dose_atualizada and self.dose_fx is not None, f"Calcule a dose do plano {rotulo}")
+            return self.dose_fx * self.plano.prescricao.fracoes, self.plano
+        est = self.outros_planos.get(rotulo)
+        if est is None:
+            raise ErroUsuario(f"Plano {rotulo} não está nesta sessão")
+        if not (est.get("dose_atualizada") and est.get("dose_fx") is not None):
+            raise ErroUsuario(f"Calcule a dose do plano {rotulo} antes")
+        return est["dose_fx"] * est["plano"].prescricao.fracoes, est["plano"]
+
+    def _mapa_alfa_beta(self, ab_alvo: float, ab_oar: float, por_estrutura: dict) -> np.ndarray:
+        g = self.grade
+        ab = np.full((len(g.z), len(g.y), len(g.x)), float(ab_oar), np.float32)
+        alvos = [e for n, e in self.estruturas.items() if re.match(r"^(PTV|CTV|GTV|ITV)", n, re.IGNORECASE)]
+        for e in alvos:
+            ab[e.mascara] = float(ab_alvo)
+        for n, v in (por_estrutura or {}).items():            # a estrutura escolhida vale por cima
+            e = self.estruturas.get(n)
+            if e is not None and v not in (None, ""):
+                ab[e.mascara] = float(v)
+        return ab
+
+    def soma_planos(self, rotulos: list[str], modo: str = "fisica", ab_alvo: float = 10.0, ab_oar: float = 3.0,
+                    ab_estruturas: dict | None = None) -> dict:
+        """Soma de planos da mesma TC (ex.: fase 1 + boost). modo "fisica" = Gy somados; "eqd2" = cada plano
+        convertido voxel a voxel com o próprio fracionamento: EQD2 = D·(d + α/β)/(2 + α/β), d = D/n.
+        α/β: alvos (PTV/CTV/GTV/ITV) = ab_alvo, resto = ab_oar, com valores por estrutura por cima."""
+        if len(rotulos) < 2:
+            raise ErroUsuario("Escolha pelo menos dois planos")
+        if modo not in ("fisica", "eqd2"):
+            raise ErroUsuario("Modo deve ser fisica ou eqd2")
+        ab = self._mapa_alfa_beta(ab_alvo, ab_oar, ab_estruturas or {}) if modo == "eqd2" else None
+        total = None
+        rx = 0.0
+        partes = []
+        for r in rotulos:
+            d, p = self._dose_de(r)
+            n = p.prescricao.fracoes
+            if modo == "eqd2":
+                d = d * (d / n + ab) / (2.0 + ab)
+                rxp = p.prescricao.dose_total_gy * (p.prescricao.dose_fracao_gy + ab_alvo) / (2.0 + ab_alvo)
+            else:
+                rxp = p.prescricao.dose_total_gy
+            rx += rxp
+            total = d if total is None else total + d
+            partes.append({"rotulo": r, "dose_total_gy": p.prescricao.dose_total_gy, "fracoes": n,
+                           "rx_eqd2_gy" if modo == "eqd2" else "rx_gy": round(rxp, 2)})
+        g = self.grade
+        corpo = self._corpo()
+        hist = {n: dvh(total, e.mascara, g.voxel_cc) for n, e in self.estruturas.items() if e.mascara.any()}
+        from tps.planejamento import restricoes
+        try:
+            av = restricoes.avaliar({n: total[e.mascara] for n, e in self.estruturas.items() if e.mascara.any()},
+                                    g.voxel_cc, rx, (max(1, round(rx / 2)) if modo == "eqd2" else
+                                                     sum(q["fracoes"] for q in partes)),
+                                    self.plano.prescricao.estrutura_alvo if self.plano else None,
+                                    extras=self.plano.restricoes if self.plano else None).json()
+        except Exception as e:  # noqa: BLE001
+            av = {"erro": str(e), "resultados": [], "avisos": []}
+        self.dose_vista["soma"] = {"total": total.astype(np.float32), "rx_gy": rx,
+                                   "descricao": (" + ".join(rotulos)) + (" (EQD2)" if modo == "eqd2" else "")}
+        self._registrar(f"Soma de planos: {' + '.join(rotulos)} ({'EQD2' if modo == 'eqd2' else 'dose física'})")
+        return {"rotulos": rotulos, "modo": modo, "rx_gy": round(rx, 2), "partes": partes,
+                "dmax_gy": round(float(total[corpo].max() if corpo.any() else total.max()), 2),
+                "estatisticas": {n: {k: round(float(h[k]), 2) for k in ("volume_cc", "Dmean", "Dmax", "D95", "D98", "D2")
+                                     if k in h} for n, h in hist.items()},
+                "dvh": self._dvh_compacto(hist), "restricoes": av,
+                "ab": {"alvo": ab_alvo, "oar": ab_oar, "estruturas": ab_estruturas or {}} if modo == "eqd2" else None}
+
+    def _dvh_compacto(self, hist: dict) -> dict:
+        out = {}
+        for n, h in hist.items():
+            d, v = np.asarray(h["dose_gy"]), np.asarray(h["volume_pct"])
+            k = np.linspace(0, len(d) - 1, min(len(d), 200)).astype(int)
+            out[n] = {"dose": d[k].round(3).tolist(), "volume": v[k].round(2).tolist(), "cor": self.estruturas[n].cor}
+        return out
+
+    def comparar_planos(self, a: str, b: str) -> dict:
+        """Dois planos da mesma TC lado a lado: DVHs, métricas por estrutura, diferença de dose e gama 3%/3 mm."""
+        if a == b:
+            raise ErroUsuario("Escolha dois planos diferentes")
+        da, pa = self._dose_de(a)
+        db, pb = self._dose_de(b)
+        g = self.grade
+        corpo = self._corpo()
+        ha = {n: dvh(da, e.mascara, g.voxel_cc) for n, e in self.estruturas.items() if e.mascara.any()}
+        hb = {n: dvh(db, e.mascara, g.voxel_cc) for n, e in self.estruturas.items() if e.mascara.any()}
+        tab = {}
+        for n in ha:
+            linha = {}
+            for k in ("Dmean", "Dmax", "D95", "D2"):
+                if k in ha[n] and k in hb[n]:
+                    linha[k] = [round(float(ha[n][k]), 2), round(float(hb[n][k]), 2)]
+            tab[n] = linha
+        from tps.compare.gamma import gamma_3d
+        try:
+            ax = (g.z, g.y, g.x)
+            rr = gamma_3d(ax, np.where(corpo, da, 0), ax, np.where(corpo, db, 0), dose_pct=3.0, dta_mm=3.0,
+                          cutoff_pct=10.0)
+            gam = round(float(getattr(rr, "pass_rate", getattr(rr, "taxa_aprovacao", float("nan")))), 1)
+        except Exception:  # noqa: BLE001
+            gam = None
+        rx = pa.prescricao.dose_total_gy
+        dif = np.where(corpo, db - da, 0.0).astype(np.float32)
+        self.dose_vista["dif"] = {"total": dif, "rx_gy": rx, "descricao": f"{b} − {a}"}
+        self._registrar(f"Planos comparados: {a} × {b}")
+        return {"a": a, "b": b, "rx_a": rx, "rx_b": pb.prescricao.dose_total_gy, "tabela": tab, "gama_3_3": gam,
+                "dif_max_gy": round(float(dif.max()), 2), "dif_min_gy": round(float(dif.min()), 2),
+                "hi": [indice_homogeneidade(da, self.estruturas[pa.prescricao.estrutura_alvo].mascara)
+                       if pa.prescricao.estrutura_alvo in self.estruturas else None,
+                       indice_homogeneidade(db, self.estruturas[pb.prescricao.estrutura_alvo].mascara)
+                       if pb.prescricao.estrutura_alvo in self.estruturas else None],
+                "um": [round(sum(c.mu or 0 for c in pa.campos), 1), round(sum(c.mu or 0 for c in pb.campos), 1)],
+                "dvh_a": self._dvh_compacto(ha), "dvh_b": self._dvh_compacto(hb)}
 
     def comparacao_ref(self, total) -> dict | None:
         """DVH e gama 3%/3 mm (global, limiar 10%) da dose do TPS contra a dose importada."""
@@ -1140,45 +1259,84 @@ class Sessao:
                 "volumes_cc": {n: round(float(self.estruturas[n].mascara.sum()) * self.grade.voxel_cc, 1)
                                for n in criadas.values()}}
 
-    def segmentar_ia(self, orgaos: list[str]) -> dict:
-        """Órgãos por IA (TotalSegmentator local). Cria/substitui as estruturas do TPS; nada do RTSTRUCT original muda."""
-        from tps.dicom_io.rtstruct import read_rtstruct
+    def segmentar_ia(self, orgaos: list[str], reto_zmax_mm: float | None = None) -> dict:
+        """Órgãos por IA (TotalSegmentator local) e os derivados dela (reto, parede retal, canal anal, bowel bag,
+        mama de cada lado, cabeças femorais). Cria/substitui só estruturas do TPS; o RTSTRUCT original não muda."""
+        from tps.ia import posprocessamento as P
         from tps.ia import segmentacao as IA
         from tps.planejamento import contorno as K
         self._exigir(self.tipo == "ct", "Contorno automático só em CT de paciente")
         if not orgaos:
             raise ErroUsuario("Escolha pelo menos um órgão")
+        pedidos = list(orgaos)
+        if "bowel_bag" in pedidos:                      # a bolsa exclui bexiga e reto: segmenta junto
+            pedidos += [o for o in ("bexiga", "reto") if o not in pedidos]
         arquivos = sorted(f for f in self.pasta_ct.iterdir() if f.is_file() and self._e_ct(f))
         try:
-            rs, classes = IA.segmentar(arquivos, orgaos)
+            classes = IA.segmentar(arquivos, pedidos)
         except (RuntimeError, ValueError, OSError) as e:
             raise ErroUsuario(str(e)) from e
         except Exception as e:  # noqa: BLE001  (timeout etc.)
             raise ErroUsuario(f"Segmentação por IA falhou: {e}") from e
-        rois = {st.name.lower(): st for st in read_rtstruct(rs)}
+        classes = {k.lower(): v for k, v in classes.items()}
         cx, cy, cz = self.ct.axes()
         tol = float(self.ct.spacing[2]) / 2 + 0.01
+        cache: dict[str, np.ndarray] = {}
+
+        def vol_de(cls):
+            chave = ",".join(cls)
+            if chave not in cache:
+                polys = [c for k in cls for c in classes.get(k, [])]
+                cache[chave] = (np.stack([K.mascara_de_poligonos(K.poligonos_do_corte(polys, float(z), tol), cx, cy)
+                                          for z in cz]) if polys else None)
+            return cache[chave]
+
+        corpo = None
+        reto, z_reto = None, None
+        vols: dict[str, np.ndarray] = {}
+        for o in pedidos:
+            nome, _tarefa, cls, cor, pos = IA.ORGAOS[o]
+            v = vol_de(cls)
+            if v is None or not v.any():
+                continue
+            if pos in ("reto", "parede_retal", "canal_anal"):
+                if reto is None:
+                    reto, z_reto = P.reto_do_colon(v, cx, cy, cz, reto_zmax_mm)
+                v = {"reto": reto, "parede_retal": P.parede(reto, cx, cy, IA.PAREDE_RETAL_MM),
+                     "canal_anal": P.inferior(reto, cz, IA.CANAL_ANAL_MM)}[pos]
+            elif pos == "cabeca_femoral":             # só cabeça e colo: os 7 cm superiores do fêmur
+                ks = np.nonzero(v.any(axis=(1, 2)))[0]
+                v = v.copy()
+                v[np.abs(cz - max(cz[ks])) > IA.CABECA_FEMORAL_MM] = False
+            elif pos in ("lado_e", "lado_d"):
+                corpo = self._corpo_ct() if corpo is None else corpo
+                v = P.lado(v, corpo, cx, pos == "lado_e")
+            elif pos == "bowel_bag":
+                osso = self.ct.hu > 200
+                ztopo = None
+                pr = self.plano.prescricao.estrutura_alvo if self.plano else None
+                alvo = self.estruturas.get(pr) if pr else next((e for n, e in self.estruturas.items()
+                                                                  if n.upper().startswith("PTV")), None)
+                if alvo is not None and alvo.contornos:
+                    ztopo = max(float(c[0, 2]) for c in alvo.contornos)
+                v = P.bowel_bag(v, cz, [vol_de(["urinary_bladder"]), reto, osso], ztopo,
+                                IA.BOWEL_BAG_ACIMA_DO_ALVO_MM)
+            vols[o] = v
         criadas, faltam = [], []
         for o in orgaos:
-            nome, cls, cor = IA.ORGAOS[o]
-            polys = [c for k in cls for c in (rois.get(k).contours if rois.get(k) else [])]
-            if not polys:
+            nome, _t, _c, cor, _p = IA.ORGAOS[o]
+            v = vols.get(o)
+            if v is None or not v.any():
                 faltam.append(nome)
                 continue
-            vol = np.stack([K.mascara_de_poligonos(K.poligonos_do_corte(polys, float(z), tol), cx, cy) for z in cz])
-            if o in ("femur_e", "femur_d"):            # só cabeça e colo: os 7 cm superiores do fêmur
-                ks = np.nonzero(vol.any(axis=(1, 2)))[0]
-                ztop = max(cz[ks])
-                vol[np.abs(cz - ztop) > IA.CABECA_FEMORAL_MM] = False
-            if vol.any():
-                criadas.append(self._estrutura_de_volume(nome, "ORGAN", cor, vol, True))
-            else:
-                faltam.append(nome)
-        shutil.rmtree(rs.parent, ignore_errors=True)
+            criadas.append(self._estrutura_de_volume(nome, "ORGAN", cor, v, True))
         if not criadas:
             raise ErroUsuario("A IA não encontrou nenhum dos órgãos pedidos neste CT")
         self._registrar("Contorno por IA (TotalSegmentator): " + ", ".join(criadas) + " — revise antes de usar")
-        return {"criadas": criadas, "nao_encontrados": faltam}
+        out = {"criadas": criadas, "nao_encontrados": faltam}
+        if z_reto is not None:
+            out["reto_limite_superior_mm"] = round(z_reto, 1)
+        return out
 
     def desfazer_contorno(self) -> dict:
         if not self.desfazer_pilha:
@@ -1818,15 +1976,25 @@ class Sessao:
         Image.fromarray(a).save(buf, "PNG", optimize=False, compress_level=1)
         return buf.getvalue()
 
-    def imagem_dose(self, vista: str, idx: int, minimo_pct: float = 20.0, maximo_pct: float = 0.0,
-                    opacidade: float = 0.45) -> bytes:
-        """Colorwash: dose do corte em cores (azul → vermelho), RGBA, na grade de dose, transparente abaixo do mínimo.
-        Escala em % da dose por fração prescrita; máximo 0 = dose máxima do plano. Linha 0 = topo da tela."""
-        import matplotlib
+    def _fonte(self, fonte: str = "plano"):
+        """(dose total Gy, 100% em Gy, é diferença?) da dose mostrada: o plano, a soma ou a diferença de planos."""
+        if fonte in ("soma", "dif"):
+            v = self.dose_vista.get(fonte)
+            self._exigir(v is not None, "Faça a soma/comparação de planos antes")
+            return v["total"], float(v["rx_gy"]), fonte == "dif"
         self._exigir(self.dose_atualizada and self.dose_fx is not None, "Dose não calculada")
+        return self.dose_fx * self.plano.prescricao.fracoes, float(self.plano.prescricao.dose_total_gy), False
+
+    def imagem_dose(self, vista: str, idx: int, minimo_pct: float = 20.0, maximo_pct: float = 0.0,
+                    opacidade: float = 0.45, fonte: str = "plano") -> bytes:
+        """Colorwash: dose do corte em cores (azul → vermelho), RGBA, na grade de dose, transparente abaixo do mínimo.
+        Escala em % da prescrição; máximo 0 = dose máxima. Diferença de planos: azul (menos) ↔ vermelho (mais),
+        simétrica em ±máximo (padrão 10%), transparente abaixo de ±1%. Linha 0 = topo da tela."""
+        import matplotlib
+        total, rx, e_dif = self._fonte(fonte)
         g = self.grade
         pos, eh, ev = self._plano_corte(vista, int(idx))
-        rel = self.dose_fx / self.plano.prescricao.dose_fracao_gy * 100.0
+        rel = total / rx * 100.0
         k = {"axial": (g.z, 0), "coronal": (g.y, 1), "sagital": (g.x, 2)}[vista]
         i = int(np.argmin(np.abs(k[0] - pos)))
         if abs(k[0][i] - pos) > abs(k[0][1] - k[0][0]):
@@ -1835,12 +2003,18 @@ class Sessao:
             img = np.take(rel, i, axis=k[1])                   # [v, h]
         if vista != "axial":
             img = img[::-1]                                     # z cresce para cima na tela
-        corpo = self._corpo()
-        rmax = float(rel[corpo].max()) if corpo.any() else float(rel.max())
-        top = float(maximo_pct) if maximo_pct and maximo_pct > minimo_pct else max(rmax, minimo_pct + 1)
-        t = np.clip((img - minimo_pct) / (top - minimo_pct), 0, 1)
-        rgba = (matplotlib.colormaps["jet"](t) * 255).astype(np.uint8)
-        rgba[..., 3] = np.where(img >= minimo_pct, int(255 * opacidade), 0).astype(np.uint8)
+        if e_dif:
+            lim = float(maximo_pct) if maximo_pct and maximo_pct > 0 else 10.0
+            t = np.clip((img + lim) / (2 * lim), 0, 1)
+            rgba = (matplotlib.colormaps["coolwarm"](t) * 255).astype(np.uint8)
+            rgba[..., 3] = np.where(np.abs(img) >= 1.0, int(255 * max(opacidade, 0.55)), 0).astype(np.uint8)
+        else:
+            corpo = self._corpo()
+            rmax = float(rel[corpo].max()) if corpo.any() else float(rel.max())
+            top = float(maximo_pct) if maximo_pct and maximo_pct > minimo_pct else max(rmax, minimo_pct + 1)
+            t = np.clip((img - minimo_pct) / (top - minimo_pct), 0, 1)
+            rgba = (matplotlib.colormaps["jet"](t) * 255).astype(np.uint8)
+            rgba[..., 3] = np.where(img >= minimo_pct, int(255 * opacidade), 0).astype(np.uint8)
         buf = io.BytesIO()
         Image.fromarray(rgba, "RGBA").save(buf, "PNG", compress_level=1)
         return buf.getvalue()
@@ -1855,7 +2029,8 @@ class Sessao:
         return float(cx[idx]), "y", "z"
 
     def sobreposicao(self, vista: str, idx: int, estruturas: list[str] | None = None, isodoses: bool = True,
-                     niveis: list | None = None, referencia: str = "rx", unidade: str = "pct") -> dict:
+                     niveis: list | None = None, referencia: str = "rx", unidade: str = "pct",
+                     fonte: str = "plano") -> dict:
         """Contornos, isodoses e feixes do corte, em mm (h, v)."""
         g = self.grade
         pos, eh, ev = self._plano_corte(vista, int(idx))
@@ -1890,31 +2065,42 @@ class Sessao:
                 pols = linhas(corte_grade(e.mascara.astype(np.float32)), 0.5)
             if pols:
                 out["contornos"].append({"nome": n, "cor": e.cor, "linhas": pols})
-        if self.dose_atualizada and self.dose_fx is not None:
+        tem_dose = (self.dose_atualizada and self.dose_fx is not None) if fonte == "plano" \
+            else self.dose_vista.get(fonte) is not None
+        if tem_dose:
+            total, rx, e_dif = self._fonte(fonte)
+            corpo = self._corpo()
+            dmax = float(total[corpo].max()) if corpo.any() else float(total.max())
             pas = {k: float(abs(v[1] - v[0])) for k, v in ax.items()}
             out["wash"] = {"h": [float(ax[eh][0]) - pas[eh] / 2, float(ax[eh][-1]) + pas[eh] / 2],
                            "v": [float(ax[ev][0]) - pas[ev] / 2, float(ax[ev][-1]) + pas[ev] / 2],
-                           "dmax_pct": round(float((self.dose_fx[self._corpo()].max() if self._corpo().any()
-                                                    else self.dose_fx.max()) / self.plano.prescricao.dose_fracao_gy * 100), 1)}
-        if isodoses and self.dose_atualizada and self.dose_fx is not None:
-            # 100% = prescrição ou dose máxima do plano; níveis em % ou em Gy (dose total)
-            fx = self.plano.prescricao.fracoes
-            corpo = self._corpo()
-            dmax_fx = float(self.dose_fx[corpo].max()) if corpo.any() else float(self.dose_fx.max())
-            cem = dmax_fx if referencia == "max" else self.plano.prescricao.dose_fracao_gy
-            if unidade == "gy":
-                img = corte_grade(self.dose_fx * fx)
-                lista = sorted(float(v) for v in (niveis or [cem * fx * k / 100 for k in NIVEIS_ISODOSE]))
-            else:
-                img = corte_grade(self.dose_fx / cem * 100.0)
-                lista = sorted(float(v) for v in (niveis or NIVEIS_ISODOSE))
-            for nv in lista:
-                ls = linhas(img, nv)
-                if ls:
-                    out["isodoses"].append({"nivel": nv, "linhas": ls})
-            out["iso_ref"] = {"referencia": referencia, "unidade": unidade, "cem_gy": round(cem * fx, 3),
-                              "dmax_gy": round(dmax_fx * fx, 3),
-                              "rx_gy": self.plano.prescricao.dose_total_gy, "niveis": lista}
+                           "dmax_pct": round(dmax / rx * 100, 1), "dif": e_dif}
+            if isodoses:
+                # 100% = prescrição ou dose máxima; níveis em % ou em Gy (dose total). Diferença: ±% da prescrição
+                cem = dmax if (referencia == "max" and not e_dif) else rx
+                if e_dif:
+                    padrao = [-10, -5, -3, 3, 5, 10]
+                    lista = sorted(float(v) for v in (niveis or padrao))
+                    img = corte_grade(total / rx * 100.0)
+                    if unidade == "gy":
+                        lista = sorted(float(v) for v in (niveis or [rx * k / 100 for k in padrao]))
+                        img = corte_grade(total)
+                elif unidade == "gy":
+                    img = corte_grade(total)
+                    lista = sorted(float(v) for v in (niveis or [cem * k / 100 for k in NIVEIS_ISODOSE]))
+                else:
+                    img = corte_grade(total / cem * 100.0)
+                    lista = sorted(float(v) for v in (niveis or NIVEIS_ISODOSE))
+                for nv in lista:
+                    if nv < 0:                                   # diferença negativa: linhas de −img
+                        ls = linhas(None if img is None else -img, -nv)
+                    else:
+                        ls = linhas(img, nv)
+                    if ls:
+                        out["isodoses"].append({"nivel": nv, "linhas": ls})
+                out["iso_ref"] = {"referencia": referencia, "unidade": unidade, "cem_gy": round(cem, 3),
+                                  "dmax_gy": round(dmax, 3), "rx_gy": round(rx, 3), "niveis": lista, "fonte": fonte,
+                                  "dif": e_dif, "descricao": (self.dose_vista.get(fonte) or {}).get("descricao")}
         if self.plano and vista == "axial":
             for c in self.plano.campos:
                 if c.campo_pai:

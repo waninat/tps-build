@@ -21,32 +21,63 @@ import yaml
 
 from tps import paths
 
-# id → (nome no TPS, classes do TotalSegmentator, cor). Nomes do TPS reconhecidos pelo TG-263 das restrições.
+# id → (nome no TPS, tarefa do TotalSegmentator, classes, cor, pós-processamento). Nomes reconhecidos pelo TG-263.
+# Só tarefas gratuitas (as que pedem licença comercial ficam de fora: tronco, câmaras cardíacas, coronárias).
 ORGAOS = {
-    "bexiga": ("Bexiga", ["urinary_bladder"], (255, 220, 0)),
-    "intestino_delgado": ("Intestino_Delgado", ["small_bowel", "duodenum"], (255, 150, 80)),
-    "colon": ("Colon_Sigmoide", ["colon"], (200, 120, 60)),
-    "femur_e": ("Cabeca_Femoral_E", ["femur_left"], (150, 220, 150)),
-    "femur_d": ("Cabeca_Femoral_D", ["femur_right"], (120, 200, 120)),
-    "prostata": ("Prostata", ["prostate"], (0, 200, 255)),
-    "rim_e": ("Rim_E", ["kidney_left"], (230, 120, 120)),
-    "rim_d": ("Rim_D", ["kidney_right"], (210, 100, 100)),
-    "figado": ("Figado", ["liver"], (170, 90, 60)),
-    "estomago": ("Estomago", ["stomach"], (255, 180, 200)),
-    "medula": ("Medula", ["spinal_cord"], (255, 255, 0)),
-    "coracao": ("Coracao", ["heart"], (255, 60, 60)),
-    "esofago": ("Esofago", ["esophagus"], (230, 160, 255)),
-    "pulmao_e": ("Pulmao_E", ["lung_upper_lobe_left", "lung_lower_lobe_left"], (90, 160, 255)),
-    "pulmao_d": ("Pulmao_D", ["lung_upper_lobe_right", "lung_middle_lobe_right", "lung_lower_lobe_right"],
-                 (60, 220, 255)),
-    "traqueia": ("Traqueia", ["trachea"], (180, 255, 255)),
-    "tireoide": ("Tireoide", ["thyroid_gland"], (255, 120, 255)),
-    "encefalo": ("Encefalo", ["brain"], (255, 200, 150)),
-    "aorta": ("Aorta", ["aorta"], (255, 80, 80)),
-    "baco": ("Baco", ["spleen"], (160, 60, 160)),
-    "pancreas": ("Pancreas", ["pancreas"], (240, 200, 120)),
+    "bexiga": ("Bexiga", "total", ["urinary_bladder"], (255, 220, 0), None),
+    "reto": ("Reto", "total", ["colon"], (150, 90, 40), "reto"),
+    "parede_retal": ("Parede_Retal", "total", ["colon"], (190, 110, 50), "parede_retal"),
+    "canal_anal": ("Canal_Anal", "total", ["colon"], (120, 70, 30), "canal_anal"),
+    "bowel_bag": ("Bowel_Bag", "trunk_cavities", ["abdominal_cavity"], (255, 170, 110), "bowel_bag"),
+    "intestino_delgado": ("Intestino_Delgado", "total", ["small_bowel", "duodenum"], (255, 150, 80), None),
+    "colon": ("Colon_Sigmoide", "total", ["colon"], (200, 120, 60), None),
+    "femur_e": ("Cabeca_Femoral_E", "total", ["femur_left"], (150, 220, 150), "cabeca_femoral"),
+    "femur_d": ("Cabeca_Femoral_D", "total", ["femur_right"], (120, 200, 120), "cabeca_femoral"),
+    "prostata": ("Prostata", "total", ["prostate"], (0, 200, 255), None),
+    "rim_e": ("Rim_E", "total", ["kidney_left"], (230, 120, 120), None),
+    "rim_d": ("Rim_D", "total", ["kidney_right"], (210, 100, 100), None),
+    "figado": ("Figado", "total", ["liver"], (170, 90, 60), None),
+    "estomago": ("Estomago", "total", ["stomach"], (255, 180, 200), None),
+    "medula": ("Medula", "total", ["spinal_cord"], (255, 255, 0), None),
+    "coracao": ("Coracao", "total", ["heart"], (255, 60, 60), None),
+    "esofago": ("Esofago", "total", ["esophagus"], (230, 160, 255), None),
+    "pulmao_e": ("Pulmao_E", "total", ["lung_upper_lobe_left", "lung_lower_lobe_left"], (90, 160, 255), None),
+    "pulmao_d": ("Pulmao_D", "total", ["lung_upper_lobe_right", "lung_middle_lobe_right", "lung_lower_lobe_right"],
+                 (60, 220, 255), None),
+    "traqueia": ("Traqueia", "total", ["trachea"], (180, 255, 255), None),
+    "tireoide": ("Tireoide", "total", ["thyroid_gland"], (255, 120, 255), None),
+    "encefalo": ("Encefalo", "total", ["brain"], (255, 200, 150), None),
+    "mama_e": ("Mama_E", "breasts", ["breast"], (255, 190, 220), "lado_e"),
+    "mama_d": ("Mama_D", "breasts", ["breast"], (255, 160, 200), "lado_d"),
+    "parotida_e": ("Parotida_E", "head_glands_cavities", ["parotid_gland_left"], (0, 230, 160), None),
+    "parotida_d": ("Parotida_D", "head_glands_cavities", ["parotid_gland_right"], (0, 200, 140), None),
+    "submandibular_e": ("Submandibular_E", "head_glands_cavities", ["submandibular_gland_left"], (100, 230, 200), None),
+    "submandibular_d": ("Submandibular_D", "head_glands_cavities", ["submandibular_gland_right"], (80, 200, 180), None),
+    "olho_e": ("Olho_E", "head_glands_cavities", ["eye_left"], (120, 200, 255), None),
+    "olho_d": ("Olho_D", "head_glands_cavities", ["eye_right"], (100, 180, 255), None),
+    "cristalino_e": ("Cristalino_E", "head_glands_cavities", ["eye_lens_left"], (255, 255, 255), None),
+    "cristalino_d": ("Cristalino_D", "head_glands_cavities", ["eye_lens_right"], (230, 230, 230), None),
+    "nervo_optico_e": ("Nervo_Optico_E", "head_glands_cavities", ["optic_nerve_left"], (255, 230, 0), None),
+    "nervo_optico_d": ("Nervo_Optico_D", "head_glands_cavities", ["optic_nerve_right"], (255, 210, 0), None),
+    "cavidade_oral": ("Cavidade_Oral", "head_glands_cavities", ["oropharynx", "soft_palate"], (255, 140, 140), None),
+    "constritores": ("Constritores_Faringe", "headneck_muscles",
+                     ["superior_pharyngeal_constrictor", "middle_pharyngeal_constrictor",
+                      "inferior_pharyngeal_constrictor"], (210, 140, 255), None),
+    "mandibula": ("Mandibula", "craniofacial_structures", ["mandible"], (240, 240, 200), None),
+}
+GRUPOS = {
+    "Pelve": ["bexiga", "reto", "parede_retal", "canal_anal", "bowel_bag", "intestino_delgado", "colon", "femur_e",
+              "femur_d", "prostata"],
+    "Tórax e abdome": ["coracao", "pulmao_e", "pulmao_d", "esofago", "medula", "traqueia", "mama_e", "mama_d",
+                       "figado", "estomago", "rim_e", "rim_d"],
+    "Cabeça e pescoço": ["parotida_e", "parotida_d", "submandibular_e", "submandibular_d", "olho_e", "olho_d",
+                         "cristalino_e", "cristalino_d", "nervo_optico_e", "nervo_optico_d", "cavidade_oral",
+                         "constritores", "mandibula", "tireoide", "encefalo"],
 }
 CABECA_FEMORAL_MM = 70.0        # das classes de fêmur, guarda só os 7 cm superiores (cabeça + colo)
+CANAL_ANAL_MM = 30.0            # canal anal = 3 cm inferiores do reto segmentado
+PAREDE_RETAL_MM = 3.0
+BOWEL_BAG_ACIMA_DO_ALVO_MM = 20.0
 
 
 def executavel() -> Path | None:
@@ -73,33 +104,18 @@ def estado() -> dict:
     exe = executavel()
     return {"disponivel": exe is not None, "executavel": str(exe) if exe else None,
             "motivo": None if exe else "TotalSegmentator não instalado (veja menu Iniciar > TPS > Instalar contorno por IA)",
-            "orgaos": [{"id": k, "nome": v[0]} for k, v in ORGAOS.items()]}
+            "orgaos": [{"id": k, "nome": ORGAOS[k][0], "grupo": g} for g, ks in GRUPOS.items() for k in ks]}
 
 
-def segmentar(arquivos_ct: list[Path], orgaos: list[str], rapido: bool = True, tempo_max_s: int = 1800,
-              dispositivo: str | None = None) -> tuple[Path, dict]:
-    """Roda o TotalSegmentator nos cortes do CT e devolve (RTSTRUCT gerado, {id: [nomes das ROIs]})."""
-    exe = executavel()
-    if exe is None:
-        raise RuntimeError("TotalSegmentator não está instalado neste computador")
-    desconhecidos = [o for o in orgaos if o not in ORGAOS]
-    if desconhecidos:
-        raise ValueError(f"Órgãos desconhecidos: {', '.join(desconhecidos)}")
-    classes = sorted({c for o in orgaos for c in ORGAOS[o][1]})
-    tmp = Path(tempfile.mkdtemp(prefix="tps_ia_"))
-    ent = tmp / "ct"
-    ent.mkdir()
-    from tps.importacao.rtplan import ler_dicom
-    for k, f in enumerate(arquivos_ct):             # regrava com preâmbulo e File Meta (o Monaco grava sem)
-        d = ler_dicom(f)
-        fm = d.file_meta
-        fm.MediaStorageSOPClassUID = d.SOPClassUID
-        fm.MediaStorageSOPInstanceUID = d.SOPInstanceUID
-        d.save_as(ent / f"CT{k:04d}.dcm", enforce_file_format=True)
-    saida = tmp / "seg.dcm"                          # --output_type dicom grava UM arquivo RTSTRUCT
-    cmd = [str(exe), "-i", str(ent), "-o", str(saida), "--output_type", "dicom", "--roi_subset", *classes]
-    if rapido:
-        cmd.append("--fast")
+def _rodar(exe: Path, ent: Path, saida: Path, tarefa: str, classes: list[str], rapido: bool, tempo_max_s: int,
+           dispositivo: str | None) -> Path:
+    cmd = [str(exe), "-i", str(ent), "-o", str(saida), "--output_type", "dicom"]
+    if tarefa == "total":
+        cmd += ["--roi_subset", *classes]
+        if rapido:
+            cmd.append("--fast")
+    else:
+        cmd += ["--task", tarefa]
     if dispositivo:
         cmd += ["--device", dispositivo]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
@@ -109,15 +125,46 @@ def segmentar(arquivos_ct: list[Path], orgaos: list[str], rapido: bool = True, t
         out, err = pr.communicate(timeout=tempo_max_s)
     except subprocess.TimeoutExpired:
         _matar_arvore(pr)                       # o nnU-Net abre processos filhos: não deixar órfãos
-        raise RuntimeError(f"TotalSegmentator passou de {tempo_max_s // 60} min e foi interrompido")
-    r = subprocess.CompletedProcess(cmd, pr.returncode, out, err)
-    if saida.is_dir():
-        rs = next(iter(sorted(saida.rglob("*.dcm"))), None)
-    else:
-        rs = saida if saida.exists() else None
-    if r.returncode != 0 or rs is None:
-        raise RuntimeError("TotalSegmentator falhou: " + (r.stderr or r.stdout or "")[-800:])
-    return rs, {o: ORGAOS[o][1] for o in orgaos}
+        raise RuntimeError(f"TotalSegmentator ({tarefa}) passou de {tempo_max_s // 60} min e foi interrompido")
+    rs = next(iter(sorted(saida.rglob("*.dcm"))), None) if saida.is_dir() else (saida if saida.exists() else None)
+    if pr.returncode != 0 or rs is None:
+        raise RuntimeError(f"TotalSegmentator ({tarefa}) falhou: " + (err or out or "")[-800:])
+    return rs
+
+
+def segmentar(arquivos_ct: list[Path], orgaos: list[str], rapido: bool = True, tempo_max_s: int = 1800,
+              dispositivo: str | None = None) -> dict[str, list]:
+    """Roda o TotalSegmentator (uma vez por tarefa) e devolve {classe: [polígonos Nx3 em mm]}."""
+    from tps.dicom_io.rtstruct import read_rtstruct
+    from tps.importacao.rtplan import ler_dicom
+    exe = executavel()
+    if exe is None:
+        raise RuntimeError("TotalSegmentator não está instalado neste computador")
+    desconhecidos = [o for o in orgaos if o not in ORGAOS]
+    if desconhecidos:
+        raise ValueError(f"Órgãos desconhecidos: {', '.join(desconhecidos)}")
+    tarefas: dict[str, set] = {}
+    for o in orgaos:
+        tarefas.setdefault(ORGAOS[o][1], set()).update(ORGAOS[o][2])
+    tmp = Path(tempfile.mkdtemp(prefix="tps_ia_"))
+    try:
+        ent = tmp / "ct"
+        ent.mkdir()
+        for k, f in enumerate(arquivos_ct):         # regrava com preâmbulo e File Meta (o Monaco grava sem)
+            d = ler_dicom(f)
+            fm = d.file_meta
+            fm.MediaStorageSOPClassUID = d.SOPClassUID
+            fm.MediaStorageSOPInstanceUID = d.SOPInstanceUID
+            d.save_as(ent / f"CT{k:04d}.dcm", enforce_file_format=True)
+        out: dict[str, list] = {}
+        for tarefa, classes in tarefas.items():
+            rs = _rodar(exe, ent, tmp / f"{tarefa}.dcm", tarefa, sorted(classes), rapido, tempo_max_s, dispositivo)
+            for st in read_rtstruct(rs):
+                if st.name in classes:
+                    out.setdefault(st.name, []).extend(st.contours)
+        return out
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _matar_arvore(pr):

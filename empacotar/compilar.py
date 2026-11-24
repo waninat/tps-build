@@ -71,10 +71,7 @@ def nuitka(jobs: int | None) -> Path:
         "--include-package=pdfplumber", "--include-package=pdfminer", "--include-package=PIL", "--include-package=httpx",
         "--include-package-data=pydicom", "--include-package-data=pynetdicom", "--include-package-data=matplotlib",
         "--include-package-data=reportlab", "--include-package-data=pdfminer",
-        "--include-package=webview", "--include-package-data=webview",
-        "--nofollow-import-to=webview.platforms.qt", "--nofollow-import-to=webview.platforms.gtk",
-        "--nofollow-import-to=webview.platforms.cocoa", "--nofollow-import-to=webview.platforms.android",
-        "--nofollow-import-to=webview.platforms.cef", "--nofollow-import-to=webview.platforms.mshtml",
+        "--enable-plugin=pywebview",          # o plugin do Nuitka escolhe a plataforma (WebView2 no Windows)
         f"--include-data-dir={RAIZ / 'tps' / 'app' / 'estatico'}=tps/app/estatico",
         f"--include-data-dir={RAIZ / 'dados'}=dados",
         f"--include-data-dir={RAIZ / 'machines'}=machines",
@@ -93,9 +90,7 @@ def nuitka(jobs: int | None) -> Path:
     if WINDOWS:
         # sem console: o TPS abre na janela própria (WebView2). Se ela não puder abrir, o tps_app cria um console
         # e volta ao navegador. TPS-cmd.exe (gêmeo com console) serve para linha de comando e testes.
-        cmd += ["--windows-console-mode=attach", "--msvc=latest", f"--windows-icon-from-ico={AQUI / 'tps.ico'}",
-                "--include-package=clr_loader", "--include-package-data=clr_loader",
-                "--include-package=pythonnet", "--include-package-data=pythonnet"]
+        cmd += ["--windows-console-mode=attach", "--msvc=latest", f"--windows-icon-from-ico={AQUI / 'tps.ico'}"]
     cmd.append(str(RAIZ / "tps_app.py"))
     print(" ".join(cmd[:6]), "...", flush=True)
     subprocess.run(cmd, check=True, cwd=RAIZ)

@@ -160,20 +160,33 @@ def test_segmentacao_ia_le_o_rtstruct_da_rede(cli, monkeypatch, tmp_path):
     """Sem a rede instalada: simula o TotalSegmentator devolvendo um RTSTRUCT com a classe urinary_bladder."""
     import pydicom
     from tps.app.servidor import SESSOES
-    from tps.exportacao.rtstruct import exportar_rtstruct
     from tps.ia import segmentacao as IA
     c, sid, _ = cli
     s = SESSOES[sid]
-    arq = tmp_path / "seg.dcm"
-    exportar_rtstruct(s, arq)
-    ds = pydicom.dcmread(arq)
-    for r in ds.StructureSetROISequence:
-        if r.ROIName == "PTV_fantoma":
-            r.ROIName = "urinary_bladder"
-    ds.save_as(arq)
-    monkeypatch.setattr(IA, "segmentar", lambda arqs, orgaos, **k: (arq, {}))
+    polys = list(s.estruturas["PTV_fantoma"].contornos)
+    monkeypatch.setattr(IA, "segmentar", lambda arqs, orgaos, **k: {"urinary_bladder": polys})
     r = _ok(c.post(f"/api/{sid}/contorno/ia", json={"orgaos": ["bexiga", "rim_e"]}))
     assert r["contorno"]["criadas"] == ["Bexiga"] and r["contorno"]["nao_encontrados"] == ["Rim_E"]
     v = {e["nome"]: e["volume_cc"] for e in r["estruturas"]}
     assert v["Bexiga"] == pytest.approx(v["PTV_fantoma"], rel=0.08)          # caixa: cantos arredondados
     assert _ok(c.get("/api/info"))["ia"]["orgaos"]
+
+
+def test_reto_do_colon_corta_na_retossigmoide():
+    from tps.ia import posprocessamento as P
+    x = y = np.arange(-100, 101, 2.0)
+    z = np.arange(-120, 121, 3.0)
+    Z, Y, X = np.meshgrid(z, y, x, indexing="ij")
+    tubo = ((X ** 2 + (Y - 40) ** 2) <= 15 ** 2) & (Z <= 30)                  # reto: posterior, até z = 30
+    sigm = (((X - 10) ** 2 + (Y + 10) ** 2) <= 25 ** 2) & (Z > 30) & (Z < 90)  # sigmoide: anterior e largo
+    ponte = (np.abs(X) <= 15) & (Y > -10) & (Y < 40) & (np.abs(Z - 33) < 2)
+    colon = tubo | sigm | ponte
+    r, zf = P.reto_do_colon(colon, x, y, z)
+    assert 25 <= zf <= 36
+    assert r[(z > 40)].sum() == 0 and r[z < 0].sum() == tubo[z < 0].sum()
+    r2, zf2 = P.reto_do_colon(colon, x, y, z, zmax_mm=0.0)
+    assert zf2 <= 0 and r2[z > 0].sum() == 0
+    w = P.parede(r, x, y, 3.0)
+    assert 0 < w.sum() < 0.5 * r.sum()
+    ca = P.inferior(r, z, 30.0)
+    assert ca[z > z[np.nonzero(r.any(axis=(1, 2)))[0]].min() + 30].sum() == 0

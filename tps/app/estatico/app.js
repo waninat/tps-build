@@ -9,7 +9,7 @@ const E = {
   wl: { janela: 400, nivel: 40 },
   imgs: {}, sobre: {}, campoSel: null, bev: null, bevSeg: 0, drrImg: null,
   ocultas: new Set(), dvh: null, arrasto: null, token: null, usuario: null,
-  isoCfg: { niveis: [], ref: "rx", unidade: "pct" }, bevDes: { pts: [], mouse: null, livre: false },
+  isoCfg: { niveis: [], ref: "rx", unidade: "pct" }, fonte: "plano", dvhAlt: {}, bevDes: { pts: [], mouse: null, livre: false },
 };
 try { const c = JSON.parse(localStorage.getItem("tps_iso") || "null"); if (c) E.isoCfg = c; } catch (e) { /* ok */ }
 try { E.token = sessionStorage.getItem("tps_token"); } catch (e) { /* sem storage */ }
@@ -18,6 +18,7 @@ const ISO_CORES = { 30: "#3355ff", 50: "#00b7ff", 70: "#00e08a", 80: "#9be000", 
 
 const PALETA_ISO = ["#3355ff", "#00b7ff", "#00e08a", "#9be000", "#ffe100", "#ffae00", "#ff7a00", "#ff2d55", "#ff00c8", "#ffffff"];
 function corIso(nivel) {
+  if (E.isoRef && E.isoRef.dif) return nivel < 0 ? (nivel <= -5 ? "#3b6bff" : "#8db0fe") : (nivel >= 5 ? "#ff3030" : "#ff9a7b");
   // cor pela fração da referência (100% = prescrição ou máximo): mesma cor para o mesmo % em Gy ou em %
   const ref = E.isoRef, pct = ref && ref.unidade === "gy" ? nivel / ref.cem_gy * 100 : nivel;
   if (ISO_CORES[Math.round(pct * 10) / 10]) return ISO_CORES[Math.round(pct * 10) / 10];
@@ -166,6 +167,43 @@ function ligar() {
     aviso("Plano renormalizado (dose relativa igual, UM novas)", true);
   });
   $("#b-iso-cfg").onclick = () => tentar(configurarIsodoses);
+  $("#fonte-dose").onchange = () => { E.fonte = $("#fonte-dose").value; E.sobre = {}; carregarSobre(); desenharDvh(); };
+  const mostrarFonte = (f) => {
+    const sel = $("#fonte-dose"); sel.classList.remove("oculto");
+    sel.querySelector(`option[value=${f}]`).disabled = false;
+    E.fonte = f; sel.value = f; E.fonteVer = (E.fonteVer || 0) + 1; E.sobre = {}; carregarSobre(); desenharDvh();
+  };
+  $("#b-comparar").onclick = () => tentar(async () => {
+    const a = $("#cmp-a").value, b = $("#cmp-b").value;
+    const r = await api("POST", `/api/${E.sid}/comparar_planos`, { a, b }, "Comparando os planos…");
+    const dados = {};
+    for (const [n, d] of Object.entries(r.dvh_a)) dados[n] = { ...d, ref: r.dvh_b[n] };
+    E.dvhAlt.dif = { dados, rx: r.rx_a, titulo: `${a} (cheio) × ${b} (tracejado)` };
+    $("#cmp-planos").innerHTML = `UM total: ${a} ${r.um[0]} · ${b} ${r.um[1]} · HI ${r.hi[0] != null ? r.hi[0].toFixed(3) : "—"} × ${r.hi[1] != null ? r.hi[1].toFixed(3) : "—"}` +
+      ` · gama 3%/3 mm (${b} vs ${a}): ${r.gama_3_3 != null ? r.gama_3_3 + "%" : "—"} · diferença de ${f1(r.dif_min_gy, 2)} a +${f1(r.dif_max_gy, 2)} Gy`;
+    const nomes = { Dmean: "Dméd", D95: "D95", D2: "D2", Dmax: "Dmax" };
+    $("#tab-cmp-planos tbody").innerHTML = Object.entries(r.tabela).map(([n, t]) => Object.entries(t).map(([k, [va, vb]], i) => {
+      const dif = vb - va, cls = Math.abs(dif) < 0.5 ? "" : (dif > 0 ? "ruim" : "bom");
+      return `<tr>${i ? "<td></td>" : `<td>${n}</td>`}<td>${nomes[k] || k}</td><td>${f1(va, 2)}</td><td>${f1(vb, 2)}</td><td class="${cls}">${dif > 0 ? "+" : ""}${f1(dif, 2)}</td></tr>`;
+    }).join("")).join("");
+    $("#tab-cmp-planos").classList.remove("oculto");
+    mostrarFonte("dif");
+  });
+  $("#b-somar").onclick = () => tentar(async () => {
+    const rotulos = $$("#soma-lista input:checked").map(i => i.value);
+    const r = await api("POST", `/api/${E.sid}/soma_planos`, { rotulos, modo: $("#soma-modo").value,
+      ab_alvo: +$("#soma-ab-alvo").value, ab_oar: +$("#soma-ab-oar").value }, "Somando os planos…");
+    E.dvhAlt.soma = { dados: r.dvh, rx: r.rx_gy, titulo: `Soma ${r.rotulos.join(" + ")}${r.modo === "eqd2" ? " (EQD2)" : ""}` };
+    $("#soma-res").innerHTML = `Prescrição somada ${r.modo === "eqd2" ? "(EQD2, α/β alvo " + r.ab.alvo + ")" : ""}: <b>${f1(r.rx_gy, 2)} Gy</b> · Dmax ${f1(r.dmax_gy, 2)} Gy`;
+    $("#tab-soma tbody").innerHTML = Object.entries(r.estatisticas).map(([n, q]) =>
+      `<tr><td>${n}</td><td>${f1(q.Dmean, 1)}</td><td>${f1(q.D95, 1)}</td><td>${f1(q.D2, 1)}</td><td>${f1(q.Dmax, 1)}</td></tr>`).join("");
+    $("#tab-soma").classList.remove("oculto");
+    const rr = (r.restricoes && r.restricoes.resultados) || [];
+    $("#tab-soma-rest tbody").innerHTML = rr.map(q => `<tr><td>${q.estrutura}</td><td>${q.metrica}</td><td>${q.op.replace(">=", "≥").replace("<=", "≤")} ${q.limite}</td>` +
+      `<td class="${q.ok ? "ok" : (q.tipo === "objetivo" ? "avisotxt" : "falha")}">${f1(q.valor, 1)}</td></tr>`).join("");
+    $("#tab-soma-rest").classList.toggle("oculto", !rr.length);
+    mostrarFonte("soma");
+  });
   // janela própria (pywebview): seletor de pasta do sistema e "abrir pasta"
   const comJanela = () => {
     if (!(window.pywebview && window.pywebview.api)) return;
@@ -222,8 +260,14 @@ function ligar() {
   $("#b-ia").onclick = () => tentar(async () => {
     const orgaos = Array.from($("#ia-orgaos").selectedOptions).map(o => o.value);
     if (!orgaos.length) throw new Error("Escolha os órgãos (Ctrl+clique para vários)");
-    const r = await api("POST", `/api/${E.sid}/contorno/ia`, { orgaos }, "Segmentando com IA (1–5 min na CPU)…");
-    atualizar(r); aviso("Criado: " + r.contorno.criadas.join(", ") + " — revise", true);
+    const zr = $("#ia-reto-z").value.trim();
+    const r = await api("POST", `/api/${E.sid}/contorno/ia`, { orgaos, reto_zmax_mm: zr === "" ? null : +zr.replace(",", ".") },
+      "Segmentando com IA (1–5 min por grupo na CPU)…");
+    atualizar(r);
+    const c = r.contorno;
+    aviso("Criado: " + c.criadas.join(", ") + (c.nao_encontrados.length ? ` · não encontrado: ${c.nao_encontrados.join(", ")}` : "") +
+      (c.reto_limite_superior_mm != null ? ` · reto até z = ${c.reto_limite_superior_mm} mm (junção retossigmoide)` : "") + " — revise", true);
+    if (c.reto_limite_superior_mm != null) $("#ia-reto-z").placeholder = `auto (${c.reto_limite_superior_mm})`;
   });
   $("#b-rest").onclick = () => tentar(async () => {
     const corpo = { estrutura: $("#r-est").value, metrica: $("#r-met").value.trim(), op: $("#r-op").value,
@@ -482,6 +526,15 @@ function atualizar(r) {
   $("#planos-sessao").classList.toggle("oculto", !ps.length);
   $("#plano-sel").innerHTML = ps.map(q => `<option value="${q.rotulo}" ${q.atual ? "selected" : ""}>${q.rotulo} · ${q.estado.toLowerCase()} · ${q.campos} campo(s)${q.dose ? "" : " · sem dose"}</option>`).join("");
   $("#b-plano-copiar").disabled = !temPlano; $("#b-plano-rem").disabled = !temPlano || aprovado;
+  { const comDose = ps.filter(q => q.dose), opts = comDose.map(q => `<option>${q.rotulo}</option>`).join("");
+    const va = $("#cmp-a").value, vb = $("#cmp-b").value;
+    $("#cmp-a").innerHTML = opts; $("#cmp-b").innerHTML = opts;
+    if (comDose.some(q => q.rotulo === va)) $("#cmp-a").value = va;
+    if (comDose.some(q => q.rotulo === vb)) $("#cmp-b").value = vb; else if (comDose.length > 1) $("#cmp-b").selectedIndex = 1;
+    $("#b-comparar").disabled = comDose.length < 2; $("#b-somar").disabled = comDose.length < 2;
+    const marc = new Set($$("#soma-lista input:checked").map(i => i.value));
+    $("#soma-lista").innerHTML = comDose.map(q => `<label class="check"><input type="checkbox" value="${q.rotulo}" ${marc.has(q.rotulo) ? "checked" : ""}> ${q.rotulo}</label>`).join("") ||
+      `<div class="pequeno-txt">Calcule pelo menos dois planos desta TC.</div>`; }
   $("#b-renorm").disabled = !temPlano || aprovado || !r.dose_atualizada;
   const setup = (p && p.campos_setup) || [];
   $("#lista-setup").innerHTML = setup.map(c => `<li>${c.nome} · G${c.gantry.toFixed(0)} M${c.mesa.toFixed(0)} · ${f1((c.jaw_x ? c.jaw_x[1] - c.jaw_x[0] : c.mlc_b[20] - c.mlc_a[20]) / 10, 0)}×${f1((c.jaw_y[1] - c.jaw_y[0]) / 10, 0)} cm
@@ -679,7 +732,10 @@ function listarOars() {
 function mostrarIA() {
   const ia = (E.info && E.info.ia) || {};
   $("#ia-estado").textContent = ia.disponivel ? "instalado" : (ia.motivo || "não instalado neste computador");
-  $("#ia-orgaos").innerHTML = (ia.orgaos || []).map(o => `<option value="${o.id}">${o.nome}</option>`).join("");
+  const grupos = {};
+  (ia.orgaos || []).forEach(o => (grupos[o.grupo || "Órgãos"] = grupos[o.grupo || "Órgãos"] || []).push(o));
+  $("#ia-orgaos").innerHTML = Object.entries(grupos).map(([g, os]) => `<optgroup label="${g}">` +
+    os.map(o => `<option value="${o.id}">${o.nome.replace(/_/g, " ")}</option>`).join("") + "</optgroup>").join("");
   $("#ia-orgaos").disabled = !ia.disponivel; $("#b-ia").disabled = !ia.disponivel;
 }
 
@@ -757,7 +813,7 @@ async function carregarSobreVista(vista) {
   const i = E.idx[vista], chave = `${vista}:${i}`;
   if (E.sobre[chave]) return desenharCorte(vista);
   E.sobre[chave] = "carregando";
-  const c = E.isoCfg, q = `?ref=${c.ref}&unidade=${c.unidade}&niveis=${encodeURIComponent((c.niveis || []).join(","))}`;
+  const c = E.isoCfg, q = `?ref=${c.ref}&unidade=${c.unidade}&fonte=${E.fonte}&niveis=${encodeURIComponent(E.fonte === "dif" ? "" : (c.niveis || []).join(","))}`;
   try { E.sobre[chave] = await api("GET", `/api/${E.sid}/sobreposicao/${vista}/${i}${q}`); if (E.sobre[chave].iso_ref) E.isoRef = E.sobre[chave].iso_ref; }
   catch (e) { delete E.sobre[chave]; return; }
   desenharCorte(vista);
@@ -799,12 +855,12 @@ function desenharCorte(vista) {
   }
   const sobW = E.sobre[`${vista}:${i}`];
   if ($("#t-wash") && $("#t-wash").checked && sobW && sobW !== "carregando" && sobW.wash) {
-    const min = $("#wash-min").value, chave = `${vista}:${i}:${min}:${E.doseVer || 0}`;
+    const min = $("#wash-min").value, chave = `${vista}:${i}:${min}:${E.doseVer || 0}:${E.fonte}:${E.fonteVer || 0}`;
     E.wash = E.wash || {};
     let wi = E.wash[chave];
     if (!wi) {
       wi = new Image(); wi.onload = () => desenharCorte(vista);
-      wi.src = `/api/${E.sid}/dose_corte/${vista}/${i}.png?minimo=${min}&v=${E.doseVer || 0}&t=${encodeURIComponent(E.token)}`;
+      wi.src = `/api/${E.sid}/dose_corte/${vista}/${i}.png?minimo=${min}&fonte=${E.fonte}&v=${E.doseVer || 0}-${E.fonteVer || 0}&t=${encodeURIComponent(E.token)}`;
       E.wash[chave] = wi;
     }
     if (wi.complete && wi.naturalWidth) {
@@ -813,9 +869,11 @@ function desenharCorte(vista) {
       g.drawImage(wi, Math.min(xa, xb), Math.min(ya, yb), Math.abs(xb - xa), Math.abs(yb - ya));
     }
     if (vista === "axial") {          // barra de cores
-      const x0 = 10, y0 = h - 22, larg = Math.min(220, w - 20), lo = +min, hi = Math.max(sobW.wash.dmax_pct, lo + 1);
+      const dif = sobW.wash.dif;
+      const x0 = 10, y0 = h - 22, larg = Math.min(220, w - 20), lo = dif ? -10 : +min, hi = dif ? 10 : Math.max(sobW.wash.dmax_pct, lo + 1);
       const grad = g.createLinearGradient(x0, 0, x0 + larg, 0);
-      ["#00008f", "#0000ff", "#00ffff", "#7fff7f", "#ffff00", "#ff0000", "#800000"].forEach((c, k, a) => grad.addColorStop(k / (a.length - 1), c));
+      (dif ? ["#3b4cc0", "#8db0fe", "#dddddd", "#f49a7b", "#b40426"] : ["#00008f", "#0000ff", "#00ffff", "#7fff7f", "#ffff00", "#ff0000", "#800000"])
+        .forEach((c, k, a) => grad.addColorStop(k / (a.length - 1), c));
       g.fillStyle = grad; g.fillRect(x0, y0, larg, 8);
       g.fillStyle = "#fff"; g.font = "10px system-ui";
       g.fillText(`${lo}%`, x0, y0 - 3); g.fillText(`${hi.toFixed(0)}%`, x0 + larg - 26, y0 - 3);
@@ -878,12 +936,13 @@ function desenharCorte(vista) {
   if (vista === "axial" && sob && sob.iso_ref && $("#v-axial .t-iso").checked) {
     const ir = sob.iso_ref, gy = ir.unidade === "gy";
     g.font = "11px system-ui"; let yy = 16;
-    const txtMax = gy ? `máx ${f1(ir.dmax_gy, 2)} Gy` : `máx ${f1(ir.dmax_gy / ir.cem_gy * 100, 1)}%`;
+    const txtMax = ir.dif ? `máx +${f1(ir.dmax_gy, 2)} Gy` : gy ? `máx ${f1(ir.dmax_gy, 2)} Gy` : `máx ${f1(ir.dmax_gy / ir.cem_gy * 100, 1)}%`;
     g.fillStyle = "#ff00c8"; g.textAlign = "right"; g.fillText("▲ " + txtMax, w - 6, yy); yy += 14;
     for (const n of ir.niveis.slice().reverse()) {
-      g.fillStyle = corIso(n); g.fillText(gy ? `${+n.toFixed(2)} Gy` : `${+n.toFixed(1)}%`, w - 6, yy); yy += 13;
+      const sn = ir.dif && n > 0 ? "+" : "";
+      g.fillStyle = corIso(n); g.fillText(gy ? `${sn}${+n.toFixed(2)} Gy` : `${sn}${+n.toFixed(1)}%`, w - 6, yy); yy += 13;
     }
-    g.fillStyle = "#8b95a3"; g.fillText(ir.referencia === "max" ? `100% = máx (${f1(ir.cem_gy, 2)} Gy)` : `100% = ${f1(ir.rx_gy, 2)} Gy`, w - 6, yy + 2);
+    g.fillStyle = "#8b95a3"; g.fillText(ir.dif ? `${ir.descricao} · % de ${f1(ir.rx_gy, 2)} Gy` : (ir.referencia === "max" ? `100% = máx (${f1(ir.cem_gy, 2)} Gy)` : `100% = ${f1(ir.rx_gy, 2)} Gy`) + (ir.fonte === "soma" ? ` · ${ir.descricao}` : ""), w - 6, yy + 2);
     g.textAlign = "left";
   }
 }
@@ -1098,9 +1157,12 @@ function desenharDvh() {
   g.fillStyle = "#0c0f13"; g.fillRect(0, 0, w, h);
   const m = { l: 34, r: 8, t: 8, b: 24 }, W = w - m.l - m.r, H = h - m.t - m.b;
   g.strokeStyle = "#2b323c"; g.fillStyle = "#8b95a3"; g.font = "10px system-ui"; g.lineWidth = 1;
-  if (!E.dvh) { g.fillText("Calcule a dose para ver o DVH", m.l + 8, m.t + 20); return; }
-  const rx = E.resumo.plano.prescricao.dose_total_gy;
-  const dmax = Math.max(rx * 1.15, ...Object.values(E.dvh).map(d => d.dose[d.dose.length - 1] || 0));
+  const alt = E.fonte !== "plano" ? E.dvhAlt[E.fonte] : null;
+  const dados = alt ? alt.dados : E.dvh;
+  if (!dados) { g.fillText("Calcule a dose para ver o DVH", m.l + 8, m.t + 20); return; }
+  const rx = alt ? alt.rx : E.resumo.plano.prescricao.dose_total_gy;
+  const dmax = Math.max(rx * 1.15, ...Object.values(dados).map(d => d.dose[d.dose.length - 1] || 0),
+    ...Object.values(dados).map(d => d.ref ? d.ref.dose[d.ref.dose.length - 1] || 0 : 0));
   for (let k = 0; k <= 5; k++) {
     const y = m.t + H - k / 5 * H; g.beginPath(); g.moveTo(m.l, y); g.lineTo(m.l + W, y); g.stroke(); g.fillText(`${k * 20}`, 6, y + 3);
   }
@@ -1108,7 +1170,7 @@ function desenharDvh() {
   for (let d = 0; d <= dmax; d += passo) { const x = m.l + d / dmax * W; g.beginPath(); g.moveTo(x, m.t); g.lineTo(x, m.t + H); g.stroke(); g.fillText(`${d}`, x - 6, h - 8); }
   const xr = m.l + rx / dmax * W; g.strokeStyle = "rgba(255,255,255,.35)"; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(xr, m.t); g.lineTo(xr, m.t + H); g.stroke(); g.setLineDash([]);
   g.lineWidth = 1.6;
-  for (const [n, d] of Object.entries(E.dvh)) {
+  for (const [n, d] of Object.entries(dados)) {
     if (E.ocultas.has(n)) continue;
     g.strokeStyle = `rgb(${d.cor})`; g.beginPath();
     d.dose.forEach((x, k) => { const px = m.l + x / dmax * W, py = m.t + H - d.volume[k] / 100 * H; k ? g.lineTo(px, py) : g.moveTo(px, py); });
@@ -1120,6 +1182,7 @@ function desenharDvh() {
     }
   }
   g.fillStyle = "#8b95a3"; g.fillText("Gy", w - 18, h - 8); g.fillText("%", 4, 10);
+  if (alt) { g.fillStyle = "#ffd84d"; g.textAlign = "right"; g.fillText(alt.titulo, w - 10, m.t + 12); g.textAlign = "left"; }
 }
 
 async function doseCruz() {

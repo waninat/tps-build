@@ -399,7 +399,8 @@ def contorno(sid: str, acao: str, d: dict = Body(...), u: dict = Depends(usuario
         elif acao == "orgaos":
             r = s.orgaos_automaticos(list(d.get("orgaos") or []))
         elif acao == "ia":
-            r = s.segmentar_ia(list(d.get("orgaos") or []))
+            z = d.get("reto_zmax_mm")
+            r = s.segmentar_ia(list(d.get("orgaos") or []), float(z) if z not in (None, "") else None)
         else:
             raise ErroUsuario(f"Ação de contorno desconhecida: {acao}")
     if acao != "editar":
@@ -506,22 +507,42 @@ def corte(sid: str, vista: str, idx: int, janela: float = 400, nivel: float = 40
 
 
 @app.get("/api/{sid}/dose_corte/{vista}/{idx}.png")
-def dose_corte(sid: str, vista: str, idx: int, minimo: float = 20.0, maximo: float = 0.0, u: dict = Depends(usuario)):
+def dose_corte(sid: str, vista: str, idx: int, minimo: float = 20.0, maximo: float = 0.0, fonte: str = "plano",
+               u: dict = Depends(usuario)):
     if vista not in ("axial", "coronal", "sagital"):
         raise ErroUsuario("vista inválida")
-    return Response(_s(sid).imagem_dose(vista, idx, minimo, maximo), media_type="image/png",
+    fonte = fonte if fonte in ("plano", "soma", "dif") else "plano"
+    return Response(_s(sid).imagem_dose(vista, idx, minimo, maximo, fonte=fonte), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/{sid}/sobreposicao/{vista}/{idx}")
 def sobreposicao(sid: str, vista: str, idx: int, isodoses: bool = True, niveis: str = "", ref: str = "rx",
-                 unidade: str = "pct", u: dict = Depends(usuario)):
+                 unidade: str = "pct", fonte: str = "plano", u: dict = Depends(usuario)):
     try:
         lista = [float(x) for x in niveis.replace(";", ",").split(",") if x.strip()] or None
     except ValueError as e:
         raise ErroUsuario("Níveis de isodose inválidos") from e
     return _s(sid).sobreposicao(vista, idx, None, isodoses, lista, "max" if ref == "max" else "rx",
-                                "gy" if unidade == "gy" else "pct")
+                                "gy" if unidade == "gy" else "pct",
+                                fonte if fonte in ("plano", "soma", "dif") else "plano")
+
+
+@app.post("/api/{sid}/soma_planos")
+def soma_planos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        r = s.soma_planos(list(d.get("rotulos") or []), str(d.get("modo", "fisica")),
+                          float(d.get("ab_alvo", 10)), float(d.get("ab_oar", 3)), d.get("ab_estruturas") or {})
+    auditar(u, "soma_planos", s, rotulos=r["rotulos"], modo=r["modo"])
+    return r
+
+
+@app.post("/api/{sid}/comparar_planos")
+def comparar_planos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        return s.comparar_planos(str(d.get("a", "")), str(d.get("b", "")))
 
 
 @app.get("/api/{sid}/bev/{nome}")

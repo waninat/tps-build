@@ -257,6 +257,9 @@
       <select class="wl"><option value="400,40">Tecidos moles</option><option value="1500,-600">Pulmão</option><option value="2000,400">Osso</option></select>
       <label class="check"><input type="checkbox" class="t-iso" checked> isodoses</label>
       <button id="b-iso-cfg" class="pequeno" title="quais isodoses, referência (prescrição ou máximo do plano) e % ou Gy">⚙</button>
+      <select id="fonte-dose" class="oculto" title="dose mostrada nas imagens e no DVH">
+        <option value="plano">plano atual</option><option value="soma">soma de planos</option><option value="dif">diferença B − A</option>
+      </select>
       <label class="check" title="dose em cores sobre o CT, nos três cortes"><input type="checkbox" id="t-wash"> colorwash</label>
       <select id="wash-min" title="dose mínima mostrada no colorwash (% da prescrição)"><option>10</option><option selected>20</option><option>30</option><option>50</option><option>80</option><option>90</option><option>95</option></select>
     </div>
@@ -294,6 +297,7 @@
     <button class="aba-d ativa" data-abad="est">Estruturas</button>
     <button class="aba-d" data-abad="aval">Avaliação</button>
     <button class="aba-d" data-abad="um">UM e pontos</button>
+    <button class="aba-d" data-abad="pl">Planos</button>
     <button class="aba-d" data-abad="reg">Registro <span id="n-avisos"></span></button>
   </div>
   <div class="painel-d" id="pd-est">
@@ -306,7 +310,9 @@
       </div>
       <div id="ia-caixa" class="caixa-import">
         <div class="pequeno-txt"><b>Órgãos por IA</b> (TotalSegmentator, roda neste computador) — <span id="ia-estado">verificando…</span></div>
-        <select id="ia-orgaos" multiple size="7"></select>
+        <select id="ia-orgaos" multiple size="10"></select>
+        <label title="o reto sai do cólon da IA, do corte mais inferior até a junção retossigmoide detectada; para mudar, informe o z (mm) do último corte e segmente de novo">
+          Limite superior do reto (z, mm)<input id="ia-reto-z" placeholder="automático"></label>
         <button id="b-ia" class="pequeno" disabled>Segmentar</button>
       </div>
       <div class="pequeno-txt">Todo contorno automático precisa ser revisado e corrigido antes do plano.</div>
@@ -412,6 +418,28 @@
   <h3>Pontos de referência</h3>
   <div class="linha-ponto"><input id="pt-nome" placeholder="nome"><button id="b-ponto" class="pequeno" disabled>+ na cruz</button></div>
   <table id="tab-pontos"><thead><tr><th>Ponto</th><th>Gy</th><th>%</th><th></th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="painel-d oculto" id="pd-pl">
+  <h3>Comparar dois planos</h3>
+  <div class="pequeno-txt">Planos desta TC já calculados. DVH: A cheio, B tracejado. Nas imagens, escolha
+    "diferença B − A" no seletor de dose do axial.</div>
+  <div class="linha2"><label>A<select id="cmp-a"></select></label><label>B<select id="cmp-b"></select></label></div>
+  <button id="b-comparar" class="pequeno">Comparar</button>
+  <div id="cmp-planos" class="pequeno-txt"></div>
+  <table id="tab-cmp-planos" class="oculto"><thead><tr><th>Estrutura</th><th>Métrica</th><th>A</th><th>B</th><th>B − A</th></tr></thead><tbody></tbody></table>
+  <h3>Soma de planos</h3>
+  <div class="pequeno-txt">Ex.: fase 1 + boost. Em EQD2 cada plano é convertido com o próprio fracionamento
+    (α/β: alvos PTV/CTV/GTV = valor do alvo, resto = valor dos órgãos).</div>
+  <div id="soma-lista"></div>
+  <div class="linha3">
+    <label>Dose<select id="soma-modo"><option value="fisica">física (Gy)</option><option value="eqd2">EQD2</option></select></label>
+    <label>α/β alvo<input id="soma-ab-alvo" type="number" value="10" step="0.5"></label>
+    <label>α/β órgãos<input id="soma-ab-oar" type="number" value="3" step="0.5"></label>
+  </div>
+  <button id="b-somar" class="pequeno">Somar</button>
+  <div id="soma-res" class="pequeno-txt"></div>
+  <table id="tab-soma" class="oculto"><thead><tr><th>Estrutura</th><th>Dméd</th><th>D95</th><th>D2</th><th>Dmax</th></tr></thead><tbody></tbody></table>
+  <table id="tab-soma-rest" class="oculto"><thead><tr><th>Estrutura</th><th>Métrica</th><th>Limite</th><th>Valor</th></tr></thead><tbody></tbody></table>
   </div>
   <div class="painel-d oculto" id="pd-reg">
   <h3>Avisos</h3>

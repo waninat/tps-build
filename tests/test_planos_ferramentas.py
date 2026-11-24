@@ -151,3 +151,34 @@ def test_edicao_de_laminas_no_bev(cli):
                            for k in abertos)
     r = c.post(f"/api/{sid}/campo/G090/desenho", json={"pontos": [[0, 0], [1, 1]], "modo": "abrir"})
     assert r.status_code == 400
+
+
+def test_soma_e_comparacao_de_planos(cli):
+    c, sid, s = cli
+    _ok(c.post(f"/api/{sid}/plano", json={"rotulo": "FASE1", "dose_total": 46, "fracoes": 23, "alvo": "PTV_fantoma"}))
+    for g in (0, 180):
+        _ok(c.post(f"/api/{sid}/campo", json={"gantry": g}))
+    _ok(c.post(f"/api/{sid}/calcular", json={"metodo": "media_alvo"}))
+    _ok(c.post(f"/api/{sid}/plano", json={"rotulo": "BOOST", "dose_total": 14, "fracoes": 7, "alvo": "PTV_fantoma"}))
+    for g in (90, 270):
+        _ok(c.post(f"/api/{sid}/campo", json={"gantry": g}))
+    _ok(c.post(f"/api/{sid}/calcular", json={"metodo": "media_alvo"}))
+    r = _ok(c.post(f"/api/{sid}/soma_planos", json={"rotulos": ["FASE1", "BOOST"], "modo": "fisica"}))
+    assert r["rx_gy"] == pytest.approx(60)
+    assert r["estatisticas"]["PTV_fantoma"]["Dmean"] == pytest.approx(60, rel=0.01)
+    e = _ok(c.post(f"/api/{sid}/soma_planos", json={"rotulos": ["FASE1", "BOOST"], "modo": "eqd2", "ab_alvo": 10}))
+    assert e["rx_gy"] == pytest.approx(60, rel=1e-6)                         # 2 Gy/fx: EQD2 = dose física
+    h = _ok(c.post(f"/api/{sid}/soma_planos", json={"rotulos": ["FASE1", "BOOST"], "modo": "eqd2", "ab_alvo": 3}))
+    assert h["rx_gy"] == pytest.approx(60, rel=1e-6)
+    k = s["ct"]["z"][2] // 2
+    sob = _ok(c.get(f"/api/{sid}/sobreposicao/axial/{k}?fonte=soma"))
+    assert sob["iso_ref"]["fonte"] == "soma" and sob["iso_ref"]["rx_gy"] == pytest.approx(60)
+    assert c.get(f"/api/{sid}/dose_corte/axial/{k}.png?fonte=soma").status_code == 200
+    cp = _ok(c.post(f"/api/{sid}/comparar_planos", json={"a": "FASE1", "b": "BOOST"}))
+    assert cp["tabela"]["PTV_fantoma"]["Dmean"][0] == pytest.approx(46, rel=0.01)
+    assert cp["tabela"]["PTV_fantoma"]["Dmean"][1] == pytest.approx(14, rel=0.01)
+    assert cp["dif_min_gy"] < -20
+    sob = _ok(c.get(f"/api/{sid}/sobreposicao/axial/{k}?fonte=dif"))
+    assert sob["iso_ref"]["dif"] and any(q["nivel"] < 0 for q in sob["isodoses"])
+    assert c.get(f"/api/{sid}/dose_corte/axial/{k}.png?fonte=dif").status_code == 200
+    assert c.post(f"/api/{sid}/soma_planos", json={"rotulos": ["FASE1"]}).status_code == 400
