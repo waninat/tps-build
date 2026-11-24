@@ -136,6 +136,11 @@ def checklist(sessao) -> list[dict]:
     if p.bolus:
         out.append(_item("bolus", "Bolus no plano", "aviso", ", ".join(b["nome"] for b in p.bolus) +
                          " — precisa estar no paciente em todas as frações"))
+    if p.tecnica == "IMRT":
+        nseg = sum(len(c.segmentos or []) for c in p.campos)
+        out.append(_item("imrt_qa", "IMRT: QA de paciente antes do 1º tratamento", "aviso",
+                         f"{nseg} segmentos, {sum(float(c.mu or 0) for c in p.campos):.0f} UM — gere o plano de verificação "
+                         "no fantoma e meça (gama)"))
     if not p.campos_setup:
         out.append(_item("setup", "Campos de localização", "aviso", "nenhum campo de setup (imagem de posicionamento)"))
     return out

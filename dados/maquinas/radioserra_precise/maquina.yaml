@@ -8,7 +8,7 @@ dicom_machine_names: ["Precise"]     # TreatmentMachineName no Mosaiq/Monaco (vi
 sad_mm: 1000.0
 energies_mv: [6]                     # CONFIRMAR outras energias de fótons (e elétrons)
 fff: false
-techniques: ["2D", "3D"]             # inverso/modulado: depois (decisão de 12/11/2026)
+techniques: ["2D", "3D", "STEP&SHOOT"]   # STEP&SHOOT = IMRT (24/11/2026); CONFIRMAR licença de IMRT da máquina
 collimation:
   jaw_x: {present: true, dicom_types: ["ASYMX", "X"]}    # diafragma de reserva, sob as lâminas
   jaw_y: {present: true, dicom_types: ["ASYMY", "Y"]}

@@ -192,6 +192,39 @@
   </details>
 
   <details open id="sec-calc"><summary>4 · Cálculo</summary>
+    <label>Técnica
+      <select id="o-tecnica">
+        <option value="3D">3D conformada</option>
+        <option value="IMRT">IMRT step-and-shoot (inverso)</option>
+      </select></label>
+    <div id="o-imrt" class="oculto">
+      <div class="caixa-import">
+        <div class="pequeno-txt"><b>Campos</b> — equiespaçados, conformados ao alvo + margem (substituem os atuais)</div>
+        <div class="linha3">
+          <label>Nº<select id="im-n"><option>5</option><option selected>7</option><option>9</option></select></label>
+          <label>Início (°)<input id="im-ini" type="number" value="0" step="5"></label>
+          <label>Margem (mm)<input id="im-mg" type="number" value="5" min="0" max="20"></label>
+        </div>
+        <button id="b-im-campos" class="pequeno">Criar campos</button>
+      </div>
+      <div class="pequeno-txt"><b>Objetivos</b> (dose total, Gy). Alvo: dose uniforme (sub &lt; 95% e sobre &gt; 107% penalizadas).
+        Máx/média/DVH para órgãos (só a parte fora do alvo). Peso = importância relativa.</div>
+      <table id="tab-objetivos"><thead><tr><th>Estrutura</th><th>Tipo</th><th>Gy</th><th>Vol%</th><th>Peso</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="botoes">
+        <button id="b-obj-add" class="pequeno">+ objetivo</button>
+        <button id="b-obj-sug" class="pequeno" title="alvo da prescrição + limites do protocolo (QUANTEC/clínica) e restrições próprias">Sugerir pelas restrições</button>
+      </div>
+      <div class="linha3">
+        <label>Níveis<input id="im-niveis" type="number" value="7" min="3" max="15" title="níveis de intensidade por campo no sequenciamento: mais níveis = mais segmentos"></label>
+        <label>UM mín/seg<input id="im-ummin" type="number" value="3" step="0.5" min="1"></label>
+        <label>Área mín (cm²)<input id="im-area" type="number" value="4" step="1" min="1"></label>
+      </div>
+      <div class="linha2">
+        <label>Tecido normal<select id="im-nto"><option value="0">não</option><option value="0.5">leve</option><option value="1" selected>normal</option><option value="3">forte</option></select></label>
+        <label>Iterações<select id="im-it"><option value="1">1 (rápido)</option><option value="2" selected>2</option><option value="3">3</option></select></label>
+      </div>
+    </div>
+    <div id="o-3d">
     <label class="check"><input id="o-pesos" type="checkbox"> otimizar pesos dos campos</label>
     <label>Field-in-field
       <select id="o-fif-modo">
@@ -223,12 +256,24 @@
       <label>Níveis do compensador<input id="o-niveis" type="number" value="6" min="2" max="12"></label>
       <label>UM mín. por segmento<input id="o-ummin" type="number" value="2" step="0.5"></label>
     </div>
+    </div>
     <button id="b-calc" class="primario grande" disabled>Calcular dose</button>
     <button id="b-renorm" disabled title="aplica a normalização escolhida em 2 · Prescrição sem recalcular a dose (mesma forma, outras UM)">Renormalizar (sem recalcular)</button>
   </details>
 
   <details id="sec-aprov"><summary>5 · Aprovação e exportação</summary>
     <div id="checklist" class="checklist"></div>
+    <details class="sub" id="sec-qa"><summary>QA de paciente (plano de verificação)</summary>
+      <div class="pequeno-txt">Os campos de uma fração recalculados no fantoma de água: RTPLAN para entregar,
+        RTDOSE para o software do detector e o plano coronal no isocentro (CSV) para filme/gama.</div>
+      <div class="linha3">
+        <label>Fantoma<select id="qa-fan"><option value="cubo30">cubo 30 cm</option><option value="placas30x30x20">placas 30×30×20</option><option value="cilindro30">cilindro Ø30</option></select></label>
+        <label>Ângulos<select id="qa-modo"><option value="real">do plano</option><option value="gantry0">todos em 0°</option></select></label>
+        <label>Prof. iso (mm)<input id="qa-prof" placeholder="centro"></label>
+      </div>
+      <button id="b-qa" class="pequeno" disabled>Gerar QA</button>
+      <div id="qa-res" class="pequeno-txt"></div>
+    </details>
     <div class="pequeno-txt">Aprovar, desaprovar e exportar pedem a sua senha (assinatura).</div>
     <div class="botoes">
       <button id="b-aprovar" class="primario" disabled>Aprovar</button>

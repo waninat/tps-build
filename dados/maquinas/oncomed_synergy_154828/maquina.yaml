@@ -8,7 +8,7 @@ dicom_machine_names: ["CONFIRMAR"]   # TreatmentMachineName EXATO cadastrado no 
 sad_mm: 1000.0
 energies_mv: [6]                     # CONFIRMAR outras energias
 fff: false
-techniques: ["3D"]                   # Fase 1
+techniques: ["3D", "STEP&SHOOT"]      # CONFIRMAR licença de IMRT da máquina
 collimation:
   # Agility confirmado em 8/11/2026 (o relatório Monaco de 2018, "SynergyP06x", é da época do MLCi2).
   jaw_x: {present: false, dicom_types: []}

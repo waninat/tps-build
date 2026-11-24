@@ -119,6 +119,7 @@ class Sessao:
         self.doses_um: dict = {}
         self.dose_fx: np.ndarray | None = None
         self.dose_vista: dict = {}                       # "soma" / "dif": doses só para ver (não são planos)
+        self.progresso: str | None = None                 # etapa de um cálculo longo (IMRT), lida sem trava
         self.resultado: dict = {}
         self.dose_atualizada = False
         self.avisos: list[str] = []
@@ -812,6 +813,12 @@ class Sessao:
             if c.segmentos:
                 c.segmentos = None
                 self.doses_um.pop(c.nome, None)
+            if p.tecnica == "IMRT":
+                p.tecnica = "3D"
+            ab = c.__dict__.pop("_abertura_conformada", None)
+            if ab is not None:                   # IMRT/compensador: volta à abertura conformada de partida
+                c.mlc_a, c.mlc_b, c.jaw_x, c.jaw_y = ab
+                self.doses_um.pop(c.nome, None)
 
     def editar_laminas(self, nome: str, mlc_a: list, mlc_b: list, jaw_x=None, jaw_y=None) -> dict:
         self._exigir_plano()
@@ -1449,7 +1456,8 @@ class Sessao:
         if so_normalizar:
             self._exigir(bool(self.doses_um) and all(c.nome in self.doses_um for c in p.campos),
                          "Calcule a dose antes de renormalizar")
-            opcoes = {k: v for k, v in opcoes.items() if k not in ("otimizar_pesos", "field_in_field", "compensador", "proteger_oars")}
+            opcoes = {k: v for k, v in opcoes.items() if k not in ("otimizar_pesos", "field_in_field", "compensador",
+                                                                    "proteger_oars", "imrt")}
         if opcoes.get("metodo"):
             pr.metodo = opcoes["metodo"]
             if pr.metodo == "ponto":
@@ -1465,8 +1473,9 @@ class Sessao:
         alvo = self.estruturas[pr.estrutura_alvo].mascara if pr.estrutura_alvo in self.estruturas else None
         if pr.metodo in ("media_alvo", "cobertura") and alvo is None:
             raise ErroUsuario("Normalização pelo alvo sem estrutura alvo")
-        if pr.metodo != "um_fixas" and not so_normalizar:   # importado: segmentos e UM são os do plano original
-            self._remover_derivados()
+        manter_imrt = p.tecnica == "IMRT" and not opcoes.get("imrt")   # recálculo de um IMRT pronto: mesmos segmentos
+        if pr.metodo != "um_fixas" and not so_normalizar and not manter_imrt:
+            self._remover_derivados()                           # importado: segmentos e UM são os do plano original
         p.modelo_feixe = self._info_modelo()
         self.avisos = []
         try:
@@ -1511,6 +1520,11 @@ class Sessao:
                 info["field_in_field"] = {"subcampos": [c.nome for c in r.subcampos], "hi_antes": r.hi_antes,
                                           "hi_depois": r.hi_depois, "avisos": r.avisos}
                 self.avisos = list(r.avisos)
+            im = opcoes.get("imrt")
+            if im:
+                if fif or opcoes.get("compensador") or opcoes.get("proteger_oars"):
+                    raise ErroUsuario("IMRT não se combina com field-in-field, compensador ou proteção de OARs")
+                info["imrt"] = self._otimizar_imrt(im, corpo)
             prot = opcoes.get("proteger_oars")
             if prot and alvo is not None:
                 if opcoes.get("compensador"):
@@ -1542,7 +1556,7 @@ class Sessao:
                 self.avisos = list(r.avisos)
             if pr.metodo == "um_fixas":
                 if (opcoes.get("otimizar_pesos") or opcoes.get("field_in_field") or opcoes.get("compensador")
-                        or opcoes.get("proteger_oars")):
+                        or opcoes.get("proteger_oars") or opcoes.get("imrt")):
                     raise ErroUsuario("Plano com UM fixas (importado): troque a normalização antes de otimizar, "
                                       "fazer field-in-field ou compensador")
                 faltam_um = [c.nome for c in p.campos if not c.mu]
@@ -1560,6 +1574,8 @@ class Sessao:
         for k in conf:
             c = self._campo(k["campo"])
             k["compensado"] = bool(c.segmentos)
+        if p.tecnica == "IMRT" and m.tabelas and alvo is not None:
+            conf.append(self._conferencia_composta(alvo))
         hi = indice_homogeneidade(total, alvo) if alvo is not None and alvo.any() else None
         self.resultado = {"dvh": hist, "conferencia_um": conf, "info": info, "hi": hi,
                           "restricoes": self._avaliar_restricoes(total),
@@ -1570,6 +1586,123 @@ class Sessao:
         self.dose_atualizada = True
         self._registrar(f"Dose calculada ({len(p.campos)} campos)")
         return self.resumo()
+
+    def _otimizar_imrt(self, im: dict, corpo) -> dict:
+        """IMRT step-and-shoot nos campos do plano (já conformados aos alvos). SRS-IMR-001."""
+        from tps.planejamento import imrt as I
+        p, m, g = self.plano, self.maquina, self.grade
+        objs, guardar = [], []
+        for o in im.get("objetivos") or []:
+            e = self.estruturas.get(o.get("estrutura"))
+            if e is None or not e.mascara.any():
+                raise ErroUsuario(f"Estrutura {o.get('estrutura')} vazia ou inexistente")
+            tipo = o.get("tipo", "max")
+            if tipo not in ("alvo", "max", "media", "dvh", "min"):
+                raise ErroUsuario(f"Tipo de objetivo inválido: {tipo}")
+            try:
+                dose = float(o["dose_gy"])
+            except (KeyError, TypeError, ValueError) as ex:
+                raise ErroUsuario(f"{e.nome}: informe a dose do objetivo") from ex
+            vol = o.get("volume_pct")
+            if tipo == "dvh" and vol in (None, ""):
+                raise ErroUsuario(f"{e.nome}: objetivo de DVH precisa do volume (%)")
+            masc = e.mascara
+            if tipo != "alvo" and o.get("fora_do_alvo", True):        # a parte do órgão dentro do alvo não briga
+                for a in (x for x in (im.get("objetivos") or []) if x.get("tipo") == "alvo"):
+                    if a["estrutura"] in self.estruturas:
+                        masc = masc & ~self.estruturas[a["estrutura"]].mascara
+                if not masc.any():
+                    masc = e.mascara
+            objs.append(I.Objetivo(e.nome, masc, tipo, dose, float(vol) if vol not in (None, "") else None,
+                                   float(o.get("peso", 1.0))))
+            guardar.append({k: o.get(k) for k in ("estrutura", "tipo", "dose_gy", "volume_pct", "peso")})
+        if not any(o.tipo == "alvo" for o in objs):
+            raise ErroUsuario("Defina pelo menos um alvo com dose")
+        for c in p.campos:
+            if c.campo_pai is None and "_abertura_conformada" not in c.__dict__:
+                c.__dict__["_abertura_conformada"] = (list(c.mlc_a), list(c.mlc_b), c.jaw_x, c.jaw_y)
+
+        def prog(msg):
+            self.progresso = msg
+        try:
+            r = I.otimizar_imrt(p, g, self.doses_um, objs, corpo, m.colim, m.modelo,
+                                niveis=int(im.get("niveis", 7)), iteracoes=int(im.get("iteracoes", 2)),
+                                um_min_segmento=float(im.get("um_min", 3.0)),
+                                area_min_cm2=float(im.get("area_min_cm2", 4.0)),
+                                peso_nto=float(im.get("peso_nto", 1.0)), progresso=prog)
+        except ValueError as ex:
+            raise ErroUsuario(str(ex)) from ex
+        finally:
+            self.progresso = None
+        p.tecnica = "IMRT"
+        p.objetivos_imrt = guardar
+        self.avisos += r.avisos
+        self._registrar(f"IMRT: {sum(r.n_segmentos.values())} segmentos em {len(r.n_segmentos)} campos, "
+                        f"{r.um_total:.0f} UM, {r.tempo_s:.0f} s")
+        return {"segmentos": r.n_segmentos, "um_total": r.um_total, "custo": r.custo, "avisos": r.avisos,
+                "tempo_s": r.tempo_s}
+
+    def _conferencia_composta(self, alvo, tolerancia_pct: float = 5.0) -> dict:
+        """IMRT: conferência independente do plano inteiro num ponto de baixo gradiente dentro do alvo
+        (Σ UM · dose/UM por tabela, Clarkson por segmento), tolerância de 5% (TG-114/TG-218 para IMRT)."""
+        from scipy.ndimage import binary_erosion, gaussian_gradient_magnitude
+
+        from tps.planejamento.um_tabela import dose_por_um_tabela_segmentos
+        g, p, m = self.grade, self.plano, self.maquina
+        nucleo = binary_erosion(alvo, iterations=2)
+        if not nucleo.any():
+            nucleo = alvo
+        grad = gaussian_gradient_magnitude(self.dose_fx, 1.0)
+        med = float(np.median(self.dose_fx[nucleo]))
+        custo = np.where(nucleo, grad / max(med, 1e-9) + np.abs(self.dose_fx - med) / max(med, 1e-9), np.inf)
+        k, j, i = np.unravel_index(int(np.argmin(custo)), custo.shape)
+        ponto = (float(g.x[i]), float(g.y[j]), float(g.z[k]))
+        mot, tab = 0.0, 0.0
+        for c in p.campos:
+            mot += float(c.mu or 0) * calculo.valor_em_ponto(self.doses_um[c.nome], g, ponto) * 100.0
+            if c.segmentos:
+                t = dose_por_um_tabela_segmentos(c, m.colim, m.tabelas, ponto, g.eta, (g.x, g.y, g.z),
+                                                 posicao=p.posicao_paciente)
+            else:
+                from tps.planejamento.um_tabela import dose_por_um_tabela
+                t = dose_por_um_tabela(c, m.colim, m.tabelas, ponto, g.eta, (g.x, g.y, g.z), posicao=p.posicao_paciente)
+            tab += float(c.mu or 0) * t["cgy_por_um"]
+        dif = 100 * (mot / tab - 1) if tab > 0 else float("nan")
+        return {"campo": "PLANO (soma)", "motor_cgy_um": mot, "tabela_cgy_um": tab, "dif_pct": float(dif),
+                "ok": bool(abs(dif) <= tolerancia_pct), "composta": True, "ponto_mm": [round(v, 1) for v in ponto],
+                "tolerancia_pct": tolerancia_pct, "eq_abertura_cm": 0.0, "prof_rad_mm": 0.0, "tmr": 0.0}
+
+    def campos_imrt(self, n: int, inicio: float = 0.0, alvo: str | None = None, margem_mm: float = 5.0,
+                    colimador: float = 0.0) -> dict:
+        """Troca os campos do plano por n campos equiespaçados conformados ao alvo (+ margem), prontos para IMRT."""
+        from tps.planejamento.imrt import campos_equiespacados
+        self._exigir_plano()
+        p = self.plano
+        p._exigir_rascunho()
+        alvo = alvo or p.prescricao.estrutura_alvo
+        if alvo not in self.estruturas:
+            raise ErroUsuario("Escolha o alvo dos campos")
+        if not 3 <= int(n) <= 15:
+            raise ErroUsuario("Use de 3 a 15 campos")
+        for c in list(p.campos):
+            p.campos.remove(c)
+            self.doses_um.pop(c.nome, None)
+        p.tecnica = "3D"
+        for g in campos_equiespacados(int(n), float(inicio)):
+            self.salvar_campo({"nome": f"G{int(round(g)) % 360:03d}", "gantry": g, "colimador": colimador,
+                               "modo": "conformado", "alvo": alvo,
+                               "margem": {k: margem_mm for k in ("x1", "x2", "y1", "y2")}, "ponto_encontro": "fora"})
+        self._registrar(f"{n} campos equiespaçados para IMRT (início {inicio:g}°, alvo {alvo} + {margem_mm:g} mm)")
+        return self.resumo()
+
+    def objetivos_imrt_sugeridos(self) -> list[dict]:
+        from tps.planejamento.imrt import objetivos_sugeridos
+        self._exigir_plano()
+        if self.plano.objetivos_imrt:
+            return list(self.plano.objetivos_imrt)
+        pr = self.plano.prescricao
+        return objetivos_sugeridos([n for n, e in self.estruturas.items() if e.mascara.any()], pr.estrutura_alvo,
+                                   pr.dose_total_gy, self.plano.restricoes)
 
     def _posicao_max(self, total, corpo) -> list[float]:
         g = self.grade
@@ -1641,6 +1774,10 @@ class Sessao:
         hist = {n: dvh(total, e.mascara, g.voxel_cc) for n, e in self.estruturas.items() if e.mascara.any()}
         conf = conferir_plano(p, m.colim, m.tabelas, self.doses_um, g,
                               ponto_mm=pr.ponto_mm if pr.metodo == "ponto" else None) if m.tabelas else []
+        for k in conf:
+            k["compensado"] = bool(self._campo(k["campo"]).segmentos)
+        if p.tecnica == "IMRT" and m.tabelas and alvo is not None:
+            conf.append(self._conferencia_composta(alvo))
         corpo = self._corpo()
         self.resultado = {"dvh": hist, "conferencia_um": conf, "info": {"recalculo_aprovado": True},
                           "restricoes": self._avaliar_restricoes(total),
@@ -1730,6 +1867,48 @@ class Sessao:
                                            for m_, u_ in membros)
         return {"distancia_fonte_mm": cfg.get("distancia_fonte_mm"), "tolerancia": cfg.get("tolerancia"),
                 "departamento": cfg.get("departamento"), "ponto_ref": ponto, "dose_feixe": dose_feixe}
+
+    def gerar_qa(self, destino: str | Path, fantoma: str = "cubo30", modo: str = "real",
+                 profundidade_iso_mm: float | None = None) -> dict:
+        """Plano de verificação (QA de paciente): os campos de uma fração no fantoma, com RTPLAN, RTDOSE e o plano
+        coronal no isocentro. SRS-QA-001."""
+        from pydicom.uid import generate_uid
+
+        from tps.exportacao.rtdose import exportar_rtdose
+        from tps.planejamento.qa_paciente import gravar_csv_plano, plano_verificacao
+        self._exigir_plano()
+        self._exigir(self.dose_atualizada and self.dose_fx is not None, "Calcule a dose antes do QA")
+        m = self.maquina
+        self.progresso = "Calculando o plano no fantoma…"
+        try:
+            r = plano_verificacao(self.plano, m.colim, m.modelo, fantoma, modo, profundidade_iso_mm)
+        except (ValueError, KeyError) as e:
+            raise ErroUsuario(str(e)) from e
+        finally:
+            self.progresso = None
+        ref = dict(self.plano.referencia_ct or {})
+        r.plano.referencia_ct = {k: ref.get(k, "") for k in ("PatientName", "PatientID", "PatientBirthDate",
+                                                             "PatientSex", "ReferringPhysicianName")}
+        r.plano.referencia_ct["FrameOfReferenceUID"] = generate_uid()
+        r.plano.tecnica = self.plano.tecnica
+        destino = Path(destino)
+        destino.mkdir(parents=True, exist_ok=True)
+        base = f"{r.plano.rotulo}_{modo}_{dt.datetime.now():%Y%m%d_%H%M%S}"
+        modo_seg = (m.raw.get("dicom_exportacao") or {}).get("segmentos", "step_and_shoot")
+        extras = {k: v for k, v in self._extras_exportacao(modo_seg).items() if k not in ("ponto_ref", "dose_feixe")}
+        try:
+            rp = exportar_rtplan(r.plano, m.colim, destino / f"RP_{base}.dcm", exigir_aprovado=False,
+                                 modo_segmentos=modo_seg, extras=extras)
+        except (ValueError, PermissionError) as e:
+            raise ErroUsuario(f"RTPLAN de verificação: {e}") from e
+        exportar_rtdose(r.dose_fx_gy, r.grade.x, r.grade.y, r.grade.z, rp, destino / f"RD_{base}.dcm")
+        gravar_csv_plano(r, destino / f"coronal_iso_{base}.csv")
+        iso_gy = calculo.valor_em_ponto(r.dose_fx_gy, r.grade, r.iso_mm)
+        self._registrar(f"QA de paciente gerado ({modo}, fantoma {fantoma}): {iso_gy:.3f} Gy no isocentro")
+        return {"pasta": str(destino), "arquivos": [str(destino / f"RP_{base}.dcm"), str(destino / f"RD_{base}.dcm"),
+                                                     str(destino / f"coronal_iso_{base}.csv")],
+                "dose_iso_gy": round(float(iso_gy), 4), "dmax_gy": round(float(r.dose_fx_gy.max()), 4),
+                "um_total": round(sum(float(c.mu) for c in r.plano.campos), 1), "modo": modo, "fantoma": fantoma}
 
     def exportar(self, destino: str | Path, modo_segmentos: str | None = None,
                  incluir_imagens: bool | None = None, incluir_rtstruct: bool = True) -> dict:

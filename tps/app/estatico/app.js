@@ -167,6 +167,29 @@ function ligar() {
     aviso("Plano renormalizado (dose relativa igual, UM novas)", true);
   });
   $("#b-iso-cfg").onclick = () => tentar(configurarIsodoses);
+  $("#o-tecnica").onchange = () => {
+    const im = $("#o-tecnica").value === "IMRT";
+    $("#o-imrt").classList.toggle("oculto", !im); $("#o-3d").classList.toggle("oculto", im);
+    $("#b-calc").textContent = im ? "Otimizar IMRT" : "Calcular dose";
+    if (im && !(E.objetivos || []).length) tentar(sugerirObjetivos);
+  };
+  $("#b-im-campos").onclick = () => tentar(async () => {
+    if (E.resumo.plano.campos.length && !confirm("Substituir os campos atuais por campos equiespaçados?")) return;
+    E.campoSel = null;
+    atualizar(await api("POST", `/api/${E.sid}/imrt/campos`, { n: +$("#im-n").value, inicio: +$("#im-ini").value,
+      margem_mm: +$("#im-mg").value }, "Criando os campos…"));
+  });
+  $("#b-obj-add").onclick = () => { E.objetivos = E.objetivos || []; E.objetivos.push({ estrutura: "", tipo: "max", dose_gy: "", volume_pct: "", peso: 1 }); listarObjetivos(); };
+  $("#b-obj-sug").onclick = () => tentar(sugerirObjetivos);
+  $("#b-qa").onclick = () => tentar(async () => {
+    const pr = $("#qa-prof").value.trim();
+    const r = await api("POST", `/api/${E.sid}/qa_paciente`, { fantoma: $("#qa-fan").value, modo: $("#qa-modo").value,
+      profundidade_iso_mm: pr === "" ? null : +pr.replace(",", ".") }, "Calculando o plano no fantoma…");
+    $("#qa-res").innerHTML = `Isocentro: <b>${f1(r.dose_iso_gy * 100, 1)} cGy</b> · máx ${f1(r.dmax_gy * 100, 1)} cGy · ${r.um_total} UM<br>` +
+      r.arquivos.map(a => `<a href="/api/${E.sid}/arquivo?caminho=${encodeURIComponent(a)}&t=${encodeURIComponent(E.token)}">${a.split(/[\\/]/).pop()}</a>`).join("<br>") +
+      (E.janela ? `<br><button class="pequeno" id="b-abrir-qa">Abrir a pasta</button>` : "");
+    if (E.janela) $("#b-abrir-qa").onclick = () => window.pywebview.api.abrir_pasta(r.pasta);
+  });
   $("#fonte-dose").onchange = () => { E.fonte = $("#fonte-dose").value; E.sobre = {}; carregarSobre(); desenharDvh(); };
   const mostrarFonte = (f) => {
     const sel = $("#fonte-dose"); sel.classList.remove("oculto");
@@ -555,6 +578,7 @@ function atualizar(r) {
   $("#b-aprovar").disabled = !temPlano || aprovado || !r.dose_atualizada;
   $("#b-desaprovar").disabled = !aprovado;
   $("#b-exportar").disabled = !aprovado;
+  $("#b-qa").disabled = !(temPlano && r.dose_atualizada);
   $("#b-salvar").disabled = !temPlano; $("#b-relatorio").disabled = !temPlano; $("#b-rel-medico").disabled = !(temPlano && r.dose_atualizada);
   $("#b-checkfilm").disabled = !(temPlano && E.resumo.plano.campos.length);
   const pd = r.planos_dicom || [];
@@ -592,6 +616,9 @@ function atualizar(r) {
   listarCampos(); tabelas();
   $("#avisos").innerHTML = (r.avisos || []).map(a => `<li>${a}</li>`).join("");
   $("#n-avisos").textContent = (r.avisos || []).length || "";
+  if (p && p.tecnica === "IMRT" && $("#o-tecnica").value !== "IMRT") { $("#o-tecnica").value = "IMRT"; $("#o-tecnica").onchange(); }
+  if (p && p.objetivos_imrt && p.objetivos_imrt.length && !(E.objetivos || []).length) { E.objetivos = p.objetivos_imrt; listarObjetivos(); }
+  if (E.objetivos && E.objetivos.length) listarObjetivos();
   if (p && r.dose_atualizada) carregarChecklist(); else $("#checklist").innerHTML = p ? `<div class="pequeno-txt">Calcule a dose para conferir o plano.</div>` : "";
   { const res = r.resultado, b = $("#dmax-topo");
     const ok = r.dose_atualizada && res && res.dmax_gy != null && p;
@@ -684,6 +711,22 @@ async function calcular() {
   if (modo === "otimizado") fif = true;
   if (modo === "filtro") fif = { modo: "filtro", niveis: lerNiveis($("#o-fil-niveis").value), peso_pct: +$("#o-fil-peso").value,
     campos: Array.from($("#o-fil-campos").selectedOptions).map(o => o.value) };
+  if ($("#o-tecnica").value === "IMRT") {
+    const objetivos = (E.objetivos || []).map(o => ({ estrutura: o.estrutura, tipo: o.tipo, dose_gy: +String(o.dose_gy).replace(",", "."),
+      volume_pct: o.volume_pct === "" || o.volume_pct == null ? null : +String(o.volume_pct).replace(",", "."), peso: +o.peso || 1 }));
+    const corpo = { ...normalizacaoDoForm(), imrt: { objetivos, niveis: +$("#im-niveis").value, um_min: +$("#im-ummin").value,
+      area_min_cm2: +$("#im-area").value, peso_nto: +$("#im-nto").value, iteracoes: +$("#im-it").value } };
+    const t = setInterval(async () => {                    // etapa da otimização (o servidor responde sem a trava)
+      try { const pr = await fetch(`/api/${E.sid}/progresso`, { headers: { "X-Token": E.token } }).then(x => x.json());
+        if (pr.progresso) $("#ocupado-txt").textContent = pr.progresso; } catch (e) { /* ok */ }
+    }, 2000);
+    let r;
+    try { r = await api("POST", `/api/${E.sid}/calcular`, corpo, "Otimizando IMRT (pode levar alguns minutos)…"); } finally { clearInterval(t); }
+    atualizar(r);
+    const im = r.resultado.info.imrt;
+    if (im) aviso(`IMRT: ${Object.values(im.segmentos).reduce((a, b) => a + b, 0)} segmentos em ${Object.keys(im.segmentos).length} campos · ${im.um_total} UM · ${Math.round(im.tempo_s)} s`, true);
+    return;
+  }
   if (fif && fif.modo === "filtro") fif.ajuste_fino = $("#o-fil-fino").checked;
   const corpo = { otimizar_pesos: $("#o-pesos").checked, field_in_field: fif, compensador: comp, ...normalizacaoDoForm() };
   const oars = Object.entries(E.oarCfg || {}).filter(([n, o]) => o.on && E.resumo.estruturas.some(e => e.nome === n))
@@ -734,6 +777,26 @@ function listarOars() {
     E.oarCfg[n] = o; listarOars();
   }));
 }
+async function sugerirObjetivos() {
+  E.objetivos = await api("GET", `/api/${E.sid}/imrt/objetivos`);
+  listarObjetivos();
+}
+function listarObjetivos() {
+  const nomes = (E.resumo.estruturas || []).map(e => e.nome);
+  const tipos = { alvo: "alvo (uniforme)", min: "mínimo ≥", max: "máximo ≤", media: "média ≤", dvh: "DVH: V(Gy) ≤ vol%" };
+  $("#tab-objetivos tbody").innerHTML = (E.objetivos || []).map((o, k) => `<tr data-k="${k}">
+    <td><select data-c="estrutura">${nomes.map(n => `<option ${n === o.estrutura ? "selected" : ""}>${n}</option>`).join("")}</select></td>
+    <td><select data-c="tipo">${Object.entries(tipos).map(([v, t]) => `<option value="${v}" ${v === o.tipo ? "selected" : ""}>${t}</option>`).join("")}</select></td>
+    <td><input data-c="dose_gy" value="${o.dose_gy ?? ""}"></td>
+    <td><input data-c="volume_pct" value="${o.volume_pct ?? ""}" ${o.tipo === "dvh" ? "" : "disabled"}></td>
+    <td><input data-c="peso" type="number" min="0.1" step="0.5" value="${o.peso ?? 1}"></td>
+    <td><button class="pequeno" data-rem-obj="${k}">×</button></td></tr>`).join("");
+  $$("#tab-objetivos [data-c]").forEach(i => i.onchange = () => {
+    const k = +i.closest("tr").dataset.k; E.objetivos[k][i.dataset.c] = i.value; if (i.dataset.c === "tipo") listarObjetivos();
+  });
+  $$("[data-rem-obj]").forEach(b => b.onclick = () => { E.objetivos.splice(+b.dataset.remObj, 1); listarObjetivos(); });
+}
+
 async function carregarChecklist() {
   const el = $("#checklist");
   if (!E.sid || !E.resumo || !E.resumo.plano) { el.innerHTML = ""; return []; }

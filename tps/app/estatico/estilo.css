@@ -182,3 +182,8 @@ td.bom { color: var(--ok); } td.ruim { color: var(--perigo); } td.aviso { color:
 .chk span { display: inline-block; width: 14px; font-weight: 700; }
 .chk small { display: block; margin-left: 14px; color: var(--texto2, #8b95a3); }
 .chk-ok span { color: var(--ok); } .chk-aviso span { color: var(--aviso); } .chk-erro span, .chk-erro { color: var(--perigo); }
+#tab-objetivos input, #tab-objetivos select { padding: 1px 3px; font-size: 11px; }
+#tab-objetivos td:nth-child(1) select { max-width: 100px; }
+#tab-objetivos td:nth-child(2) select { max-width: 92px; }
+#tab-objetivos td:nth-child(3) input, #tab-objetivos td:nth-child(4) input, #tab-objetivos td:nth-child(5) input { width: 40px; }
+#o-tecnica { font-weight: 600; }

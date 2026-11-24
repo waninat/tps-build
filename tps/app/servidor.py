@@ -302,6 +302,27 @@ def calcular(sid: str, d: dict = Body(default={}), u: dict = Depends(usuario)):
     return r
 
 
+@app.post("/api/{sid}/imrt/campos")
+def imrt_campos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        r = s.campos_imrt(int(d.get("n", 7)), float(d.get("inicio", 0)), d.get("alvo") or None,
+                          float(d.get("margem_mm", 5)), float(d.get("colimador", 0)))
+    auditar(u, "imrt_campos", s, n=d.get("n"), inicio=d.get("inicio"))
+    return r
+
+
+@app.get("/api/{sid}/imrt/objetivos")
+def imrt_objetivos(sid: str, u: dict = Depends(usuario)):
+    return _s(sid).objetivos_imrt_sugeridos()
+
+
+@app.get("/api/{sid}/progresso")
+def progresso(sid: str, u: dict = Depends(usuario)):
+    """Etapa de um cálculo longo em andamento (sem a trava do cálculo)."""
+    return {"progresso": getattr(_s(sid), "progresso", None)}
+
+
 @app.post("/api/{sid}/densidade")
 def densidade(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     s = _s(sid)
@@ -608,6 +629,18 @@ def exportar(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
         e = d["enviar"]
         r["envio"] = s.enviar_dicom(r["arquivos"], e["host"], int(e["porta"]), e["ae_destino"], e.get("ae_local", "TPS"))
         auditar(u, "plano_enviado", s, destino=f"{e['ae_destino']}@{e['host']}:{e['porta']}")
+    return r
+
+
+@app.post("/api/{sid}/qa_paciente")
+def qa_paciente(sid: str, d: dict = Body(default={}), u: dict = Depends(usuario)):
+    s = _s(sid)
+    destino = d.get("pasta") or str(paths.home() / "exportados" / s.id / "QA")
+    pr = d.get("profundidade_iso_mm")
+    with TRAVA:
+        r = s.gerar_qa(destino, str(d.get("fantoma", "cubo30")), str(d.get("modo", "real")),
+                       float(pr) if pr not in (None, "") else None)
+    auditar(u, "qa_paciente", s, modo=r["modo"], arquivos=r["arquivos"])
     return r
 
 
