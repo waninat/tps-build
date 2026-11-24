@@ -32,13 +32,13 @@ class ApiJanela:
     """Funções do sistema que a página pode chamar (window.pywebview.api.*)."""
 
     def __init__(self):
-        self.janela = None
+        self._janela = None
 
     def escolher_pasta(self, inicial: str = "") -> str:
         import webview
         tipo = getattr(webview, "FileDialog", None)
         tipo = tipo.FOLDER if tipo else webview.FOLDER_DIALOG
-        r = self.janela.create_file_dialog(tipo, directory=inicial if inicial and Path(inicial).is_dir() else "")
+        r = self._janela.create_file_dialog(tipo, directory=inicial if inicial and Path(inicial).is_dir() else "")
         return (r[0] if isinstance(r, (list, tuple)) and r else r) or ""
 
     def abrir_pasta(self, caminho: str) -> bool:
@@ -83,7 +83,7 @@ def rodar(preparar, iniciar_servidor, titulo: str = "TPS", teste: bool = False) 
     api = ApiJanela()
     janela = webview.create_window(titulo, html=CARREGANDO, js_api=api, width=1600, height=960, min_size=(1100, 700),
                                    background_color="#0b0e12", confirm_close=not teste, text_select=True)
-    api.janela = janela
+    api._janela = janela
     estado = {"servidor": None, "codigo": 0}
 
     def etapa_na_tela(msg):
