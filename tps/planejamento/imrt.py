@@ -351,7 +351,9 @@ def otimizar_imrt(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
             fs, gs = suav(Fv)
             return f + fs, (mod.grad(gD) + gs) * livres
 
-        r = minimize(obj, F, jac=True, method="L-BFGS-B", bounds=[(0.0, None)] * len(F), options={"maxiter": 400})
+        r = minimize(obj, F, jac=True, method="L-BFGS-B", bounds=[(0.0, None)] * len(F),
+                     options={"maxiter": 400, "ftol": 1e-13, "gtol": 1e-11})
+        aviso(f"Fluência: custo {r.fun:.5f} ({r.nit} iterações)")
         F = r.x
         # ---- 2. sequenciamento
         aviso("Sequenciando os segmentos…")
@@ -397,7 +399,7 @@ def otimizar_imrt(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
                 return f, A.T @ gD
             bnds = [(0.0, None) if a_ else (0.0, 0.0) for a_ in ativo]
             rw = minimize(obj_w, np.where(ativo, w0, 0.0), jac=True, method="L-BFGS-B", bounds=bnds,
-                          options={"maxiter": 500})
+                          options={"maxiter": 500, "ftol": 1e-13, "gtol": 1e-11})
             w = rw.x
             fracos = ativo & ((w < um_min_segmento) | np.array([_area_cm2(s, colim) < area_min_cm2
                                                                for _, _, s, _, _ in lista]))
