@@ -57,6 +57,7 @@ class ResultadoVMAT:
     avisos: list = field(default_factory=list)
     tempo_s: float = 0.0
     restricoes: dict = field(default_factory=dict)
+    etapas: dict = field(default_factory=dict)        # custo em cada etapa (diagnóstico)
 
 
 # ------------------------------------------------------------------ geometria do arco
@@ -556,6 +557,7 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         fs, gs = suav(Fv)
         return f + fs, (mod.grad(gD) + gs) * livres
     F = I._minimizar_al(obj, F, [(0.0, None) if lv else (0.0, 0.0) for lv in livres], custo, mod.dose, 4, 400, aviso)
+    etapas = {"fluencia": round(float(custo(mod.dose(F))[0]), 5)}
 
     # ---- 2. sequenciamento em arco
     aviso("Sequenciando os arcos…")
@@ -642,7 +644,9 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
     def entregue(Ak, Bk, wv):
         return _fluencia_intervalos(Ak, Bk, wv, arcos, mapas, blocos, mod.n, mu0, linhas_arco)[0]
 
+    etapas["sequenciada_modelo"] = round(float(custo(mod.dose(entregue(Acp, Bcp, w)))[0]), 5)
     M = doses_intervalos(Acp, Bcp, "Calculando os pontos de controle com o motor completo")
+    etapas["sequenciada_motor"] = round(float(custo(M @ w)[0]), 5)
     aviso("Otimizando a UM dos pontos de controle…")
     w = otimizar_um(M, w)
     hist = [float(custo(M @ w)[0])]
@@ -720,5 +724,6 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         if t["tempo_s"] > 2.0 * t_min:
             avisos.append(f"{c.nome}: entrega estimada em {t['tempo_s']:.0f} s (o gantry desacelera esperando as "
                           f"lâminas ou a taxa de dose em {t['intervalos_limitados_lamina']} intervalos)")
+    etapas["final_fino"] = round(float(custo(D)[0]), 5)
     return ResultadoVMAT(resumo, round(sum(float(c.mu) for c in arcos_c), 1), hist, avisos,
-                         round(time.time() - t0, 1), restr)
+                         round(time.time() - t0, 1), restr, etapas)

@@ -1681,7 +1681,7 @@ class Sessao:
         self._registrar(f"VMAT: {len(r.arcos)} arco(s), {r.um_total:.0f} UM, entrega estimada "
                         f"{sum(a['tempo_s'] for a in r.arcos.values()):.0f} s, otimização {r.tempo_s:.0f} s")
         return {"arcos": r.arcos, "um_total": r.um_total, "custo": r.custo, "avisos": r.avisos,
-                "tempo_s": r.tempo_s, "restricoes": r.restricoes}
+                "tempo_s": r.tempo_s, "restricoes": r.restricoes, "etapas": r.etapas}
 
     def campos_vmat(self, n_arcos: int = 1, inicio: float = 181.0, fim: float = 179.0, sentido: str = "CW",
                     alvo: str | None = None, margem_mm: float = 5.0, colimadores: list | None = None) -> dict:
