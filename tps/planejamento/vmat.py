@@ -718,9 +718,11 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         if f2 < hist[-1]:
             Acp, Bcp, M, w = Ak, Bk, M2, w2
             hist.append(f2)
+            passo_mm = min(passo_mm * 1.5, 15.0)
         else:                                                  # passo grande demais para o modelo: encolhe
             passo_mm /= 2.0
-            avisos.append(f"Iteração {it + 1} das lâminas não melhorou o custo ({f2:.4f}); passo → {passo_mm:g} mm")
+            if passo_mm < 2.0:
+                break
 
     # ---- final: pontos de controle nos arcos e dose na grade do plano
     restr_viol = None
