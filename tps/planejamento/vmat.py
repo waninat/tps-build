@@ -171,6 +171,82 @@ def _tv(Q: np.ndarray) -> np.ndarray:
     return np.maximum(np.diff(np.hstack([z, Q, z]), axis=1), 0.0).sum(axis=1)
 
 
+def sequenciar_dinamico(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sentido: int, colim: Colimacao,
+                        lo: float, hi: float, fechados_em: np.ndarray | None = None,
+                        folga: float = 0.35) -> tuple[list, float]:
+    """Janela deslizante contínua (MLC dinâmico, Spirou & Chui) distribuída pelos n intervalos do setor.
+
+    Em cada par, a lâmina da frente e a de trás percorrem a faixa do par sempre no mesmo sentido: onde a fluência
+    sobe, a da frente anda no passo-base e a de trás atrasa o necessário; onde desce, o contrário. O tempo (em
+    intervalos) entre as duas passarem por um ponto é a fluência ali, sem quantização em níveis. O par começa o setor
+    fechado no início da faixa e termina fechado no fim — onde o setor seguinte (no sentido contrário) começa.
+    `folga`: fração mínima do tempo do setor para o deslocamento-base (lâminas mais lentas, um pouco mais de UM).
+    Devolve n + 1 aberturas (tempos 0..n; a última, fechada no fim da faixa, coincide com o primeiro ponto do setor
+    seguinte) e a UM por intervalo em unidades de fluência."""
+    res = float(u[1] - u[0])
+    g = colim.gap_minimo_mm
+    P = np.where(ab, np.maximum(Fc, 0.0), 0.0)
+    nv, nu = P.shape
+    if sentido < 0:
+        P, abs_ = P[:, ::-1], ab[:, ::-1]
+        s_col = -u[::-1]
+    else:
+        abs_, s_col = ab, u.astype(float)
+    if not (P.max() > 0):
+        return [], 0.0
+    comum = not getattr(colim, "interdigitacao", True)   # MLCi: todos os pares na faixa do setor (vizinhos juntos)
+    # MLCi: TODOS os pares andam juntos pela faixa do setor (os sem fluência fechados, na frente da varredura) —
+    # assim a não-interdigitação quase não precisa de reparo. Agility: só os pares com fluência, na própria faixa
+    linhas = list(range(nv)) if comum else [i for i in range(nv) if abs_[i].any() and P[i].max() > 0]
+    # fluência nas bordas das células da faixa de cada par, e a subida total (TV+)
+    perfis = {}
+    todas = np.nonzero(abs_.any(axis=0))[0]
+    for i in linhas:
+        cc = todas if comum else np.nonzero(abs_[i])[0]
+        j0, j1 = cc[0], cc[-1] + 1
+        f = P[i, j0:j1]
+        # fluência nas bordas das células; nas pontas da faixa vale a da célula (a lâmina de trás espera ali)
+        G = np.r_[f[0], 0.5 * (f[1:] + f[:-1]), f[-1]]
+        perfis[i] = (s_col[j0] - res / 2, G)
+    tv = max(float(np.maximum(np.diff(G), 0).sum() + G[0]) for _, G in perfis.values())
+    delta = tv / (n * (1.0 - folga))                     # fluência por intervalo
+    if fechados_em is None:
+        fechados_em = np.full(nv, 0.5 * (lo + hi))
+    parado = np.asarray(fechados_em, float) * (1 if sentido > 0 else -1)
+    A = np.repeat(parado[None, :] - g / 2, n + 1, axis=0)
+    B = np.repeat(parado[None, :] + g / 2, n + 1, axis=0)
+    aberto = np.zeros((n + 1, nv), bool)
+    ts = np.arange(n + 1, dtype=float)
+    for i in linhas:
+        x0, G = perfis[i]
+        G = G / delta                                     # em intervalos
+        dG = np.diff(G)
+        sobe = float(np.maximum(dG, 0).sum() + G[0])
+        ncel = len(dG)
+        c = (n - sobe) / ncel                             # passo-base (intervalos por célula)
+        tL = np.r_[0.0, np.cumsum(c + np.maximum(-dG, 0.0))]   # lâmina da frente
+        tT = tL + G                                       # a de trás passa G intervalos depois
+        bordas = x0 + res * np.arange(ncel + 1)
+        frente = np.interp(ts, tL, bordas)
+        tras = np.interp(ts, tT, bordas)
+        a, b = tras, frente
+        estreito = b - a < g
+        cc_ = 0.5 * (a + b)
+        a = np.where(estreito, cc_ - g / 2, a)
+        b = np.where(estreito, cc_ + g / 2, b)
+        A[:, i], B[:, i] = a, b
+        aberto[:, i] = True                                # em movimento: o reparo só ajusta as lâminas
+    out = []
+    for t in range(n + 1):
+        if sentido < 0:
+            a, b = -B[t].copy(), -A[t].copy()
+        else:
+            a, b = A[t].copy(), B[t].copy()
+        reparar(a, b, colim, lo, hi, aberto[t])
+        out.append((a, b))
+    return out, delta
+
+
 def sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sentido: int, colim: Colimacao,
                      lo: float, hi: float, fechados_em: np.ndarray | None = None, compensar: int = 4) -> tuple[list, float]:
     """Sequenciamento com compensação: o que as aberturas entregam a mais (fendas de gap mínimo dos pares que
@@ -199,8 +275,8 @@ def _sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sen
                       lo: float, hi: float, fechados_em: np.ndarray | None = None) -> tuple[list, float]:
     """Fluência do setor → n aberturas (a, b) e o nível de fluência de cada abertura. Pares com perfil de um pico só:
     close-in (sentido +1: do mais largo ao mais estreito; −1: o contrário). Os outros: janela deslizante
-    unidirecional (sentido +1: da esquerda para a direita). Cada par usa ≤ n intervalos do sweep (Bortfeld) em pontos
-    seguidos; nos outros espera fechado no começo ou no fim da sua própria faixa (lâminas sempre no mesmo sentido).
+    unidirecional (sentido +1: da esquerda para a direita). Nos pontos sem intervalo o par espera fechado no
+    começo/fim da sua faixa (ou no pico, no close-in). Hoje o padrão é sequenciar_dinamico; este fica como opção.
     Pares sem fluência no setor ficam parados, fechados em `fechados_em` (mm no BEV; padrão: centro)."""
     res = float(u[1] - u[0])
     g = colim.gap_minimo_mm
@@ -229,57 +305,44 @@ def _sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sen
     B = np.zeros((n, nv))
     aberto = np.zeros((n, nv), bool)
     for i in range(nv):
-        qmax = int(Q[i].max()) if i in linhas_ab else 0
-        if 0 < qmax and _tv(Q[i:i + 1])[0] == qmax:
-            # perfil de um pico só: "close-in" (conjuntos de nível, do mais largo ao mais estreito ou ao contrário);
-            # cada lâmina anda só meia faixa por setor e o setor seguinte começa onde este terminou
-            ivs = []
-            for t in range(1, qmax + 1):
-                cc = np.nonzero(Q[i] >= t)[0]
-                ivs.append((cc[0], cc[-1] + 1))
-            je, jd = ivs[-1]
-            pico = 0.5 * (s_col[je] - res / 2 + s_col[jd - 1] + res / 2)
-            ordem = ivs if sentido > 0 else ivs[::-1]
-            t0 = 0 if sentido > 0 else n - qmax
-            for t in range(n):
-                k = t - t0
-                if 0 <= k < qmax:
-                    e, d = s_col[ordem[k][0]] - res / 2, s_col[ordem[k][1] - 1] + res / 2
-                    if d - e < g:
-                        cc_ = 0.5 * (e + d)
-                        e, d = cc_ - g / 2, cc_ + g / 2
-                    A[t, i], B[t, i] = e, d
-                    aberto[t, i] = True
-                else:
-                    A[t, i], B[t, i] = pico - g / 2, pico + g / 2
+        if i not in linhas_ab or int(Q[i].max()) == 0:      # par sem fluência: parado, fechado
+            A[:, i], B[:, i] = parado[i] - g / 2, parado[i] + g / 2
             continue
-        ivs = I.intervalos_sweep(Q[i]) if i in linhas_ab else []
-        if i in linhas_ab:
-            cc = np.nonzero(abs_[i])[0]
-            s_ini, s_fim = s_col[cc[0]] - res / 2, s_col[cc[-1]] + res / 2
-        m = len(ivs)
-        # intervalos em pontos seguidos, centrados no setor; antes deles o par espera fechado no início da
-        # varredura e depois, no fim — assim as duas lâminas só andam num sentido
-        slots = (n - m) // 2 + np.arange(m)
-        bordas = {}
-        for (je, jd), t in zip(ivs, slots):
-            bordas[int(t)] = (s_col[je] - res / 2, s_col[jd - 1] + res / 2)
-        ts = sorted(bordas)
+        qmax = int(Q[i].max())
+        cc = np.nonzero(abs_[i])[0]
+        s_ini, s_fim = s_col[cc[0]] - res / 2, s_col[cc[-1]] + res / 2
+        um_pico = _tv(Q[i:i + 1])[0] == qmax
+        if um_pico:
+            # perfil de um pico só: close-in (conjuntos de nível, do mais largo ao mais estreito ou ao contrário)
+            idx_ = []
+            for t in range(1, qmax + 1):
+                c_ = np.nonzero(Q[i] >= t)[0]
+                idx_.append((c_[0], c_[-1] + 1))
+            if sentido < 0:
+                idx_ = idx_[::-1]
+        else:
+            idx_ = I.intervalos_sweep(Q[i])                  # janela deslizante (Bortfeld), em ordem
+        jan = [(s_col[je] - res / 2, s_col[jd - 1] + res / 2) for je, jd in idx_]
+        m = len(jan)
+        t0 = (n - m) // 2 if not um_pico else (0 if sentido > 0 else n - m)
+        if um_pico:
+            je, jd = idx_[-1] if sentido > 0 else idx_[0]
+            espera = 0.5 * (s_col[je] - res / 2 + s_col[jd - 1] + res / 2)
         for t in range(n):
-            if t in bordas:
-                e, d = bordas[t]
+            k = t - t0
+            if 0 <= k < m:
+                e, d = jan[k]
                 if d - e < g:
-                    cc = 0.5 * (e + d)
-                    e, d = cc - g / 2, cc + g / 2
+                    c_ = 0.5 * (e + d)
+                    e, d = c_ - g / 2, c_ + g / 2
                 A[t, i], B[t, i] = e, d
                 aberto[t, i] = True
-                continue
-            if ts and t > ts[-1]:
+            elif um_pico:
+                A[t, i], B[t, i] = espera - g / 2, espera + g / 2
+            elif k >= m:
                 A[t, i], B[t, i] = s_fim - g, s_fim
-            elif ts:
+            else:
                 A[t, i], B[t, i] = s_ini, s_ini + g
-            else:                                            # par sem fluência: parado, fechado
-                A[t, i], B[t, i] = parado[i] - g / 2, parado[i] + g / 2
     out = []
     for t in range(n):
         if sentido < 0:                                      # de volta às coordenadas do BEV
@@ -494,6 +557,7 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
                   flash_mm: float = 0.0, flash_pele_mm: float = 5.0, grade_grossa: bool = True,
                   polimento_fino: bool = True, passo_aberto: int = 2,
                   espacamento_cp_graus: float | None = None, segurar: bool = False, um_exata: bool = True,
+                  dinamico: bool = True, folga: float = 0.35,
                   _so_sequenciar: bool = False) -> ResultadoVMAT:
     """Otimiza os arcos do plano (campos com arco_fim/sentido). objetivos: imrt.Objetivo. evitar: [(nome, máscara,
     modo)]; flash_mm > 0 liga o auto-flash."""
@@ -672,6 +736,7 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         B = np.zeros((N + 1, colim.n_pares))
         lo, hi = limites_x[k]
         parado = np.full(colim.n_pares, 0.5 * (lo + hi))
+        fim_setor = None
         for q, (s0, s1, cs) in enumerate(arco["setores"]):
             bl = blocos[cs.nome]
             u, v, ab = mapas[cs.nome]
@@ -682,7 +747,11 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
                 Fc = np.where(zf, Fc[ii, jj], Fc)
             nint = s1 - s0
             nslots = max(nint // 2, 1) if segurar else nint
-            ap, delta = sequenciar_setor(Fc, ab, u, nslots, 1 if q % 2 == 0 else -1, colim, lo, hi, parado)
+            if dinamico and not segurar:
+                ap, delta = sequenciar_dinamico(Fc, ab, u, nslots, 1 if q % 2 == 0 else -1, colim, lo, hi, parado,
+                                                folga=folga)
+            else:
+                ap, delta = sequenciar_setor(Fc, ab, u, nslots, 1 if q % 2 == 0 else -1, colim, lo, hi, parado)
             if _so_sequenciar:
                 _dump.append((Fc.copy(), ab.copy(), u.copy(), s1 - s0, 1 if q % 2 == 0 else -1, lo, hi,
                               None if parado is None else np.array(parado)))
@@ -703,12 +772,16 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
                     hold = t % 2 == 0 and t // 2 < len(ap)
                     w[arco["ofs_w"][s0 + t]] = delta * mu0 if hold else 0.0
             else:
-                for t, (a, b) in enumerate(ap):
-                    A[s0 + t], B[s0 + t] = a, b
                 for t in range(nint):
+                    A[s0 + t], B[s0 + t] = ap[min(t, len(ap) - 1)]
                     w[arco["ofs_w"][s0 + t]] = delta * mu0
+                if len(ap) > nint:                             # dinâmico: estado final (fechado no fim da faixa)
+                    fim_setor = ap[nint]
             parado = 0.5 * (ap[-1][0] + ap[-1][1])
-        A[N], B[N] = A[N - 1], B[N - 1]
+        if dinamico and not segurar and fim_setor is not None:
+            A[N], B[N] = fim_setor
+        else:
+            A[N], B[N] = A[N - 1], B[N - 1]
         Acp.append(A)
         Bcp.append(B)
     w = np.clip(w, np.concatenate([lim.um_por_grau_min * a["dtheta"] for a in arcos]),

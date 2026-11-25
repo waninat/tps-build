@@ -66,6 +66,37 @@ def test_sequenciamento_do_setor_reproduz_a_fluencia_e_varre_num_sentido():
                 assert np.abs(np.diff(M, axis=0)).sum(axis=0).max() <= 80 + 5
 
 
+@pytest.mark.parametrize("maq", ["radioserra_precise", "oncomed_synergy_154828"])
+def test_janela_deslizante_continua(maq):
+    """MLC dinâmico (Spirou & Chui): reproduz a fluência, lâminas sem saltos, começa e termina fechado."""
+    col = _colim(maq)
+    u = np.arange(-50, 50, 2.5) + 1.25
+    nv = col.n_pares
+    ab = np.zeros((nv, len(u)), bool)
+    meio = nv // 2
+    ab[meio - 5:meio + 5, 4:36] = True
+    yy, xx = np.mgrid[0:nv, 0:len(u)]
+    F = np.where(ab, 1.0 + 0.5 * np.sin(xx / 5.0) + 0.3 * np.cos(yy / 4.0), 0.0)
+    for sentido in (1, -1):
+        ap, delta = V.sequenciar_dinamico(F, ab, u, 20, sentido, col, -60, 60, folga=0.35)
+        assert len(ap) == 21
+        A = np.array([a for a, _ in ap])
+        B = np.array([b for _, b in ap])
+        for a, b in ap:
+            c = Campo("x", 0, jaw_x=(-60, 60), jaw_y=(-200, 200), mlc_a=list(a), mlc_b=list(b))
+            assert not verificar_mecanica(c, col)
+        passo = np.maximum(np.abs(np.diff(A[:, meio - 5:meio + 5], axis=0)),
+                           np.abs(np.diff(B[:, meio - 5:meio + 5], axis=0)))
+        assert passo.max() < 20.0                                          # sem saltos
+        assert np.all(B[0] - A[0] <= col.gap_minimo_mm + 1.0)              # começa fechado
+        assert np.all(B[-1] - A[-1] <= col.gap_minimo_mm + 1.0)            # termina fechado
+        res = 2.5
+        ent = sum(I._cobertura(0.5 * (ap[t][0] + ap[t + 1][0]), 0.5 * (ap[t][1] + ap[t + 1][1]), u, res)[0]
+                  for t in range(20)) * delta
+        erro = np.abs(ent - F)[ab].sum() / F[ab].sum()
+        assert erro < 0.06
+
+
 def test_intervalos_do_arco_e_exportacao_dynamic(tmp_path):
     from tps.exportacao.rtplan import _feixes_para_exportar
     col = _colim("radioserra_precise")
