@@ -171,7 +171,31 @@ def _tv(Q: np.ndarray) -> np.ndarray:
 
 
 def sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sentido: int, colim: Colimacao,
-                     lo: float, hi: float, fechados_em: np.ndarray | None = None) -> tuple[list, float]:
+                     lo: float, hi: float, fechados_em: np.ndarray | None = None, compensar: int = 4) -> tuple[list, float]:
+    """Sequenciamento com compensação: o que as aberturas entregam a mais (fendas de gap mínimo dos pares que
+    esperam fechados dentro do campo, aberturas alargadas até o gap mínimo, ajustes de não-interdigitação) é
+    descontado da fluência pedida e o setor é sequenciado de novo (ponto fixo); fica o de menor erro."""
+    res = float(u[1] - u[0])
+    pedido = np.where(ab, np.maximum(Fc, 0.0), 0.0)
+    alvo = pedido.copy()
+    melhor = None
+    for it in range(compensar + 1):
+        ap, delta = _sequenciar_setor(alvo, ab, u, n, sentido, colim, lo, hi, fechados_em)
+        if not ap:
+            return ap, delta
+        entregue = sum(I._cobertura(a, b, u, res)[0] for a, b in ap) * delta * ab
+        erro = entregue - pedido
+        e2 = float((erro * erro).sum())
+        if melhor is None or e2 < melhor[0]:
+            melhor = (e2, ap, delta)
+        if it == compensar or e2 < 1e-12:
+            break
+        alvo = np.maximum(alvo - erro, 0.0)
+    return melhor[1], melhor[2]
+
+
+def _sequenciar_setor(Fc: np.ndarray, ab: np.ndarray, u: np.ndarray, n: int, sentido: int, colim: Colimacao,
+                      lo: float, hi: float, fechados_em: np.ndarray | None = None) -> tuple[list, float]:
     """Fluência do setor → n aberturas (a, b) e o nível de fluência de cada abertura. Pares com perfil de um pico só:
     close-in (sentido +1: do mais largo ao mais estreito; −1: o contrário). Os outros: janela deslizante
     unidirecional (sentido +1: da esquerda para a direita). Cada par usa ≤ n intervalos do sweep (Bortfeld) em pontos
@@ -464,11 +488,12 @@ def _pontos_controle(arco, A, B, wk, jaws_k) -> list[dict]:
 def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objetivos: list, corpo: np.ndarray,
                   colim: Colimacao, modelo, limites: LimitesVMAT | None = None, setor_graus: float = 40.0,
                   iteracoes: int = 2, margem_mm: float = 5.0, res_u_mm: float = 2.5, sigma_mm: tuple = (3.0, 3.5),
-                  peso_nto: float = 1.0, suavidade: float = 0.2, kernels=None, posicao: str = "HFS",
+                  peso_nto: float = 1.0, suavidade: float = 2.0, kernels=None, posicao: str = "HFS",
                   permitir_demonstracao: bool = False, progresso=None, evitar: list | None = None,
                   flash_mm: float = 0.0, flash_pele_mm: float = 5.0, grade_grossa: bool = True,
                   polimento_fino: bool = True, passo_aberto: int = 2,
-                  espacamento_cp_graus: float | None = None, _so_sequenciar: bool = False) -> ResultadoVMAT:
+                  espacamento_cp_graus: float | None = None, segurar: bool = False,
+                  _so_sequenciar: bool = False) -> ResultadoVMAT:
     """Otimiza os arcos do plano (campos com arco_fim/sentido). objetivos: imrt.Objetivo. evitar: [(nome, máscara,
     modo)]; flash_mm > 0 liga o auto-flash."""
     t0 = time.time()
@@ -638,6 +663,8 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
     # ---- 2. sequenciamento em arco
     aviso("Sequenciando os arcos…")
     Acp, Bcp, w = [], [], np.zeros(nW)
+    Fquant, Fslot = np.zeros(mod.n), np.zeros(mod.n)
+    _dump = []
     for k, arco in enumerate(arcos):
         N = len(arco["setor_int"])
         A = np.zeros((N + 1, colim.n_pares))
@@ -652,16 +679,34 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
             if zf is not None and zf.any() and (ab & ~zf).any():
                 _, (ii, jj) = distance_transform_edt(~(ab & ~zf), return_indices=True)
                 Fc = np.where(zf, Fc[ii, jj], Fc)
-            ap, delta = sequenciar_setor(Fc, ab, u, s1 - s0, 1 if q % 2 == 0 else -1, colim, lo, hi, parado)
+            nint = s1 - s0
+            nslots = max(nint // 2, 1) if segurar else nint
+            ap, delta = sequenciar_setor(Fc, ab, u, nslots, 1 if q % 2 == 0 else -1, colim, lo, hi, parado)
+            if _so_sequenciar:
+                _dump.append((Fc.copy(), ab.copy(), u.copy(), s1 - s0, 1 if q % 2 == 0 else -1, lo, hi,
+                              None if parado is None else np.array(parado)))
+            if _so_sequenciar and ap:                          # diagnóstico: quantização e aberturas sem média
+                Fquant[bl["ofs"]:bl["ofs"] + bl["n"]] = (np.rint(Fc / delta) * delta * ab).ravel()
+                Fslot[bl["ofs"]:bl["ofs"] + bl["n"]] = (sum(I._cobertura(a, b, u, u[1] - u[0])[0] for a, b in ap)
+                                                        * delta * ab).ravel()
             if not ap:                                         # setor sem fluência: fechado no centro
                 cc = 0.5 * (lo + hi)
                 ap = [(np.full(colim.n_pares, cc - colim.gap_minimo_mm / 2),
                        np.full(colim.n_pares, cc + colim.gap_minimo_mm / 2))] * (s1 - s0)
-            for t, (a, b) in enumerate(ap):
-                A[s0 + t], B[s0 + t] = a, b
+            if segurar:
+                # cada abertura fica parada em dois pontos seguidos (o intervalo entre eles entrega exatamente a
+                # abertura); no intervalo seguinte as lâminas andam para a próxima com a UM mínima
+                for t in range(nint):
+                    a, b = ap[min(t // 2, len(ap) - 1)]
+                    A[s0 + t], B[s0 + t] = a, b
+                    hold = t % 2 == 0 and t // 2 < len(ap)
+                    w[arco["ofs_w"][s0 + t]] = delta * mu0 if hold else 0.0
+            else:
+                for t, (a, b) in enumerate(ap):
+                    A[s0 + t], B[s0 + t] = a, b
+                for t in range(nint):
+                    w[arco["ofs_w"][s0 + t]] = delta * mu0
             parado = 0.5 * (ap[-1][0] + ap[-1][1])
-            for t in range(s1 - s0):
-                w[arco["ofs_w"][s0 + t]] = delta * mu0
         A[N], B[N] = A[N - 1], B[N - 1]
         Acp.append(A)
         Bcp.append(B)
@@ -700,6 +745,9 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
             Fq[bl["ofs"]:bl["ofs"] + bl["n"]] += (w[o] / mu0 * m * ab).ravel()
     etapas["sequenciada_modelo_setor"] = round(float(custo(mod.dose(Fq))[0]), 5)
     if _so_sequenciar:
+        etapas["quantizada"] = round(float(custo(mod.dose(Fquant))[0]), 5)
+        etapas["aberturas_sem_media"] = round(float(custo(mod.dose(Fslot))[0]), 5)
+        etapas["_setores"] = _dump
         return ResultadoVMAT({}, 0.0, [], avisos, round(time.time() - t0, 1), {}, etapas)
 
     # ---- 3. otimização direta dos pontos de controle
