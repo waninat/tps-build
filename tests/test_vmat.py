@@ -165,7 +165,7 @@ def test_vmat_de_ponta_a_ponta(cli):
     r = _ok(c.post(f"/api/{sid}/calcular", json={"metodo": "media_alvo", "vmat": {
         "objetivos": obj, "iteracoes": 1, "setor_graus": 32}}))
     vm = r["resultado"]["info"]["vmat"]
-    assert r["plano"]["tecnica"] == "VMAT" and vm["arcos"]["ARCO1"]["pontos"] == 91
+    assert r["plano"]["tecnica"] == "VMAT" and vm["arcos"]["ARCO1"]["pontos"] == 180
     assert 0 < vm["arcos"]["ARCO1"]["tempo_s"] < 300
     est = r["resultado"]["estatisticas"]
     assert est["PTV_fantoma"]["D95"] > 0.93 * 50
@@ -178,12 +178,12 @@ def test_vmat_de_ponta_a_ponta(cli):
     # recálculo sem a opção VMAT mantém os pontos de controle e a dose
     d95 = est["PTV_fantoma"]["D95"]
     r2 = _ok(c.post(f"/api/{sid}/calcular", json={}))
-    assert r2["plano"]["campos"][0]["n_pontos"] == 91
+    assert r2["plano"]["campos"][0]["n_pontos"] == 180
     assert r2["resultado"]["estatisticas"]["PTV_fantoma"]["D95"] == pytest.approx(d95, abs=0.05)
     # QA (gantry 0): o RTPLAN é o arco real
     qa = _ok(c.post(f"/api/{sid}/qa_paciente", json={"modo": "gantry0", "fantoma": "cubo30"}))
     rp = pydicom.dcmread(qa["arquivos"][0])
-    assert rp.BeamSequence[0].BeamType == "DYNAMIC" and len(rp.BeamSequence[0].ControlPointSequence) == 91
+    assert rp.BeamSequence[0].BeamType == "DYNAMIC" and len(rp.BeamSequence[0].ControlPointSequence) == 180
     # exportação: feixe DYNAMIC, gantry andando no sentido CW, UM acumulada crescente
     _ok(c.post(f"/api/{sid}/aprovar", json={"senha": "senha-forte-1", "justificativa": "Teste automático do VMAT"}))
     ex = _ok(c.post(f"/api/{sid}/exportar", json={"senha": "senha-forte-1", "rtstruct": False}))

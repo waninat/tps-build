@@ -29,7 +29,7 @@ vmat:                                 # limites usados na otimização e na esti
   um_por_grau_min: 0.1
   um_por_grau_max: 20.0
   deslocamento_max_mm_grau: 6.0
-  espacamento_cp_graus: 4.0
+  espacamento_cp_graus: 2.0
   max_pontos_arco: 360                # limite de pontos de controle por arco no Mosaiq/Integrity — CONFIRMAR
 cunha_motorizada: null           # fora do escopo: o serviço não usa cunha
 dados_de_feixe:
