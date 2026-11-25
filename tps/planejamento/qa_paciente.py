@@ -39,7 +39,8 @@ FANTOMAS = {
 
 def plano_verificacao(plano: Plano, colim, modelo, fantoma: str | FantomaVirtual = "cubo30", modo: str = "real",
                       profundidade_iso_mm: float | None = None, voxel_mm: float = 2.5, kernels=None,
-                      permitir_demonstracao: bool = False) -> ResultadoQA:
+                      permitir_demonstracao: bool = False, algoritmo: str = "CCC", incerteza_pct: float = 1.0,
+                      progresso=None) -> ResultadoQA:
     if modo not in ("real", "gantry0"):
         raise ValueError("Modo deve ser 'real' ou 'gantry0'")
     if not plano.campos or not all(c.mu for c in plano.campos):
@@ -67,7 +68,11 @@ def plano_verificacao(plano: Plano, colim, modelo, fantoma: str | FantomaVirtual
                 p["gantry"] = 0.0
             if not c.e_arco:
                 c.gantry, c.mesa = 0.0, 0.0
-    doses = calculo.dose_por_um(g, calc, colim, modelo, kernels, "HFS", permitir_demonstracao)
+    if algoritmo == "MC":                                # o mesmo algoritmo da dose aprovada do paciente
+        doses, _ = calculo.dose_por_um_mc(g, calc, colim, modelo, kernels, "HFS", permitir_demonstracao,
+                                          incerteza_pct=incerteza_pct, dose_na_agua=True, progresso=progresso)
+    else:
+        doses = calculo.dose_por_um(g, calc, colim, modelo, kernels, "HFS", permitir_demonstracao)
     d = sum(float(c.mu) * doses[c.nome] for c in qa.campos)
     jy = int(np.argmin(np.abs(g.y - iso[1])))
     return ResultadoQA(qa, g, d.astype(np.float32), iso, d[:, jy, :].astype(np.float32), (g.x, g.z))

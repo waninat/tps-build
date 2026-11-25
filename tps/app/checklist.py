@@ -165,6 +165,19 @@ def checklist(sessao) -> list[dict]:
                   if a.get("tempo_s", 0) > 240]
         if lentos:
             out.append(_item("vmat_tempo", "VMAT: tempo de entrega", "aviso", ", ".join(lentos)))
+    cd = getattr(p, "calculo_dose", None) or {}
+    if cd.get("algoritmo") == "MC":
+        inc = float(cd.get("incerteza_obtida_pct") or 0)
+        out.append(_item("mc", "Monte Carlo: incerteza estatística", "ok" if inc <= 1.5 else ("aviso" if inc <= 3 else "erro"),
+                         f"{inc:.2f}% (1σ, voxels > 50% da dose máxima) · "
+                         f"{'dose na água' if cd.get('dose_na_agua') else 'dose no meio'}"))
+        if p.tecnica == "VMAT" and not (s.maquina.modelo.mc_spectrum_hardening_k is not None):
+            out.append(_item("mc_comissionamento", "Monte Carlo: comissionamento", "aviso",
+                             "espectro e contaminação do MC ajustados ao modelo CCC (provisório) — falta validar com "
+                             "medidas em água e em fantoma heterogêneo"))
+    elif p.tecnica == "VMAT":
+        out.append(_item("mc", "VMAT calculado com collapsed cone", "aviso",
+                         "o padrão do VMAT é a dose final por Monte Carlo"))
     if not p.campos_setup:
         out.append(_item("setup", "Campos de localização", "aviso", "nenhum campo de setup (imagem de posicionamento)"))
     return out

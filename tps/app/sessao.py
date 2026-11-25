@@ -1495,6 +1495,9 @@ class Sessao:
             self._remover_derivados()                           # importado: segmentos e UM são os do plano original
         p.modelo_feixe = self._info_modelo()
         self.avisos = []
+        algoritmo = self._algoritmo(opcoes)
+        if not so_normalizar:
+            self._restaurar_ccc()                               # os otimizadores trabalham com o collapsed cone
         try:
             faltam = [c for c in p.campos if c.nome not in self.doses_um and not (c.e_arco and not c.pontos_controle)]
             if faltam:
@@ -1577,6 +1580,8 @@ class Sessao:
                 info["compensador"] = {"segmentos": r.n_segmentos, "hi_antes": r.hi_antes, "hi_depois": r.hi_depois,
                                        "historico": r.historico, "avisos": r.avisos}
                 self.avisos = list(r.avisos)
+            if not so_normalizar:
+                self._aplicar_algoritmo(algoritmo, info)        # Monte Carlo: troca a dose/UM de cada campo
             if pr.metodo == "um_fixas":
                 if (opcoes.get("otimizar_pesos") or opcoes.get("field_in_field") or opcoes.get("compensador")
                         or opcoes.get("proteger_oars") or opcoes.get("imrt") or opcoes.get("vmat")):
@@ -1609,6 +1614,85 @@ class Sessao:
         self.dose_atualizada = True
         self._registrar(f"Dose calculada ({len(p.campos)} campos)")
         return self.resumo()
+
+    # ================================================================== algoritmo da dose final (CCC ou Monte Carlo)
+    def _hash_campo(self, c) -> str:
+        """Conteúdo do campo que muda a dose por UM (sem UM e peso)."""
+        import hashlib
+        import json
+        d = {k: v for k, v in dataclasses.asdict(c).items() if k not in ("mu", "peso") and not k.startswith("_")}
+        return hashlib.sha256(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+    def _algoritmo(self, opcoes: dict | None = None) -> dict:
+        """Algoritmo da dose final do plano. VMAT: Monte Carlo por padrão; o resto: collapsed cone."""
+        p = self.plano
+        cd = dict(p.calculo_dose or {})
+        if opcoes and opcoes.get("algoritmo"):
+            alg = str(opcoes["algoritmo"]).upper()
+            if alg not in ("CCC", "MC"):
+                raise ErroUsuario("Algoritmo de dose: CCC ou MC")
+            cd["algoritmo"] = alg
+        if opcoes and opcoes.get("incerteza_mc") not in (None, ""):
+            inc = float(opcoes["incerteza_mc"])
+            if not 0.3 <= inc <= 5.0:
+                raise ErroUsuario("Incerteza do Monte Carlo entre 0,3% e 5%")
+            cd["incerteza_pct"] = inc
+        if opcoes and opcoes.get("dose_na_agua") is not None:
+            cd["dose_na_agua"] = bool(opcoes["dose_na_agua"])
+        vmat = p.tecnica == "VMAT" or bool(opcoes and opcoes.get("vmat"))
+        cd.setdefault("algoritmo", "MC" if vmat else "CCC")
+        cd.setdefault("incerteza_pct", 1.0)
+        cd.setdefault("dose_na_agua", False)
+        return cd
+
+    def _restaurar_ccc(self) -> None:
+        """Volta a dose/UM do collapsed cone dos campos que não mudaram (a do MC fica guardada à parte)."""
+        guard = getattr(self, "_ccc_guardado", None)
+        if not guard:
+            return
+        self.doses_um = {}
+        for c in self.plano.campos:
+            h, d = guard.get(c.nome, (None, None))
+            if h == self._hash_campo(c):
+                self.doses_um[c.nome] = d
+        self._ccc_guardado = None
+
+    def _aplicar_algoritmo(self, cd: dict, info: dict) -> None:
+        p, m, g = self.plano, self.maquina, self.grade
+        if cd["algoritmo"] != "MC":
+            p.calculo_dose = {} if p.tecnica != "VMAT" else {**cd}
+            return
+        if not hasattr(self, "_mc_cache"):
+            self._mc_cache = {}
+        self._ccc_guardado = {c.nome: (self._hash_campo(c), self.doses_um[c.nome]) for c in p.campos}
+        import hashlib
+        eta_h = hashlib.sha1(np.ascontiguousarray(g.eta).tobytes()).hexdigest()[:12]   # densidades forçadas mudam
+        chave = (f"{cd['incerteza_pct']}|{cd['dose_na_agua']}|{calculo.hash_modelo(m.modelo)}|{p.posicao_paciente}"
+                 f"|{eta_h}")
+        faltam = [c for c in p.campos if (self._mc_cache.get(c.nome) or ("",))[0] != self._hash_campo(c) + chave]
+        if faltam:
+            def prog(msg):
+                self.progresso = f"Monte Carlo: {msg}"
+            try:
+                doses, inf = calculo.dose_por_um_mc(g, faltam, m.colim, m.modelo, posicao=p.posicao_paciente,
+                                                    incerteza_pct=float(cd["incerteza_pct"]) * np.sqrt(
+                                                        len(faltam) / max(len(p.campos), 1)),
+                                                    dose_na_agua=bool(cd["dose_na_agua"]), progresso=prog)
+            finally:
+                self.progresso = None
+            for c in faltam:
+                self._mc_cache[c.nome] = (self._hash_campo(c) + chave, doses[c.nome], inf[c.nome])
+        self.doses_um = {c.nome: self._mc_cache[c.nome][1] for c in p.campos}
+        por_campo = {c.nome: self._mc_cache[c.nome][2] for c in p.campos}
+        sig = [v["incerteza_pct"] for v in por_campo.values()]
+        inc_plano = float(np.sqrt(np.sum(np.square(sig)))) / max(len(sig), 1)
+        p.calculo_dose = {**cd, "incerteza_obtida_pct": round(inc_plano, 2)}
+        info["mc"] = {"incerteza_pct": round(inc_plano, 2), "campos": por_campo,
+                      "dose_na_agua": bool(cd["dose_na_agua"]),
+                      "historias": int(sum(v["historias"] for v in por_campo.values())),
+                      "tempo_s": round(sum(v["tempo_s"] for v in por_campo.values()), 1)}
+        self._registrar(f"Dose por Monte Carlo (incerteza {inc_plano:.2f}%, "
+                        f"{'dose na água' if cd['dose_na_agua'] else 'dose no meio'})")
 
     def _objetivos_otimizacao(self, im: dict) -> tuple[list, list, list]:
         """Objetivos (imrt.Objetivo), o que fica gravado no plano e a avoidance, a partir do pedido da tela."""
@@ -1915,26 +1999,38 @@ class Sessao:
         p, m, g = self.plano, self.maquina, self.grade
         if calculo.hash_modelo(m.modelo) != p.modelo_feixe.get("hash"):
             raise ErroUsuario("O modelo de feixe mudou desde a aprovação: desaprove e recalcule o plano")
-        faltam = [c for c in p.campos if c.nome not in self.doses_um]
-        if faltam:
-            self.doses_um.update(calculo.dose_por_um(g, faltam, m.colim, m.modelo))
+        cd = dict(p.calculo_dose or {})
+        info = {"recalculo_aprovado": True}
+        if cd.get("algoritmo") == "MC":
+            self._restaurar_ccc()
+            faltam = [c for c in p.campos if c.nome not in self.doses_um]
+            if faltam:
+                self.doses_um.update(calculo.dose_por_um(g, faltam, m.colim, m.modelo))
+            self._aplicar_algoritmo(self._algoritmo(), info)
+        else:
+            faltam = [c for c in p.campos if c.nome not in self.doses_um]
+            if faltam:
+                self.doses_um.update(calculo.dose_por_um(g, faltam, m.colim, m.modelo))
         self.dose_fx = sum(c.mu * self.doses_um[c.nome] for c in p.campos)
         pr = p.prescricao
         alvo = self.estruturas[pr.estrutura_alvo].mascara if pr.estrutura_alvo in self.estruturas else None
         val = calculo.metrica_normalizacao(self.dose_fx, p, g, alvo)
         esperado = pr.dose_fracao_gy * 100.0 / pr.isodose_pct
-        if abs(val / esperado - 1) > 0.005:
+        # MC: a dose recalculada tem a mesma incerteza estatística do cálculo aprovado
+        tol = 0.005 if cd.get("algoritmo") != "MC" else max(0.005, 2 * float(cd.get("incerteza_obtida_pct", 1.0)) / 100)
+        if abs(val / esperado - 1) > tol:
             raise ErroUsuario(f"A dose recalculada não reproduz a prescrição ({val:.4f} × {esperado:.4f} Gy/fx)")
         total = self.dose_fx * pr.fracoes
         hist = {n: dvh(total, e.mascara, g.voxel_cc) for n, e in self.estruturas.items() if e.mascara.any()}
         conf = conferir_plano(p, m.colim, m.tabelas, self.doses_um, g,
                               ponto_mm=pr.ponto_mm if pr.metodo == "ponto" else None) if m.tabelas else []
         for k in conf:
-            k["compensado"] = bool(self._campo(k["campo"]).segmentos)
-        if p.tecnica == "IMRT" and m.tabelas and alvo is not None:
+            c = self._campo(k["campo"])
+            k["compensado"] = bool(c.segmentos or c.pontos_controle)
+        if p.tecnica in ("IMRT", "VMAT") and m.tabelas and alvo is not None:
             conf.append(self._conferencia_composta(alvo))
         corpo = self._corpo()
-        self.resultado = {"dvh": hist, "conferencia_um": conf, "info": {"recalculo_aprovado": True},
+        self.resultado = {"dvh": hist, "conferencia_um": conf, "info": info,
                           "restricoes": self._avaliar_restricoes(total),
                           "hi": indice_homogeneidade(total, alvo) if alvo is not None and alvo.any() else None,
                           "dmax_gy": float(total[corpo].max()), "dmax_xyz": self._posicao_max(total, corpo),
@@ -2036,7 +2132,16 @@ class Sessao:
         m = self.maquina
         self.progresso = "Calculando o plano no fantoma…"
         try:
-            r = plano_verificacao(self.plano, m.colim, m.modelo, fantoma, modo, profundidade_iso_mm)
+            cd = self.plano.calculo_dose or {}
+            alg = "MC" if cd.get("algoritmo") == "MC" else "CCC"
+
+            def prog(msg):
+                self.progresso = f"QA (Monte Carlo): {msg}"
+            try:
+                r = plano_verificacao(self.plano, m.colim, m.modelo, fantoma, modo, profundidade_iso_mm,
+                                      algoritmo=alg, incerteza_pct=float(cd.get("incerteza_pct", 1.0)), progresso=prog)
+            finally:
+                self.progresso = None
         except (ValueError, KeyError) as e:
             raise ErroUsuario(str(e)) from e
         finally:
@@ -2278,6 +2383,7 @@ class Sessao:
             out["plano"] = {"rotulo": p.rotulo, "estado": p.estado, "aprovacao": p.aprovacao, "tecnica": p.tecnica,
                             "pontos": pts, "restricoes": p.restricoes, "bolus": p.bolus, "densidades": p.densidades,
                             "prescricao": dataclasses.asdict(p.prescricao), "historico": p.historico,
+                            "calculo_dose": p.calculo_dose or {},
                             "campos": [self._campo_json(c) for c in p.campos],
                             "campos_setup": [self._campo_json(c) for c in p.campos_setup]}
             if self.dose_atualizada and self.resultado:

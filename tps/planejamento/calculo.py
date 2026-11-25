@@ -58,7 +58,10 @@ def grade_de_dose(ct: CTVolume, curva: HUtoED, voxel_mm: float = 3.0, caixa_mm: 
 def hash_modelo(modelo: BeamModelParams) -> str:
     import dataclasses
     import json
-    txt = json.dumps(dataclasses.asdict(modelo), sort_keys=True, default=str)
+    d = dataclasses.asdict(modelo)
+    if d.get("mc_spectrum_hardening_k") is None:          # campo novo (MC): sem ele, o hash das versões anteriores
+        d.pop("mc_spectrum_hardening_k", None)
+    txt = json.dumps(d, sort_keys=True, default=str)
     return hashlib.sha256(txt.encode()).hexdigest()[:16]
 
 
@@ -68,6 +71,30 @@ def segmento_do_campo(c: Campo, colim: Colimacao, mu: float = 1.0, sad_mm: float
                    jaw_x=tuple(c.jaw_x) if c.jaw_x else None, jaw_y=tuple(c.jaw_y),
                    mlc_a=np.asarray(c.mlc_a, float), mlc_b=np.asarray(c.mlc_b, float),
                    leaf_boundaries=np.asarray(colim.limites_laminas, float), sad=sad_mm)
+
+
+def dose_por_um_mc(grade: GradeDose, campos: list[Campo], colim: Colimacao, modelo: BeamModelParams,
+                   kernels: str | Path | None = None, posicao: str = "HFS", permitir_demonstracao: bool = False,
+                   incerteza_pct: float = 1.0, dose_na_agua: bool = False, progresso=None,
+                   tempo_max_s: float | None = None) -> tuple[dict, dict]:
+    """Dose (Gy) por 1 UM de cada campo pelo Monte Carlo (tps.mc), com a incerteza de cada um. A incerteza pedida
+    vale para o plano: cada campo usa incerteza·√(nº de campos) (as incertezas se somam em quadratura)."""
+    if not modelo.comissionado and not (permitir_demonstracao and modelo.demonstracao):
+        raise ModeloNaoComissionado("Modelo de feixe não comissionado: não calcula plano de paciente")
+    from tps.mc.calculo import dose_mc
+    cones = _cones(kernels, modelo, False)
+    g = grade.para_motor()
+    out, info = {}, {}
+    n = max(len(campos), 1)
+    for k, c in enumerate(campos):
+        def prog(m, c=c, k=k):
+            if progresso:
+                progresso(f"{c.nome} ({k + 1}/{n}) — {m}")
+        r = dose_mc(g, segmentos_do_campo(c, colim), modelo, cones, posicao, incerteza_pct * np.sqrt(n),
+                    dose_na_agua, progresso=prog, tempo_max_s=tempo_max_s)
+        out[c.nome] = r.dose
+        info[c.nome] = {"incerteza_pct": round(r.incerteza_pct, 2), "historias": r.historias, "tempo_s": r.tempo_s}
+    return out, info
 
 
 def intervalos_arco(c: Campo) -> list[dict]:

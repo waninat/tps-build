@@ -39,6 +39,9 @@ class BeamModelParams:
     escala_espalhamento: float = 1.0        # kernel = primária + s·(total − primária)  (comissionamento v2)
     e_contam_sigma_mm: float = 0.0          # >0: contaminação ∝ fluência borrada (cresce com o campo)
     norm_dose_per_mu: float = 1.0           # fator absoluto (Gy/MU por unidade de cálculo)
+    # Monte Carlo: endurecimento físico do espectro (g/cm² de água), ajustado aos PDDs medidos; None = ajuste
+    # automático provisório ao PDD do próprio modelo CCC (tps.mc.calculo)
+    mc_spectrum_hardening_k: float | None = None
     ref: dict = field(default_factory=dict)  # condições de calibração
     # Origem do modelo. Só um modelo comissionado (ajustado aos dados medidos, com calibração absoluta) calcula
     # planos reais. O modelo de demonstração (parâmetros padrão) só serve a fantomas e dados fictícios.

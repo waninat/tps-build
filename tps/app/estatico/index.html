@@ -293,6 +293,11 @@
       <label>UM mín. por segmento<input id="o-ummin" type="number" value="2" step="0.5"></label>
     </div>
     </div>
+    <div class="linha3" title="algoritmo da dose final: o VMAT usa Monte Carlo por padrão; as otimizações iteram com o collapsed cone">
+      <label>Dose final<select id="o-alg"><option value="">automático (VMAT: MC)</option><option value="CCC">collapsed cone</option><option value="MC">Monte Carlo</option></select></label>
+      <label title="incerteza estatística (1σ) do plano nos voxels acima de 50% da dose máxima">Incerteza MC<select id="o-mc-inc"><option value="0.5">0,5%</option><option value="1" selected>1%</option><option value="2">2%</option><option value="3">3%</option></select></label>
+      <label class="check" title="padrão: dose no meio (como o Monaco); marcado: dose na água (razão de poderes de freamento por material)"><input type="checkbox" id="o-mc-agua">Dose na água</label>
+    </div>
     <button id="b-calc" class="primario grande" disabled>Calcular dose</button>
     <button id="b-renorm" disabled title="aplica a normalização escolhida em 2 · Prescrição sem recalcular a dose (mesma forma, outras UM)">Renormalizar (sem recalcular)</button>
   </details>

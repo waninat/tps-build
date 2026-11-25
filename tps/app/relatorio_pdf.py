@@ -21,6 +21,15 @@ from tps.version import __version__  # noqa: E402
 CORES_ISO = {50: "#00b7ff", 80: "#9be000", 95: "#ffae00", 100: "#ff7a00", 105: "#ff2d55", 110: "#ff00c8"}
 
 
+def _algoritmo_txt(p) -> str:
+    cd = getattr(p, "calculo_dose", None) or {}
+    if cd.get("algoritmo") == "MC":
+        inc = cd.get("incerteza_obtida_pct")
+        return ("dose por Monte Carlo" + (f" (incerteza {inc:.2f}%, 1σ)" if inc is not None else "") +
+                (", dose na água" if cd.get("dose_na_agua") else ", dose no meio"))
+    return "dose por collapsed cone"
+
+
 def _f(v, n=1):
     return "—" if v is None else f"{v:.{n}f}"
 
@@ -89,7 +98,8 @@ def relatorio_pdf(s, usuario: dict | None = None) -> bytes:
           Paragraph(f"Software em desenvolvimento (TPS {__version__}) — não liberado para uso clínico.", aviso),
           Spacer(1, 4),
           Paragraph(f"Máquina <b>{s.maquina.id}</b> ({p.nome_dicom_maquina}), {s.maquina.energia}, MLC "
-                    f"{s.maquina.colim.nome} · técnica {p.tecnica} · modelo de feixe {p.modelo_feixe.get('hash', '')} "
+                    f"{s.maquina.colim.nome} · técnica {p.tecnica} · {_algoritmo_txt(p)} · modelo de feixe "
+                    f"{p.modelo_feixe.get('hash', '')} "
                     f"({(s.maquina.modelo.ref or {}).get('comissionamento', 'v1')}) · isocentro (mm) "
                     f"{', '.join(_f(v) for v in (s.isocentro or ()))} · emitido em {dt.datetime.now():%d/%m/%Y %H:%M}"
                     + (f" por {usuario['nome']}" if usuario else ""), normal),
@@ -286,6 +296,7 @@ def relatorio_medico_pdf(s, usuario: dict | None = None) -> bytes:
           Paragraph(f"<b>{pr.dose_total_gy:g} Gy em {pr.fracoes} frações</b> ({pr.dose_fracao_gy:.2f} Gy/fx) · alvo "
                     f"{pr.estrutura_alvo or '—'} · {len([c for c in p.campos if not c.campo_pai])} campos "
                     f"({', '.join(f'{c.gantry:.0f}°' for c in p.campos if not c.campo_pai)}) · {s.maquina.energia} · "
+                    f"{_algoritmo_txt(p)} · "
                     f"Dmax {r['dmax_gy']:.2f} Gy ({r['dmax_gy'] / pr.dose_total_gy * 100:.1f}%) · "
                     f"{'APROVADO pela física' if p.aprovacao else 'em revisão'} · {dt.datetime.now():%d/%m/%Y %H:%M}"
                     f" · TPS {__version__} (não liberado para uso clínico)", normal),

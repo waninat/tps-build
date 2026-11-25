@@ -121,6 +121,8 @@ class Plano:
     pontos: list = field(default_factory=list)              # [{"nome", "xyz"}] pontos de referência
     restricoes: list = field(default_factory=list)          # restrições próprias do plano (além do protocolo)
     objetivos_imrt: list = field(default_factory=list)      # objetivos da otimização inversa (não entram no hash)
+    # algoritmo da dose final: {"algoritmo": "CCC" | "MC", "incerteza_pct", "dose_na_agua"} (vazio = CCC)
+    calculo_dose: dict = field(default_factory=dict)
     campos_setup: list = field(default_factory=list)        # campos de localização (sem dose; SETUP no DICOM)
 
     # ------------------------------------------------------------------ edição controlada
@@ -149,6 +151,8 @@ class Plano:
             d.pop(k)
         d.pop("restricoes", None)                # avaliação, não tratamento
         d.pop("objetivos_imrt", None)
+        if not d.get("calculo_dose"):            # planos sem MC: mesmo hash das versões anteriores
+            d.pop("calculo_dose", None)
         for c in d.get("campos", []):           # campo sem descrição: mesmo hash das versões anteriores
             if not c.get("descricao"):
                 c.pop("descricao", None)

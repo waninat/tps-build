@@ -152,7 +152,10 @@ def _ok(r):
     return r.json()
 
 
-def test_vmat_de_ponta_a_ponta(cli):
+def test_vmat_de_ponta_a_ponta(cli, monkeypatch):
+    from tps.mc import calculo as MC
+    monkeypatch.setattr(MC, "HISTORIAS_AJUSTE", 2_000_000)          # calibração do MC curta no teste
+    monkeypatch.setattr(MC, "HISTORIAS_CALIBRACAO", 3_000_000)
     c, sid, home = cli
     _ok(c.post(f"/api/{sid}/plano", json={"rotulo": "VMAT", "dose_total": 50, "fracoes": 25, "alvo": "PTV_fantoma"}))
     assert c.post(f"/api/{sid}/vmat/arcos", json={"n": 1, "inicio": 170, "fim": 190, "sentido": "CW"}).status_code == 400
@@ -162,22 +165,29 @@ def test_vmat_de_ponta_a_ponta(cli):
     assert c.post(f"/api/{sid}/calcular", json={}).status_code == 400          # arco sem pontos de controle
     obj = [{"estrutura": "PTV_fantoma", "tipo": "alvo", "dose_gy": 50, "peso": 5},
            {"estrutura": "Osso_inserto", "tipo": "media", "dose_gy": 15, "peso": 1, "restrito": True}]
-    r = _ok(c.post(f"/api/{sid}/calcular", json={"metodo": "media_alvo", "vmat": {
+    r = _ok(c.post(f"/api/{sid}/calcular", json={"metodo": "media_alvo", "incerteza_mc": 3, "vmat": {
         "objetivos": obj, "iteracoes": 1, "setor_graus": 32}}))
     vm = r["resultado"]["info"]["vmat"]
+    mc = r["resultado"]["info"]["mc"]                                   # VMAT: dose final por Monte Carlo
+    assert r["plano"]["calculo_dose"]["algoritmo"] == "MC" and 0 < mc["incerteza_pct"] <= 3.5
     assert r["plano"]["tecnica"] == "VMAT" and vm["arcos"]["ARCO1"]["pontos"] == 180
     assert 0 < vm["arcos"]["ARCO1"]["tempo_s"] < 300
     est = r["resultado"]["estatisticas"]
-    assert est["PTV_fantoma"]["D95"] > 0.93 * 50
-    assert est["Osso_inserto"]["Dmean"] < 15 * 1.03
+    assert est["PTV_fantoma"]["D95"] > 0.90 * 50
+    assert est["Osso_inserto"]["Dmean"] < 15 * 1.06
     conf = r["resultado"]["conferencia_um"]
     comp = [k for k in conf if k.get("composta")]
     assert comp and abs(comp[0]["dif_pct"]) < 10
     chk = {i["id"]: i for i in _ok(c.get(f"/api/{sid}/checklist"))}
     assert chk["imrt_qa"]["estado"] == "aviso" and "VMAT" in chk["imrt_qa"]["titulo"]
+    assert chk["mc"]["estado"] in ("ok", "aviso") and chk["mc_comissionamento"]["estado"] == "aviso"
+    # o mesmo plano em collapsed cone e de volta ao Monte Carlo (do cache: mesma dose)
+    rc = _ok(c.post(f"/api/{sid}/calcular", json={"algoritmo": "CCC"}))
+    assert "mc" not in rc["resultado"]["info"]
+    assert rc["resultado"]["estatisticas"]["PTV_fantoma"]["D95"] == pytest.approx(est["PTV_fantoma"]["D95"], rel=0.06)
     # recálculo sem a opção VMAT mantém os pontos de controle e a dose
     d95 = est["PTV_fantoma"]["D95"]
-    r2 = _ok(c.post(f"/api/{sid}/calcular", json={}))
+    r2 = _ok(c.post(f"/api/{sid}/calcular", json={"algoritmo": "MC"}))
     assert r2["plano"]["campos"][0]["n_pontos"] == 180
     assert r2["resultado"]["estatisticas"]["PTV_fantoma"]["D95"] == pytest.approx(d95, abs=0.05)
     # QA (gantry 0): o RTPLAN é o arco real

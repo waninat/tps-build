@@ -451,6 +451,21 @@ function mostrarPonto() {
   $("#p-cob-linha").classList.toggle("oculto", m !== "cobertura");
   $("#p-iso-linha").classList.toggle("oculto", m === "um_fixas" || m === "cobertura");
 }
+function algoritmoDoForm() {
+  const a = $("#o-alg").value;
+  return { ...(a ? { algoritmo: a } : {}), incerteza_mc: +$("#o-mc-inc").value, dose_na_agua: $("#o-mc-agua").checked };
+}
+function acompanharProgresso() {                          // etapa do cálculo (o servidor responde sem a trava)
+  return setInterval(async () => {
+    try { const pr = await fetch(`/api/${E.sid}/progresso`, { headers: { "X-Token": E.token } }).then(x => x.json());
+      if (pr.progresso) $("#ocupado-txt").textContent = pr.progresso; } catch (e) { /* ok */ }
+  }, 2000);
+}
+function avisoMC(r) {
+  const mc = ((r.resultado || {}).info || {}).mc;
+  if (mc) aviso(`Dose final por Monte Carlo: incerteza ${f1(mc.incerteza_pct, 2)}% (1σ, voxels > 50% da dose máxima) · ` +
+    `${(mc.historias / 1e6).toFixed(0)} M histórias · ${Math.round(mc.tempo_s)} s · ${mc.dose_na_agua ? "dose na água" : "dose no meio"}`, mc.incerteza_pct <= 2);
+}
 function normalizacaoDoForm() {
   const metodo = $("#p-metodo").value, o = { metodo };
   if (metodo === "ponto") o.ponto = [+$("#p-px").value, +$("#p-py").value, +$("#p-pz").value];
@@ -627,6 +642,12 @@ function atualizar(r) {
   $("#avisos").innerHTML = (r.avisos || []).map(a => `<li>${a}</li>`).join("");
   $("#n-avisos").textContent = (r.avisos || []).length || "";
   if (p && (p.tecnica === "IMRT" || p.tecnica === "VMAT") && $("#o-tecnica").value !== p.tecnica) { $("#o-tecnica").value = p.tecnica; $("#o-tecnica").onchange(); }
+  if (p && p.calculo_dose) {
+    const cd = p.calculo_dose;
+    if (cd.algoritmo) $("#o-alg").value = cd.algoritmo;
+    if (cd.incerteza_pct) $("#o-mc-inc").value = String(cd.incerteza_pct);
+    $("#o-mc-agua").checked = !!cd.dose_na_agua;
+  }
   if (p && p.objetivos_imrt && p.objetivos_imrt.length && !(E.objetivos || []).length) { E.objetivos = p.objetivos_imrt; listarObjetivos(); }
   if (E.objetivos && E.objetivos.length) listarObjetivos();
   if (p && r.dose_atualizada) carregarChecklist(); else $("#checklist").innerHTML = p ? `<div class="pequeno-txt">Calcule a dose para conferir o plano.</div>` : "";
@@ -729,18 +750,16 @@ async function calcular() {
     const comum = { objetivos, avoidance: (E.avoid || []).filter(a => a.estrutura),
       flash_mm: $("#im-flash").checked ? +$("#im-flash-mm").value : 0, flash_pele_mm: +$("#im-flash-pele").value };
     const corpo = tec === "VMAT"
-      ? { ...normalizacaoDoForm(), vmat: { ...comum, setor_graus: +$("#vm-setor").value, iteracoes: +$("#vm-it").value,
+      ? { ...normalizacaoDoForm(), ...algoritmoDoForm(), vmat: { ...comum, setor_graus: +$("#vm-setor").value, iteracoes: +$("#vm-it").value,
           peso_nto: +$("#vm-nto").value, espacamento_cp: $("#vm-cp").value ? +$("#vm-cp").value : null } }
-      : { ...normalizacaoDoForm(), imrt: { ...comum, niveis: +$("#im-niveis").value, um_min: +$("#im-ummin").value,
+      : { ...normalizacaoDoForm(), ...algoritmoDoForm(), imrt: { ...comum, niveis: +$("#im-niveis").value, um_min: +$("#im-ummin").value,
           area_min_cm2: +$("#im-area").value, peso_nto: +$("#im-nto").value, iteracoes: +$("#im-it").value,
           forma_segmentos: $("#im-forma").checked } };
-    const t = setInterval(async () => {                    // etapa da otimização (o servidor responde sem a trava)
-      try { const pr = await fetch(`/api/${E.sid}/progresso`, { headers: { "X-Token": E.token } }).then(x => x.json());
-        if (pr.progresso) $("#ocupado-txt").textContent = pr.progresso; } catch (e) { /* ok */ }
-    }, 2000);
+    const t = acompanharProgresso();
     let r;
     try { r = await api("POST", `/api/${E.sid}/calcular`, corpo, `Otimizando ${tec} (pode levar alguns minutos)…`); } finally { clearInterval(t); }
     atualizar(r);
+    avisoMC(r);
     const vm = r.resultado.info.vmat;
     if (vm) {
       const viol = Object.entries(vm.restricoes || {}).filter(([, v]) => v > 1);
@@ -757,12 +776,18 @@ async function calcular() {
     return;
   }
   if (fif && fif.modo === "filtro") fif.ajuste_fino = $("#o-fil-fino").checked;
-  const corpo = { otimizar_pesos: $("#o-pesos").checked, field_in_field: fif, compensador: comp, ...normalizacaoDoForm() };
+  const corpo = { otimizar_pesos: $("#o-pesos").checked, field_in_field: fif, compensador: comp, ...normalizacaoDoForm(),
+    ...algoritmoDoForm() };
   const oars = Object.entries(E.oarCfg || {}).filter(([n, o]) => o.on && E.resumo.estruturas.some(e => e.nome === n))
     .map(([n, o]) => ({ estrutura: n, metrica: o.metrica, valor: o.valor === "" ? null : +o.valor, volume_pct: o.vol === "" ? null : +o.vol, prioridade: +o.prio || 5 }));
   if (oars.length) corpo.proteger_oars = { oars, subcampos: $("#oar-sub").checked, margem_mm: +$("#oar-mg").value };
-  const r = await api("POST", `/api/${E.sid}/calcular`, corpo, "Calculando a dose (collapsed cone)…");
+  const mc = corpo.algoritmo === "MC";
+  const t = acompanharProgresso();
+  let r;
+  try { r = await api("POST", `/api/${E.sid}/calcular`, corpo, mc ? "Calculando a dose (Monte Carlo)…" : "Calculando a dose (collapsed cone)…"); }
+  finally { clearInterval(t); }
   atualizar(r);
+  avisoMC(r);
   const i = r.resultado.info || {};
   if (i.protecao_oars) {
     const t = Object.entries(i.protecao_oars.oars).map(([n, q]) => `${n} Dméd ${f1(q.antes.Dmean, 1)}→${f1(q.depois.Dmean, 1)} Gy`).join(" · ");
