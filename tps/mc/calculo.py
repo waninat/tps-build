@@ -31,6 +31,8 @@ from tps.physics.spectrum import Spectrum
 
 MEV_G_PARA_GY = 1.602176634e-10
 RHO_MIN = 0.05            # g/cm³: abaixo disso (ar, gás) a dose é a da vizinhança 3×3×3
+CORTE_ELETRON = 0.2       # MeV: abaixo disso o elétron deposita no lugar (também o limiar dos δ)
+F_PASSO = 0.25            # fração máxima de perda de energia por passo do elétron (0,1 → 0,25: +26% de velocidade)
 HISTORIAS_AJUSTE = 20_000_000       # por valor de k no ajuste do espectro
 HISTORIAS_CALIBRACAO = 30_000_000   # no 10×10 de referência
 
@@ -118,7 +120,7 @@ def materiais(eta: np.ndarray) -> dict:
 
 def transportar(grid: DoseGrid, segs: list[Segment], p: BeamModelParams, posicao: str = "HFS",
                 incerteza_pct: float = 1.0, historias_max: int = 2_000_000_000, historias_min: int = 2_000_000,
-                lotes: int = 10, f_passo: float = 0.1, semente: int = 12345, progresso=None,
+                lotes: int = 10, f_passo: float | None = None, semente: int = 12345, progresso=None,
                 fluence_grid: FluenceGrid | None = None, dose_na_agua: bool = False,
                 tempo_max_s: float | None = None) -> ResultadoMC:
     """Dose (energia depositada → Gy) por unidade de UM×fluência do modelo, SEM a calibração absoluta."""
@@ -131,7 +133,8 @@ def transportar(grid: DoseGrid, segs: list[Segment], p: BeamModelParams, posicao
         return ResultadoMC(np.zeros_like(eta), 0.0, 0, 0.0, dose_na_agua)
     seg_cdf, seg_ofs, seg_n, cel_cdf, cel_u, cel_v, du, dv, geo, f_total = fonte
     mat = materiais(eta)
-    tab = F.tabelas()
+    f_passo = F_PASSO if f_passo is None else f_passo
+    tab = F.tabelas(CORTE_ELETRON)
     tabs = np.ascontiguousarray(np.stack([tab.mu_compton, tab.mu_pares, tab.mu_resto, tab.s_col, tab.s_rad,
                                           tab.sigma_delta]))
     esp_cdf, esp_lo, esp_hi = _espectro(p)
@@ -140,7 +143,7 @@ def transportar(grid: DoseGrid, segs: list[Segment], p: BeamModelParams, posicao
     n3 = np.array([eta.shape[2], eta.shape[1], eta.shape[0]], np.int64)
     lo = origem - passo / 2
     hi = origem + passo * (n3 - 0.5)
-    cortes = np.array([0.2, 0.02, tab.corte_delta])
+    cortes = np.array([CORTE_ELETRON, 0.02, tab.corte_delta])
     nthreads = numba.get_num_threads()
     nblocos = int(max(1, min(nthreads, 1.5e9 // max(eta.size * 4, 1))))      # memória: uma grade float32 por bloco
     edep = np.zeros((nblocos,) + eta.shape, np.float32)
@@ -196,6 +199,7 @@ def transportar(grid: DoseGrid, segs: list[Segment], p: BeamModelParams, posicao
 # ------------------------------------------------------------------ calibração absoluta
 def _chave_modelo(p: BeamModelParams) -> str:
     d = {k: v for k, v in asdict(p).items() if k not in ("comissionado", "demonstracao")}
+    d["_transporte"] = (CORTE_ELETRON, F_PASSO)                # mudar o transporte refaz a calibração
     return hashlib.sha256(json.dumps(d, sort_keys=True, default=str).encode()).hexdigest()[:16]
 
 
