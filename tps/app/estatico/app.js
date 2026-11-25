@@ -136,6 +136,7 @@ async function iniciar() {
   } catch (e) { /* sem modelos */ }
   mostrarIA();
   carregarSitios();
+  try { E.claude = await api("GET", "/api/claude"); } catch (e) { E.claude = null; }
   window.addEventListener("resize", () => desenharTudo());
 }
 
@@ -1572,6 +1573,7 @@ async function acao(a) {
     case "calcular": clicar("#b-calc"); break;
     case "aprovar": clicar("#b-aprovar"); break;
     case "ia": await janelaIA(); break;
+    case "claude": await janelaClaude(); break;
     case "assistente": abaEsquerda("otim"); await assistente(); break;
     case "qa": abaEsquerda("aprov"); $("#sec-qa").open = true; break;
     case "auditoria": clicar("#b-auditoria"); break;
@@ -1725,22 +1727,32 @@ async function assistente(textoIni) {
     uma IA generativa: confira tudo.</p>
     <label>Descrição<textarea name="texto" rows="4" placeholder="ex.: colo do útero IIB, 45 Gy em 25 frações na pelve com boost integrado de 55 Gy nos linfonodos">${esc(textoIni ?? E.assistTexto ?? "")}</textarea></label>
     <label>Protocolo<select name="sitio"><option value="">automático (pela descrição e pela anatomia)</option>
-      ${(E.sitios || []).map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join("")}</select></label>`, { ok: "Analisar" });
+      ${(E.sitios || []).map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join("")}</select></label>
+    <label>Quem propõe<select name="motor">
+      ${E.claude && E.claude.ativo ? `<option value="auto">Claude (nuvem; se falhar, as regras)</option>` : ""}
+      <option value="regras">Regras do TPS (sem internet)</option></select></label>
+    <div class="pequeno-txt">${E.claude && E.claude.ativo ? `Com o Claude (${esc(E.claude.modelo)}) sai da clínica só um resumo anônimo: nomes,
+      volumes e distâncias das estruturas, a prescrição e a descrição acima (sem o nome e o ID do paciente). Nunca a TC.`
+      : `O Claude não está configurado: Ferramentas › Assistente com Claude.`}</div>`, { ok: "Analisar" });
   E.assistTexto = v.texto;
-  const r = await api("POST", `/api/${E.sid}/imrt/assistente`, { texto: v.texto, sitio: v.sitio || null }, "Analisando a TC e as estruturas…");
+  const tp = acompanharProgresso();
+  let r;
+  try { r = await api("POST", `/api/${E.sid}/imrt/assistente`, { texto: v.texto, sitio: v.sitio || null, motor: v.motor || "regras" },
+    v.motor === "auto" ? "O Claude está analisando o caso…" : "Analisando a TC e as estruturas…"); } finally { clearInterval(tp); }
   const faltIA = r.faltando.filter(f => f.ia_disponivel).map(f => f.ia);
   const p = r.parametros || {};
   const tabela = r.objetivos.map(o => `<tr><td>${esc(o.estrutura)}</td><td>${TIPOS_OBJ[o.tipo] || o.tipo}</td><td>${o.dose_gy}</td>` +
     `<td>${o.volume_pct ?? ""}</td><td class="pequeno-txt">${esc(o.origem || "")}</td></tr>`).join("");
   const html = `<p><b>${esc(r.sitio_nome || "Sítio não reconhecido")}</b>${r.fonte ? ` <span class="pequeno-txt">(${esc(r.fonte)})</span>` : ""}</p>
+    <p class="pequeno-txt">${r.motor === "claude" ? `Proposta do ${esc(r.modelo)} em ${r.tempo_s} s (${r.uso_tokens.entrada + r.uso_tokens.saida} tokens), conferida pelas regras do TPS.` : "Proposta pelas regras do TPS."}</p>
     ${r.avisos.length ? `<ul class="assist-lista avisotxt">${r.avisos.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
     <h3>O que o assistente concluiu</h3><ul class="assist-lista">${r.explicacao.map(a => `<li>${esc(a)}</li>`).join("")}</ul>
     ${r.faltando.length ? `<h3>Órgãos que faltam</h3><div class="pequeno-txt">${r.faltando.map(f => esc(f.tg)).join(", ")}</div>
       ${faltIA.length ? `<button id="b-assist-ia" class="pequeno">Contornar por IA (${faltIA.length}) e analisar de novo</button>` :
         `<div class="pequeno-txt">Contorne-os (ou instale o contorno por IA em Ferramentas) para entrarem nos objetivos.</div>`}` : ""}
     <h3>Objetivos propostos (${r.objetivos.length})</h3>
-    <table><thead><tr><th>Estrutura</th><th>Tipo</th><th>Gy</th><th>V%</th><th>limite</th></tr></thead><tbody>${tabela}</tbody></table>
-    ${p.inicio != null ? `<label>Arcos<select name="arcos"><option value="sim">usar ${p.arcos} arcos parciais ${p.inicio}°→${p.fim}° (lado do alvo)</option>
+    <table><thead><tr><th>Estrutura</th><th>Tipo</th><th>Gy</th><th>V%</th><th>de onde vem</th></tr></thead><tbody>${tabela}</tbody></table>
+    ${p.inicio != null ? `<label>Arcos<select name="arcos"><option value="sim">usar ${p.arcos} arcos ${p.inicio}°→${p.fim}° ${esc(p.sentido || "CW")}</option>
       <option value="nao">manter os arcos do formulário</option></select></label>` : `<input type="hidden" name="arcos" value="nao">`}`;
   E.assistIA = null;
   $("#modal .caixa").classList.add("larga");
@@ -1757,11 +1769,12 @@ async function assistente(textoIni) {
   }
   $("#modal .caixa").classList.remove("larga");
   if (!r.objetivos.length) return;
-  const r2 = await api("POST", `/api/${E.sid}/imrt/assistente`, { texto: v.texto, sitio: v.sitio || r.sitio, aplicar: true }, "Aplicando…");
+  const r2 = await api("POST", `/api/${E.sid}/imrt/assistente`, { texto: v.texto, aplicar: true,
+    proposta: { objetivos: r.objetivos, criar: r.criar, motor: r.motor } }, "Aplicando…");
   E.objetivos = r2.objetivos;
   if ($("#o-tecnica").value === "3D") { $("#o-tecnica").value = "VMAT"; $("#o-tecnica").onchange(); }
   if (ok.arcos === "sim" && p.inicio != null) {
-    $("#vm-n").value = String(p.arcos); $("#vm-ini").value = p.inicio; $("#vm-fim").value = p.fim; $("#vm-sent").value = "CW";
+    $("#vm-n").value = String(p.arcos); $("#vm-ini").value = p.inicio; $("#vm-fim").value = p.fim; $("#vm-sent").value = p.sentido || "CW";
     aviso("Arcos ajustados no formulário: clique em Criar arcos", true);
   }
   if (r2.criar.length) atualizar(await api("GET", `/api/${E.sid}`)); else listarObjetivos();
@@ -1796,7 +1809,7 @@ async function janelaIA() {
   let e = await api("GET", "/api/ia/instalacao");
   const estadoTxt = () => e.segmentacao.disponivel ? `<span class="ok">instalado</span> — ${esc(e.segmentacao.executavel)}`
     : `<span class="avisotxt">não instalado</span>`;
-  const pr = modal("Contorno por IA (TotalSegmentator)", `<p>Estado: <span id="ia-st">${estadoTxt()}</span></p>
+  const pr = modal("Contorno automático de órgãos (TotalSegmentator)", `<p>Estado: <span id="ia-st">${estadoTxt()}</span></p>
     <p class="pequeno-txt">A rede roda neste computador (servidor do TPS), num ambiente Python próprio em <code>${esc(e.destino)}</code>.
     Precisa de internet uma vez (~2 GB)${e.plataforma === "win32" ? " e do Python 3.10–3.12 do python.org (marque “Add to PATH”)" : ""}.
     Com placa NVIDIA, a versão GPU segmenta em segundos; na CPU, 1–5 min por grupo de órgãos.</p>
@@ -1921,3 +1934,44 @@ function definirLayout(modo) {
 }
 
 iniciar().catch(e => aviso(e.message));
+
+// ---- assistente com Claude: chave da API e modelo
+async function janelaClaude() {
+  let e = await api("GET", "/api/claude");
+  const pr = modal("Assistente com Claude", `<p>Estado: <span id="cl-st"></span></p>
+    <p class="pequeno-txt">O assistente de objetivos usa o Claude (Anthropic) pela internet. Sai da clínica só um
+    <b>resumo anônimo</b> calculado pelo TPS — nomes, volumes, distâncias e sobreposições das estruturas, a prescrição,
+    a dose por estrutura se houver, e a descrição digitada (o nome e o ID do paciente são apagados). Nunca a TC, as
+    imagens ou os contornos. Cada consulta fica registrada em <code>ia/claude</code> na pasta de dados (o que foi enviado e
+    o que voltou). A chave fica na pasta de dados do servidor e não volta para a tela.</p>
+    <label>Chave da API (console.anthropic.com › API keys)<input id="cl-chave" type="password" placeholder="sk-ant-…  (vazio = manter a atual)"></label>
+    <div class="linha2">
+      <label>Modelo<select id="cl-modelo">${Object.entries(e.modelos).map(([k, t]) => `<option value="${k}" ${k === e.modelo ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
+      <label class="check"><input type="checkbox" id="cl-ativo" ${e.ativo || !e.configurado ? "checked" : ""}> usar o Claude no assistente</label>
+    </div>
+    <label>Sua senha (físico/administrador)<input id="cl-senha" type="password"></label>
+    <div class="botoes"><button id="b-cl-salvar" class="primario">Salvar</button><button id="b-cl-testar">Testar a conexão</button>
+      <button id="b-cl-apagar" class="perigo">Apagar a chave</button></div>
+    <div id="cl-res" class="pequeno-txt"></div>`, { ok: "Fechar", cancelar: false });
+  const mostrar = () => {
+    $("#cl-st").innerHTML = e.configurado ? `<span class="ok">configurado</span> (chave …${esc(e.chave_final)}${e.da_variavel ? ", da variável ANTHROPIC_API_KEY" : ""}) · ${esc(e.modelo)} · ${e.ativo ? "em uso" : "desligado"}`
+      : `<span class="avisotxt">sem chave</span>`;
+    $("#b-cl-testar").disabled = !e.configurado; $("#b-cl-apagar").disabled = !e.configurado || e.da_variavel;
+  };
+  mostrar();
+  $("#b-cl-salvar").onclick = () => tentar(async () => {
+    e = await api("POST", "/api/claude", { chave: $("#cl-chave").value, modelo: $("#cl-modelo").value, ativo: $("#cl-ativo").checked,
+      senha: $("#cl-senha").value });
+    $("#cl-chave").value = ""; mostrar(); aviso("Assistente com Claude configurado", true);
+  });
+  $("#b-cl-testar").onclick = () => tentar(async () => {
+    $("#cl-res").textContent = "Testando…";
+    try { const t = await api("POST", "/api/claude/testar", {}); $("#cl-res").innerHTML = `<span class="ok">Conectou</span>: ${esc(t.modelo)} respondeu "${esc(t.resposta)}" em ${t.tempo_s} s`; }
+    catch (x) { $("#cl-res").innerHTML = `<span class="falha">${esc(x.message)}</span>`; }
+  });
+  $("#b-cl-apagar").onclick = () => tentar(async () => {
+    e = await api("POST", "/api/claude", { apagar_chave: true, senha: $("#cl-senha").value }); mostrar();
+  });
+  $("#modal .caixa").classList.add("larga");
+  try { await pr; } finally { $("#modal .caixa").classList.remove("larga"); E.claude = e; }
+}

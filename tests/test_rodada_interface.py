@@ -137,3 +137,67 @@ def test_assistente_com_orgaos_e_bilaterais(tmp_path):
     # sem descrição: o sítio sai da anatomia (órgão mais perto do alvo)
     r = A.analisar(est, g, corpo, 0.125, "")
     assert r["sitio"] in ("pulmao", "mama") and any("anatomia" in e for e in r["explicacao"])
+
+
+class _Resp:
+    def __init__(self, blocos):
+        from types import SimpleNamespace
+        self.content = blocos
+        self.usage = SimpleNamespace(input_tokens=1000, output_tokens=200)
+
+
+class _ClaudeFalso:
+    """Simula a API: 1ª volta pede o protocolo e uma medida; 2ª devolve a proposta."""
+
+    def __init__(self):
+        self.chamadas = []
+        self.messages = self
+
+    def create(self, **kw):
+        self.chamadas.append(kw)
+        if len(self.chamadas) == 1:
+            return _Resp([{"type": "text", "text": "Vou ler o protocolo."},
+                          {"type": "tool_use", "id": "t1", "name": "ler_protocolo", "input": {"sitio": "prostata"}},
+                          {"type": "tool_use", "id": "t2", "name": "medir", "input": {"a": "Osso_inserto", "b": "PTV_fantoma"}}])
+        return _Resp([{"type": "tool_use", "id": "t3", "name": "propor_objetivos", "input": {
+            "sitio": "prostata", "explicacao": ["Alvo único com a prescrição"], "avisos": ["Fantoma sem reto"],
+            "objetivos": [{"estrutura": "PTV_fantoma", "tipo": "alvo", "dose_gy": 50, "peso": 5, "motivo": "prescrição"},
+                          {"estrutura": "Osso_inserto", "tipo": "media", "dose_gy": 20, "peso": 1, "motivo": "teste"},
+                          {"estrutura": "Inexistente", "tipo": "max", "dose_gy": 10},
+                          {"estrutura": "Osso_inserto", "tipo": "max", "dose_gy": 80}],
+            "arcos": {"n": 2, "inicio": 200, "fim": 60, "sentido": "CW"}}}])
+
+
+def test_assistente_com_claude_simulado(cli, monkeypatch):
+    from tps.planejamento import assistente_claude as C
+    c, sid, _ = cli
+    falso = _ClaudeFalso()
+    monkeypatch.setattr(C, "_cliente", lambda chave: falso)
+    _ok(c.post(f"/api/{sid}/plano", json={"rotulo": "CLAUDE", "dose_total": 50, "fracoes": 25, "alvo": "PTV_fantoma"}))
+    assert not _ok(c.get("/api/claude"))["configurado"]
+    assert c.post(f"/api/{sid}/imrt/assistente", json={"texto": "x", "motor": "claude"}).status_code == 400
+    e = _ok(c.post("/api/claude", json={"chave": "sk-ant-teste-1234", "modelo": "claude-sonnet-5-5", "senha": SENHA}))
+    assert e["configurado"] and e["chave_final"] == "1234" and e["modelo"] == "claude-sonnet-5-5"
+    assert "sk-ant" not in str(_ok(c.get("/api/claude")))                    # a chave não volta para a tela
+    r = _ok(c.post(f"/api/{sid}/imrt/assistente", json={"texto": "FANTOMA próstata 50 Gy", "motor": "auto"}))
+    assert r["motor"] == "claude" and r["modelo"] == "claude-sonnet-5-5"
+    assert [(o["estrutura"], o["tipo"]) for o in r["objetivos"]] == [("PTV_fantoma", "alvo"), ("Osso_inserto", "media")]
+    assert any("Inexistente" in a for a in r["avisos"]) and any("acima da dose do alvo" in a for a in r["avisos"])
+    assert r["parametros"]["inicio"] == 200 and r["explicacao"] == ["Alvo único com a prescrição"]
+    # o que foi enviado: resumo anônimo, sem o nome do paciente; as ferramentas responderam pelo TPS
+    enviado = falso.chamadas[0]["messages"][0]["content"]
+    assert "[paciente] próstata" in enviado and "FANTOMA01" not in enviado
+    res = falso.chamadas[1]["messages"][2]["content"]
+    assert {b["tool_use_id"] for b in res} == {"t1", "t2"} and "distancia_min_mm" in res[1]["content"]
+    # aplicar a proposta revisada não chama o Claude de novo
+    n = len(falso.chamadas)
+    a = _ok(c.post(f"/api/{sid}/imrt/assistente", json={"aplicar": True, "proposta": {"objetivos": r["objetivos"], "criar": []}}))
+    assert len(falso.chamadas) == n and len(a["objetivos"]) == 2
+    # falha da API: 'auto' cai nas regras com aviso
+    def quebra(chave):
+        raise RuntimeError("sem internet")
+    monkeypatch.setattr(C, "_cliente", quebra)
+    r = _ok(c.post(f"/api/{sid}/imrt/assistente", json={"texto": "próstata", "motor": "auto"}))
+    assert r["motor"] == "regras" and "Claude indisponível" in r["avisos"][0]
+    _ok(c.post("/api/claude", json={"apagar_chave": True, "senha": SENHA}))
+    assert not _ok(c.get("/api/claude"))["configurado"]

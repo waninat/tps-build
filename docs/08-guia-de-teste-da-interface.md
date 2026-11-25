@@ -104,7 +104,14 @@ grau, velocidade das lâminas e taxa de dose.
   doses pelos nomes, lado, órgãos perto do alvo, sobreposição com o PTV, pele), aponta os órgãos que faltam (e
   contorna por IA, se instalada), propõe os objetivos e, na mama/pulmão, arcos parciais do lado do alvo. São regras
   explicadas, não uma IA generativa.
-* **Contorno por IA**: Ferramentas › *Contorno por IA…* instala o TotalSegmentator pelo próprio TPS (CPU ou GPU;
+* **Assistente com Claude**: Ferramentas › *Assistente com Claude (configurar)…* → cole a chave da API
+  (console.anthropic.com › API keys), escolha o modelo (Opus 5.5, padrão; Sonnet 5.5, mais rápido) e *Testar a
+  conexão*. No assistente do caso, *Quem propõe: Claude*. Sai da clínica só o resumo anônimo (estruturas, volumes,
+  distâncias, sobreposições, prescrição, dose por estrutura e a descrição sem nome/ID); o Claude pode pedir medidas
+  ao TPS e o protocolo do sítio; a proposta é conferida pelas regras (estruturas existem, números válidos, órgão
+  nunca acima do alvo) antes de aparecer. Cada consulta fica em `<pasta de dados>/ia/claude/`. Sem internet ou
+  com erro, cai nas regras com aviso.
+* **Contorno automático de órgãos**: Ferramentas › *Contorno automático de órgãos (TotalSegmentator)…* instala o TotalSegmentator pelo próprio TPS (CPU ou GPU;
   precisa de internet e, no Windows, do Python 3.10–3.12) ou aponta um já instalado.
 
 ## Integração com o Mosaiq 2.83 (pendente de teste)

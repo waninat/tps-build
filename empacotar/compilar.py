@@ -69,6 +69,7 @@ def nuitka(jobs: int | None) -> Path:
         "--include-package=llvmlite", "--include-package=contourpy", "--include-package=yaml",
         "--include-package=scipy", "--include-package=matplotlib", "--include-package=reportlab",
         "--include-package=pdfplumber", "--include-package=pdfminer", "--include-package=PIL", "--include-package=httpx",
+        "--include-package=anthropic",
         "--include-package-data=pydicom", "--include-package-data=pynetdicom", "--include-package-data=matplotlib",
         "--include-package-data=reportlab", "--include-package-data=pdfminer",
         "--enable-plugin=pywebview",          # o plugin do Nuitka escolhe a plataforma (WebView2 no Windows)

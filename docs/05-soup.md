@@ -7,6 +7,7 @@
 | SciPy | interpolação, filtros, otimização | BSD | `map_coordinates`, `gaussian_filter` em limites |
 | numba | compilação dos laços de cálculo | BSD | diferenças com `fastmath`; versão fixada |
 | pydicom | leitura/escrita DICOM | MIT | conformidade do que é gravado |
+| anthropic (SDK) + API do Claude | assistente de objetivos (opcional): proposta a partir do resumo anônimo | MIT (SDK); serviço da Anthropic sob contrato | resposta errada ou inventada (mitigação: validação por regras + revisão do planejador); dados enviados (só resumo anônimo, registrado em ia/claude); indisponibilidade (cai nas regras) |
 | matplotlib (Path) | ponto-no-polígono na rasterização | PSF-like | contornos degenerados |
 | PyYAML | cadastro de máquinas e modelos | MIT | — |
 | pdfplumber | extração de tabelas de relatórios | MIT | erro de leitura → sempre conferir por amostragem |

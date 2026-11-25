@@ -107,6 +107,37 @@ def objetivos_sitio(u: dict = Depends(usuario)):
     return assistente.lista()
 
 
+@app.get("/api/claude")
+def claude_estado(u: dict = Depends(usuario)):
+    from tps.planejamento import assistente_claude as C
+    return C.estado()
+
+
+@app.post("/api/claude")
+def claude_configurar(d: dict = Body(...), u: dict = Depends(usuario)):
+    """Chave da API da Anthropic e modelo do assistente (físico/administrador; fica na pasta de dados)."""
+    from tps.planejamento import assistente_claude as C
+    banco().assinar(u, d.get("senha", ""), {"admin", "fisico"}, "configurar o assistente com Claude")
+    try:
+        if d.get("apagar_chave"):
+            r = C.apagar_chave()
+        else:
+            r = C.salvar_config(d.get("chave"), d.get("modelo"), d.get("ativo"))
+    except ValueError as e:
+        raise ErroUsuario(str(e)) from e
+    auditar(u, "claude_configurado", None, modelo=r["modelo"], ativo=r["ativo"], chave_apagada=bool(d.get("apagar_chave")))
+    return r
+
+
+@app.post("/api/claude/testar")
+def claude_testar(u: dict = Depends(usuario)):
+    from tps.planejamento import assistente_claude as C
+    try:
+        return C.testar()
+    except Exception as e:  # noqa: BLE001
+        raise ErroUsuario(f"Falhou: {C.mensagem_erro(e)}") from e
+
+
 @app.get("/api/ia/instalacao")
 def ia_instalacao(u: dict = Depends(usuario)):
     from tps.ia import instalador
@@ -372,11 +403,19 @@ def imrt_objetivos(sid: str, refazer: bool = False, sitio: str = "", u: dict = D
 def imrt_assistente(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     """Lê a descrição do caso + TC/estruturas e propõe os objetivos pelo protocolo do sítio (com a explicação)."""
     s = _s(sid)
+    motor = d.get("motor") or "regras"
+    if motor not in ("regras", "claude", "auto"):
+        raise ErroUsuario("Motor do assistente inválido")
     with TRAVA:
-        r = s.assistente_objetivos(str(d.get("texto", ""))[:2000], d.get("sitio") or None, bool(d.get("aplicar")))
+        r = s.assistente_objetivos(str(d.get("texto", ""))[:2000], d.get("sitio") or None, bool(d.get("aplicar")),
+                                   motor, d.get("proposta") if d.get("aplicar") else None)
+    if r.get("motor") == "claude":
+        auditar(u, "assistente_claude", s, modelo=r.get("modelo"), tokens=r.get("uso_tokens"))
     if d.get("aplicar"):
         auditar(u, "assistente_objetivos", s, sitio=r.get("sitio"), texto=str(d.get("texto", ""))[:300])
     return r
+
+
 
 
 @app.get("/api/{sid}/progresso")

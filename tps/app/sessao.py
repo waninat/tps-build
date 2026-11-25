@@ -1966,12 +1966,23 @@ class Sessao:
         self._registrar(f"{n} campos equiespaçados para IMRT (início {inicio:g}°, alvo {alvo} + {margem_mm:g} mm)")
         return self.resumo()
 
-    def assistente_objetivos(self, texto: str = "", sitio: str | None = None, aplicar: bool = False) -> dict:
-        """Objetivos pelo protocolo do sítio, lendo a descrição do caso, a TC e as estruturas (regras explicadas)."""
+    def assistente_objetivos(self, texto: str = "", sitio: str | None = None, aplicar: bool = False,
+                             motor: str = "regras", proposta: dict | None = None) -> dict:
+        """Objetivos dos planos modulados. motor 'regras': protocolo do sítio + leitura do caso por regras; 'claude' ou
+        'auto': o Claude raciocina sobre o resumo anônimo do caso (auto cai nas regras se o Claude falhar).
+        aplicar + proposta: cria as estruturas combinadas pedidas e devolve os objetivos já revisados na tela."""
         from tps.planejamento import assistente as A
         self._exigir_plano()
         if self.grade is None:
             raise ErroUsuario("Carregue um CT primeiro")
+        if aplicar and proposta is not None:
+            for c in proposta.get("criar") or []:
+                if c.get("nome") and c["nome"] not in self.estruturas:
+                    self.criar_estrutura(c["nome"], c.get("operacao", "uniao"), c.get("a"), c.get("b"))
+            objs = [o for o in proposta.get("objetivos") or [] if o.get("estrutura") in self.estruturas]
+            self._registrar(f"Objetivos do assistente aplicados ({proposta.get('motor') or 'regras'}; "
+                            f"{len(objs)} objetivos)")
+            return {"objetivos": objs, "criar": proposta.get("criar") or [], "estruturas": list(self.estruturas)}
         ia = False
         if self.tipo == "ct":
             try:
@@ -1983,6 +1994,47 @@ class Sessao:
         est = {n: e.mascara for n, e in self.estruturas.items() if e.mascara is not None and e.mascara.any()}
         r = A.analisar(est, self.grade, self._corpo(), self.grade.voxel_cc, texto or "", sitio or None,
                        pr.dose_total_gy, pr.fracoes, pr.estrutura_alvo, ia_disponivel=ia)
+        r["motor"] = "regras"
+        if motor in ("claude", "auto"):
+            from tps.planejamento import assistente_claude as C
+            if not C.estado()["ativo"]:
+                if motor == "claude":
+                    raise ErroUsuario("Assistente com Claude não configurado (Ferramentas › Assistente com Claude)")
+            else:
+                dose = (self.dose_fx * pr.fracoes) if (self.dose_atualizada and self.dose_fx is not None) else None
+                ctx = C.Contexto(est, self.grade, self._corpo(), self.grade.voxel_cc,
+                                 {"dose_total_gy": pr.dose_total_gy, "fracoes": pr.fracoes,
+                                  "dose_fracao_gy": round(pr.dose_total_gy / pr.fracoes, 3) if pr.fracoes else None,
+                                  "alvo_da_prescricao": pr.estrutura_alvo, "tecnica": self.plano.tecnica},
+                                 dose, r)
+
+                def prog(msg):
+                    self.progresso = msg
+                try:
+                    c = C.propor(ctx, C.anonimizar(texto or "", self.paciente), prog)
+                except Exception as e:  # noqa: BLE001
+                    if motor == "claude":
+                        raise ErroUsuario(f"Claude indisponível: {C.mensagem_erro(e)}") from e
+                    r["avisos"].insert(0, f"Claude indisponível ({C.mensagem_erro(e)}): proposta feita pelas regras")
+                else:
+                    par = dict(r.get("parametros") or {})
+                    arc = c.get("arcos") or None
+                    if arc and arc.get("inicio") is not None and arc.get("fim") is not None:
+                        par.update({"arcos": int(arc.get("n") or par.get("arcos") or 2), "inicio": float(arc["inicio"]),
+                                    "fim": float(arc["fim"]), "sentido": arc.get("sentido") or "CW"})
+                    else:
+                        par.pop("inicio", None)
+                        par.pop("fim", None)
+                    sit = c.get("sitio") if c.get("sitio") in A.carregar() else r.get("sitio")
+                    r.update({"objetivos": c["objetivos"], "explicacao": c["explicacao"], "avisos": c["avisos"],
+                              "parametros": par, "motor": "claude", "modelo": c["modelo"], "tempo_s": c["tempo_s"],
+                              "uso_tokens": c["uso_tokens"], "sitio": sit,
+                              "sitio_nome": (A.carregar().get(sit) or {}).get("nome") if sit else "Proposta do Claude",
+                              "fonte": "Claude, a partir do resumo anônimo do caso e do protocolo do sítio"})
+                    self._registrar(f"Assistente com Claude ({c['modelo']}): {len(c['objetivos'])} objetivos "
+                                    f"em {c['tempo_s']} s")
+                finally:
+                    self.progresso = None
         if aplicar:
             for c in r["criar"]:
                 if c["nome"] not in self.estruturas:
