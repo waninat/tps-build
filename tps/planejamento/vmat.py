@@ -468,7 +468,7 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
                   permitir_demonstracao: bool = False, progresso=None, evitar: list | None = None,
                   flash_mm: float = 0.0, flash_pele_mm: float = 5.0, grade_grossa: bool = True,
                   polimento_fino: bool = True, passo_aberto: int = 2,
-                  espacamento_cp_graus: float | None = None) -> ResultadoVMAT:
+                  espacamento_cp_graus: float | None = None, _so_sequenciar: bool = False) -> ResultadoVMAT:
     """Otimiza os arcos do plano (campos com arco_fim/sentido). objetivos: imrt.Objetivo. evitar: [(nome, máscara,
     modo)]; flash_mm > 0 liga o auto-flash."""
     t0 = time.time()
@@ -688,6 +688,19 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         for _, _, cs in arco["setores"]:
             rows |= mapas[cs.nome][2].any(axis=1)
         linhas_arco.append(np.nonzero(rows)[0])
+
+    # diagnóstico: perda do sequenciamento no modelo de fluência do setor (sem o espalhamento angular do setor)
+    Fq = np.zeros(mod.n)
+    for k, arco in enumerate(arcos):
+        for j, (o, s_nome) in enumerate(zip(arco["ofs_w"], arco["setor_int"])):
+            u, v, ab = mapas[s_nome]
+            bl = blocos[s_nome]
+            m, _, _ = I._cobertura(0.5 * (Acp[k][j] + Acp[k][j + 1]), 0.5 * (Bcp[k][j] + Bcp[k][j + 1]), u,
+                                   u[1] - u[0])
+            Fq[bl["ofs"]:bl["ofs"] + bl["n"]] += (w[o] / mu0 * m * ab).ravel()
+    etapas["sequenciada_modelo_setor"] = round(float(custo(mod.dose(Fq))[0]), 5)
+    if _so_sequenciar:
+        return ResultadoVMAT({}, 0.0, [], avisos, round(time.time() - t0, 1), {}, etapas)
 
     # ---- 3. otimização direta dos pontos de controle
     # A cada iteração o motor calcula a dose TOTAL de cada arco numa chamada só (intervalos agrupados em setores de 10°,
