@@ -1,9 +1,10 @@
 ﻿# Instala o módulo de contorno por IA do TPS (TotalSegmentator) em %ProgramData%\TPS\ia\venv.
 # Precisa do Python 3.10–3.12 (python.org) e de internet (pacotes ~2 GB; pesos da rede baixados no 1º uso).
-# Uso (PowerShell como administrador):  powershell -ExecutionPolicy Bypass -File instalar_ia.ps1 [-GPU]
-param([switch]$GPU)
+# Uso:  powershell -ExecutionPolicy Bypass -File instalar_ia.ps1 [-GPU] [-Destino <pasta de dados>\ia]
+# Também é chamado pelo próprio TPS (menu Ferramentas > Instalar contorno por IA).
+param([switch]$GPU, [string]$Destino = "")
 $ErrorActionPreference = "Stop"
-$destino = Join-Path $env:ProgramData "TPS\ia"
+$destino = if ($Destino) { $Destino } else { Join-Path $env:ProgramData "TPS\ia" }
 New-Item -ItemType Directory -Force -Path $destino | Out-Null
 $py = $null
 foreach ($v in @("3.12", "3.11", "3.10")) { try { & py "-$v" -c "print(1)" *> $null; if ($LASTEXITCODE -eq 0) { $py = @("py", "-$v"); break } } catch {} }

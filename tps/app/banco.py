@@ -194,6 +194,14 @@ class Banco:
                       (chave, paciente_id, paciente_nome, rotulo, estado, maquina, arquivo, _agora(), usuario,
                        hash_plano))
 
+    def apagar_plano(self, chave: str) -> dict | None:
+        with self._trava, self._con() as c:
+            r = c.execute("SELECT * FROM planos WHERE chave = ?", (chave,)).fetchone()
+            if r is None:
+                return None
+            c.execute("DELETE FROM planos WHERE chave = ?", (chave,))
+            return dict(r)
+
     def planos(self) -> list[dict]:
         with self._con() as c:
             return [dict(r) for r in c.execute("SELECT * FROM planos ORDER BY atualizado DESC")]

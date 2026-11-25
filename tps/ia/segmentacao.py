@@ -103,7 +103,7 @@ def executavel() -> Path | None:
 def estado() -> dict:
     exe = executavel()
     return {"disponivel": exe is not None, "executavel": str(exe) if exe else None,
-            "motivo": None if exe else "TotalSegmentator não instalado (veja menu Iniciar > TPS > Instalar contorno por IA)",
+            "motivo": None if exe else "TotalSegmentator não instalado: menu Ferramentas > Contorno por IA… (ou menu Iniciar > TPS > Instalar contorno por IA)",
             "orgaos": [{"id": k, "nome": ORGAOS[k][0], "grupo": g} for g, ks in GRUPOS.items() for k in ks]}
 
 

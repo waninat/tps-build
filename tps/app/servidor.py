@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from tps import paths
 from tps.app.banco import PAPEIS, PODE_APROVAR, PODE_EXPORTAR, Banco, ErroAcesso
-from tps.app.sessao import ErroUsuario, Sessao, maquinas_disponiveis
+from tps.app.sessao import ErroUsuario, Sessao, maquinas_disponiveis, mover_para_lixeira
 from tps.version import __version__
 
 ESTATICOS = Path(__file__).parent / "estatico"
@@ -99,6 +99,43 @@ def _estado_ia():
         return estado()
     except Exception as e:  # noqa: BLE001
         return {"disponivel": False, "motivo": str(e), "orgaos": []}
+
+
+@app.get("/api/objetivos_sitio")
+def objetivos_sitio(u: dict = Depends(usuario)):
+    from tps.planejamento import assistente
+    return assistente.lista()
+
+
+@app.get("/api/ia/instalacao")
+def ia_instalacao(u: dict = Depends(usuario)):
+    from tps.ia import instalador
+    return instalador.estado()
+
+
+@app.post("/api/ia/instalar")
+def ia_instalar(d: dict = Body(...), u: dict = Depends(usuario)):
+    """Instala o TotalSegmentator em <dados>/ia/venv (em segundo plano; ~2 GB, precisa de internet)."""
+    from tps.ia import instalador
+    banco().assinar(u, d.get("senha", ""), {"admin", "fisico"}, "instalar o contorno por IA")
+    try:
+        r = instalador.instalar(bool(d.get("gpu")))
+    except RuntimeError as e:
+        raise ErroUsuario(str(e)) from e
+    auditar(u, "ia_instalacao_iniciada", None, gpu=bool(d.get("gpu")))
+    return r
+
+
+@app.post("/api/ia/apontar")
+def ia_apontar(d: dict = Body(...), u: dict = Depends(usuario)):
+    from tps.ia import instalador
+    banco().assinar(u, d.get("senha", ""), {"admin", "fisico"}, "configurar o contorno por IA")
+    try:
+        r = instalador.apontar(str(d.get("executavel", "")))
+    except RuntimeError as e:
+        raise ErroUsuario(str(e)) from e
+    auditar(u, "ia_executavel", None, executavel=str(d.get("executavel", "")))
+    return r
 
 
 @app.post("/api/configurar")
@@ -326,8 +363,20 @@ def vmat_arcos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
 
 
 @app.get("/api/{sid}/imrt/objetivos")
-def imrt_objetivos(sid: str, u: dict = Depends(usuario)):
-    return _s(sid).objetivos_imrt_sugeridos()
+def imrt_objetivos(sid: str, refazer: bool = False, sitio: str = "", u: dict = Depends(usuario)):
+    with TRAVA:
+        return _s(sid).objetivos_imrt_sugeridos(refazer, sitio or None)
+
+
+@app.post("/api/{sid}/imrt/assistente")
+def imrt_assistente(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    """Lê a descrição do caso + TC/estruturas e propõe os objetivos pelo protocolo do sítio (com a explicação)."""
+    s = _s(sid)
+    with TRAVA:
+        r = s.assistente_objetivos(str(d.get("texto", ""))[:2000], d.get("sitio") or None, bool(d.get("aplicar")))
+    if d.get("aplicar"):
+        auditar(u, "assistente_objetivos", s, sitio=r.get("sitio"), texto=str(d.get("texto", ""))[:300])
+    return r
 
 
 @app.get("/api/{sid}/progresso")
@@ -384,6 +433,36 @@ def plano_remover(sid: str, rotulo: str, u: dict = Depends(usuario)):
         r = s.remover_plano(rotulo)
     auditar(u, "plano_removido_da_sessao", s, rotulo=rotulo)
     return r
+
+
+@app.post("/api/{sid}/plano/apagar")
+def plano_apagar(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    """Apaga um plano (rascunho): sai da sessão, o arquivo vai para a lixeira e sai do índice. Pede a senha."""
+    s = _s(sid)
+    banco().assinar(u, d.get("senha", ""), set(PAPEIS) - {"medico"}, "apagar planos")
+    rotulo = str(d.get("rotulo", ""))
+    with TRAVA:
+        r, chaves = s.apagar_plano(rotulo)
+    for c in chaves:
+        banco().apagar_plano(c)
+    auditar(u, "plano_apagado", s, rotulo=rotulo, arquivos=chaves)
+    return r
+
+
+@app.post("/api/planos/apagar")
+def planos_apagar_salvo(d: dict = Body(...), u: dict = Depends(usuario)):
+    """Apaga um plano salvo que não está aberto (lista de planos): arquivo para a lixeira, sai do índice."""
+    banco().assinar(u, d.get("senha", ""), set(PAPEIS) - {"medico"}, "apagar planos")
+    chave = str(d.get("chave", ""))
+    reg = next((r for r in banco().planos() if r["chave"] == chave), None)
+    if reg is None:
+        raise ErroUsuario("Plano não encontrado no índice")
+    if reg["estado"] != "RASCUNHO":
+        raise ErroUsuario("Plano aprovado não é apagado: abra, desaprove (fica na auditoria) e apague")
+    mover_para_lixeira(Path(reg["arquivo"]))
+    banco().apagar_plano(chave)
+    auditar(u, "plano_apagado", None, chave=chave, rotulo=reg["rotulo"], paciente=reg["paciente_id"])
+    return {"ok": True}
 
 
 @app.post("/api/{sid}/setup")
@@ -566,14 +645,15 @@ def dose_corte(sid: str, vista: str, idx: int, minimo: float = 20.0, maximo: flo
 
 @app.get("/api/{sid}/sobreposicao/{vista}/{idx}")
 def sobreposicao(sid: str, vista: str, idx: int, isodoses: bool = True, niveis: str = "", ref: str = "rx",
-                 unidade: str = "pct", fonte: str = "plano", u: dict = Depends(usuario)):
+                 unidade: str = "pct", fonte: str = "plano", niveis_gy: str = "", u: dict = Depends(usuario)):
     try:
         lista = [float(x) for x in niveis.replace(";", ",").split(",") if x.strip()] or None
+        extras = [float(x) for x in niveis_gy.replace(";", ",").split(",") if x.strip()]
     except ValueError as e:
         raise ErroUsuario("Níveis de isodose inválidos") from e
     return _s(sid).sobreposicao(vista, idx, None, isodoses, lista, "max" if ref == "max" else "rx",
                                 "gy" if unidade == "gy" else "pct",
-                                fonte if fonte in ("plano", "soma", "dif") else "plano")
+                                fonte if fonte in ("plano", "soma", "dif") else "plano", extras)
 
 
 @app.get("/api/{sid}/checklist")

@@ -1,0 +1,30 @@
+id: mama
+nome: Mama / parede torácica (40–50 Gy)
+sitio: Tórax
+fonte: "RTOG 1005, ESTRO-ACROP, QUANTEC (coração/pulmão)"
+palavras: [mama, mamaria, parede toracica, plastron, mastectomia, quadrantectomia, setorectomia, breast]
+dose_fracao_ref: 2.0
+lateral: true
+arcos: 2
+arco_parcial: true
+essenciais: [Heart, "Lung_{ipsi}", "Lung_{contra}", "Breast_{contra}"]
+orgaos:
+  Heart:
+    - {metrica: Dmean, valor: 4}
+    - {metrica: V20Gy, valor: 5}
+  Lung_{ipsi}:
+    - {metrica: V20Gy, valor: 15}
+    - {metrica: V10Gy, valor: 35}
+    - {metrica: V5Gy, valor: 50}
+  Lung_{contra}:
+    - {metrica: V5Gy, valor: 10}
+  Breast_{contra}:
+    - {metrica: Dmean, valor: 3}
+  SpinalCord:
+    - {metrica: D0.03cc, valor: 40}
+  Esophagus:
+    - {metrica: Dmean, valor: 20}
+  Thyroid:
+    - {metrica: Dmean, valor: 20}
+  BrachialPlex_{ipsi}:
+    - {metrica: D0.03cc, valor: 55}

@@ -1,0 +1,37 @@
+id: pelve_ginecologica
+nome: Colo uterino / endométrio — pelve (45–50,4 Gy)
+sitio: Pelve
+fonte: "RTOG 0418 / NRG-GY006 (IMRT pélvico), QUANTEC; medula óssea: INTERTECC"
+palavras: [colo, cervix, utero, endometrio, ginecolog, vulva, vagina, cupula]
+dose_fracao_ref: 1.8
+arcos: 2
+essenciais: [Bladder, Rectum, Bag_Bowel, Femur_Head_L, Femur_Head_R]
+orgaos:
+  Bag_Bowel:
+    - {metrica: V45Gy_cc, valor: 195}
+    - {metrica: V40Gy, valor: 30}
+  Bowel_Small:
+    - {metrica: V40Gy, valor: 30}
+    - {metrica: D0.03cc, valor: 52}
+  Rectum:
+    - {metrica: V30Gy, valor: 60}
+    - {metrica: V45Gy, valor: 50}
+  Bladder:
+    - {metrica: V45Gy, valor: 35}
+  Colon_Sigmoid:
+    - {metrica: V45Gy, valor: 50}
+  Femur_Head_L:
+    - {metrica: V30Gy, valor: 15}
+    - {metrica: D0.03cc, valor: 50}
+  Femur_Head_R:
+    - {metrica: V30Gy, valor: 15}
+    - {metrica: D0.03cc, valor: 50}
+  Bone_Pelvic:
+    - {metrica: V10Gy, valor: 90}
+    - {metrica: V20Gy, valor: 75}
+  Kidney_L:
+    - {metrica: Dmean, valor: 15}
+  Kidney_R:
+    - {metrica: Dmean, valor: 15}
+  SpinalCord:
+    - {metrica: D0.03cc, valor: 45}

@@ -1,0 +1,30 @@
+id: reto
+nome: Reto / canal anal — pelve (45–54 Gy)
+sitio: Pelve
+fonte: "RTOG 0822 (reto) e RTOG 0529 (canal anal), QUANTEC"
+palavras: [reto, retal, anal, anus, canal anal, mesorreto]
+dose_fracao_ref: 1.8
+arcos: 2
+essenciais: [Bladder, Bowel_Small, Femur_Head_L, Femur_Head_R]
+orgaos:
+  Bowel_Small:
+    - {metrica: V35Gy_cc, valor: 180}
+    - {metrica: V40Gy_cc, valor: 100}
+    - {metrica: V45Gy_cc, valor: 65}
+    - {metrica: D0.03cc, valor: 50}
+  Bag_Bowel:
+    - {metrica: V45Gy_cc, valor: 195}
+  Bladder:
+    - {metrica: V40Gy, valor: 40}
+    - {metrica: V45Gy, valor: 15}
+    - {metrica: D0.03cc, valor: 50}
+  Femur_Head_L:
+    - {metrica: V40Gy, valor: 40}
+    - {metrica: V45Gy, valor: 25}
+    - {metrica: D0.03cc, valor: 50}
+  Femur_Head_R:
+    - {metrica: V40Gy, valor: 40}
+    - {metrica: V45Gy, valor: 25}
+    - {metrica: D0.03cc, valor: 50}
+  Bone_Pelvic:
+    - {metrica: V20Gy, valor: 75}

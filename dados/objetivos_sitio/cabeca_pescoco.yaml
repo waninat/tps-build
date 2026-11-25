@@ -1,0 +1,49 @@
+id: cabeca_pescoco
+nome: Cabeça e pescoço — SIB 70/63/56 Gy
+sitio: Cabeça e pescoço
+fonte: "RTOG 0225 / 0522 / NRG-HN001, QUANTEC"
+palavras: [cabeca e pescoco, orofaringe, nasofaringe, hipofaringe, laringe, cavidade oral, lingua, amigdala, tonsila, parotida, cavum, glote, supraglote]
+dose_fracao_ref: 2.0
+arcos: 2
+essenciais: [SpinalCord, Brainstem, Parotid_L, Parotid_R, Cavity_Oral, Larynx, Bone_Mandible]
+orgaos:
+  SpinalCord:
+    - {metrica: D0.03cc, valor: 45}
+  Brainstem:
+    - {metrica: D0.03cc, valor: 54}
+  Parotid_L:
+    - {metrica: Dmean, valor: 26}
+  Parotid_R:
+    - {metrica: Dmean, valor: 26}
+  Glnd_Submand_L:
+    - {metrica: Dmean, valor: 39}
+  Glnd_Submand_R:
+    - {metrica: Dmean, valor: 39}
+  Cavity_Oral:
+    - {metrica: Dmean, valor: 40}
+  Larynx:
+    - {metrica: Dmean, valor: 44}
+  Musc_Constrict:
+    - {metrica: Dmean, valor: 50}
+  Bone_Mandible:
+    - {metrica: D0.03cc, valor: 70}
+  Esophagus:
+    - {metrica: Dmean, valor: 30}
+  Lips:
+    - {metrica: Dmean, valor: 20}
+  Thyroid:
+    - {metrica: Dmean, valor: 45}
+  BrachialPlex_L:
+    - {metrica: D0.03cc, valor: 66}
+  BrachialPlex_R:
+    - {metrica: D0.03cc, valor: 66}
+  Cochlea_L:
+    - {metrica: Dmean, valor: 45}
+  Cochlea_R:
+    - {metrica: Dmean, valor: 45}
+  OpticChiasm:
+    - {metrica: D0.03cc, valor: 54}
+  OpticNrv_L:
+    - {metrica: D0.03cc, valor: 54}
+  OpticNrv_R:
+    - {metrica: D0.03cc, valor: 54}

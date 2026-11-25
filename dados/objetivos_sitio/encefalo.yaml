@@ -1,0 +1,36 @@
+id: encefalo
+nome: Encéfalo — glioma 54–60 Gy
+sitio: SNC
+fonte: "EORTC/RTOG (glioma), QUANTEC"
+palavras: [glioma, glioblastoma, gbm, astrocitoma, oligodendroglioma, meningioma, encefalo, cerebral, cerebro]
+dose_fracao_ref: 2.0
+arcos: 2
+arco_parcial: false
+essenciais: [Brainstem, OpticChiasm, OpticNrv_L, OpticNrv_R, Eye_L, Eye_R, Lens_L, Lens_R]
+orgaos:
+  Brainstem:
+    - {metrica: D0.03cc, valor: 54}
+  OpticChiasm:
+    - {metrica: D0.03cc, valor: 54}
+  OpticNrv_L:
+    - {metrica: D0.03cc, valor: 54}
+  OpticNrv_R:
+    - {metrica: D0.03cc, valor: 54}
+  Eye_L:
+    - {metrica: D0.03cc, valor: 45}
+  Eye_R:
+    - {metrica: D0.03cc, valor: 45}
+  Lens_L:
+    - {metrica: D0.03cc, valor: 7}
+  Lens_R:
+    - {metrica: D0.03cc, valor: 7}
+  Cochlea_L:
+    - {metrica: Dmean, valor: 45}
+  Cochlea_R:
+    - {metrica: Dmean, valor: 45}
+  Pituitary:
+    - {metrica: Dmean, valor: 45}
+  Hippocampus_L:
+    - {metrica: Dmean, valor: 30}
+  Hippocampus_R:
+    - {metrica: Dmean, valor: 30}

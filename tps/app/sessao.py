@@ -46,6 +46,18 @@ PALETA = [(230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200), (245, 130
 NIVEIS_ISODOSE = [30, 50, 70, 80, 90, 95, 100, 105, 107, 110]
 
 
+def mover_para_lixeira(arq: Path) -> Path | None:
+    """Move um plano salvo para <home>/planos/lixeira (com data/hora no nome): apagado, mas recuperável."""
+    arq = Path(arq)
+    if not arq.exists():
+        return None
+    lixo = paths.home() / "planos" / "lixeira"
+    lixo.mkdir(parents=True, exist_ok=True)
+    destino = lixo / f"{arq.stem}_{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    shutil.move(str(arq), str(destino))
+    return destino
+
+
 class ErroUsuario(ValueError):
     """Erro que a tela mostra ao usuário como está."""
 
@@ -534,6 +546,26 @@ class Sessao:
             raise ErroUsuario(f"Plano {rotulo} não está nesta sessão")
         self._registrar(f"Plano {rotulo} removido da sessão (o arquivo salvo, se houver, continua)")
         return self.resumo()
+
+    def apagar_plano(self, rotulo: str) -> tuple[dict, list[str]]:
+        """Apaga o plano: sai da sessão e o arquivo salvo vai para <home>/planos/lixeira (recuperável). Só rascunhos.
+        Devolve o resumo e as chaves do índice de planos que foram para a lixeira."""
+        estado = None
+        if self.plano is not None and self.plano.rotulo == rotulo:
+            estado = self.plano.estado
+        elif rotulo in self.outros_planos:
+            estado = self.outros_planos[rotulo]["plano"].estado
+        if estado is None:
+            raise ErroUsuario(f"Plano {rotulo} não está nesta sessão")
+        if estado != "RASCUNHO":
+            raise ErroUsuario("Plano aprovado não é apagado: desaprove antes (fica registrado na auditoria)")
+        movidos = []
+        arq = paths.home() / "planos" / f"{self.paciente.get('id') or 'sem_id'}_{rotulo}.json"
+        if mover_para_lixeira(arq):
+            movidos.append(arq.stem)
+        self.remover_plano(rotulo)
+        self._registrar(f"Plano {rotulo} apagado" + (" (arquivo na lixeira)" if movidos else ""))
+        return self.resumo(), movidos
 
     def lista_planos(self) -> list[dict]:
         out = []
@@ -1934,10 +1966,38 @@ class Sessao:
         self._registrar(f"{n} campos equiespaçados para IMRT (início {inicio:g}°, alvo {alvo} + {margem_mm:g} mm)")
         return self.resumo()
 
-    def objetivos_imrt_sugeridos(self) -> list[dict]:
+    def assistente_objetivos(self, texto: str = "", sitio: str | None = None, aplicar: bool = False) -> dict:
+        """Objetivos pelo protocolo do sítio, lendo a descrição do caso, a TC e as estruturas (regras explicadas)."""
+        from tps.planejamento import assistente as A
+        self._exigir_plano()
+        if self.grade is None:
+            raise ErroUsuario("Carregue um CT primeiro")
+        ia = False
+        if self.tipo == "ct":
+            try:
+                from tps.ia.segmentacao import executavel
+                ia = executavel() is not None
+            except Exception:  # noqa: BLE001
+                ia = False
+        pr = self.plano.prescricao
+        est = {n: e.mascara for n, e in self.estruturas.items() if e.mascara is not None and e.mascara.any()}
+        r = A.analisar(est, self.grade, self._corpo(), self.grade.voxel_cc, texto or "", sitio or None,
+                       pr.dose_total_gy, pr.fracoes, pr.estrutura_alvo, ia_disponivel=ia)
+        if aplicar:
+            for c in r["criar"]:
+                if c["nome"] not in self.estruturas:
+                    self.criar_estrutura(c["nome"], c["operacao"], c["a"], c["b"])
+            self._registrar(f"Objetivos do assistente aplicados (protocolo {r.get('sitio') or '—'}; "
+                            f"{len(r['objetivos'])} objetivos)")
+        r["estruturas"] = list(self.estruturas)
+        return r
+
+    def objetivos_imrt_sugeridos(self, refazer: bool = False, sitio: str | None = None) -> list[dict]:
         from tps.planejamento.imrt import objetivos_sugeridos
         self._exigir_plano()
-        if self.plano.objetivos_imrt:
+        if sitio:
+            return self.assistente_objetivos("", sitio, aplicar=True)["objetivos"]
+        if self.plano.objetivos_imrt and not refazer:
             return list(self.plano.objetivos_imrt)
         pr = self.plano.prescricao
         return objetivos_sugeridos([n for n, e in self.estruturas.items() if e.mascara.any()], pr.estrutura_alvo,
@@ -2484,8 +2544,9 @@ class Sessao:
 
     def sobreposicao(self, vista: str, idx: int, estruturas: list[str] | None = None, isodoses: bool = True,
                      niveis: list | None = None, referencia: str = "rx", unidade: str = "pct",
-                     fonte: str = "plano") -> dict:
-        """Contornos, isodoses e feixes do corte, em mm (h, v)."""
+                     fonte: str = "plano", niveis_gy: list | None = None) -> dict:
+        """Contornos, isodoses e feixes do corte, em mm (h, v). `niveis_gy`: linhas extras em dose absoluta (Gy,
+        dose total do plano), desenhadas junto com as relativas (ex.: 40 Gy para a medula)."""
         g = self.grade
         pos, eh, ev = self._plano_corte(vista, int(idx))
         out = {"pos": pos, "contornos": [], "isodoses": [], "feixes": [], "iso": self.isocentro}
@@ -2552,8 +2613,16 @@ class Sessao:
                         ls = linhas(img, nv)
                     if ls:
                         out["isodoses"].append({"nivel": nv, "linhas": ls})
+                extras = sorted({round(float(v), 3) for v in (niveis_gy or []) if float(v) > 0})
+                if extras and not e_dif:
+                    img_gy = corte_grade(total)
+                    for nv in extras:
+                        ls = linhas(img_gy, nv)
+                        if ls:
+                            out["isodoses"].append({"nivel": nv, "linhas": ls, "absoluta": True,
+                                                    "pct": round(nv / cem * 100, 1)})
                 out["iso_ref"] = {"referencia": referencia, "unidade": unidade, "cem_gy": round(cem, 3),
-                                  "dmax_gy": round(dmax, 3), "rx_gy": round(rx, 3), "niveis": lista, "fonte": fonte,
+                                  "dmax_gy": round(dmax, 3), "rx_gy": round(rx, 3), "niveis": lista, "niveis_gy": extras, "fonte": fonte,
                                   "dif": e_dif, "descricao": (self.dose_vista.get(fonte) or {}).get("descricao")}
         if self.plano and vista == "axial":
             for c in self.plano.campos:

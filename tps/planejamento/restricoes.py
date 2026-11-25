@@ -43,9 +43,28 @@ _BASE = {
     "Femur_Head": ["CABECAFEMORAL", "CABECADOFEMUR", "FEMUR", "FEMURHEAD", "FEMORALHEAD"],
     "Lens": ["CRISTALINO", "LENS"],
     "Brain": ["ENCEFALO", "CEREBRO", "BRAIN"],
+    "Breast": ["MAMA", "BREAST"],
+    "Glnd_Submand": ["SUBMANDIBULAR", "GLANDULASUBMANDIBULAR", "SUBMAND", "GLNDSUBMAND"],
+    "Cavity_Oral": ["CAVIDADEORAL", "CAVORAL", "ORALCAVITY", "CAVITYORAL"],
+    "Musc_Constrict": ["CONSTRITORES", "CONSTRITORESFARINGE", "CONSTRITOR", "PHARYNXCONSTRICTORS", "MUSCCONSTRICT"],
+    "Bone_Mandible": ["MANDIBULA", "MANDIBLE", "BONEMANDIBLE"],
+    "BrachialPlex": ["PLEXOBRAQUIAL", "BRACHIALPLEXUS", "BRACHIALPLEX"],
+    "Eye": ["OLHO", "GLOBOOCULAR", "EYE"],
+    "Pituitary": ["HIPOFISE", "PITUITARY"],
+    "Hippocampus": ["HIPOCAMPO", "HIPPOCAMPUS"],
+    "Stomach": ["ESTOMAGO", "STOMACH"],
+    "Duodenum": ["DUODENO", "DUODENUM"],
+    "Colon_Sigmoid": ["SIGMOIDE", "COLONSIGMOIDE", "SIGMOID", "COLONSIGMOID"],
+    "Bone_Pelvic": ["MEDULAOSSEA", "MEDULAOSSEAPELVICA", "OSSOPELVICO", "OSSOSPELVICOS", "PELVICBONE", "BONEMARROW",
+                    "BONEPELVIC"],
+    "Anus": ["CANALANAL", "ANUS", "ANALCANAL"],
+    "Trachea": ["TRAQUEIA", "TRACHEA"],
+    "Thyroid": ["TIREOIDE", "TIROIDE", "THYROID"],
+    "Lips": ["LABIOS", "LIPS"],
     "External": ["BODY", "CORPO", "EXTERNAL", "EXTERNO", "PELE", "SKIN", "CONTORNO"],
 }
-_LATERAIS = {"Cochlea", "Parotid", "OpticNrv", "Lung", "Kidney", "Femur_Head", "Lens"}
+_LATERAIS = {"Cochlea", "Parotid", "OpticNrv", "Lung", "Kidney", "Femur_Head", "Lens", "Breast", "Glnd_Submand",
+             "BrachialPlex", "Eye", "Hippocampus"}
 _DIR = ("DIREITO", "DIREITA", "DIR", "D", "R", "RIGHT", "RT")
 _ESQ = ("ESQUERDO", "ESQUERDA", "ESQ", "E", "L", "LEFT", "LT")
 

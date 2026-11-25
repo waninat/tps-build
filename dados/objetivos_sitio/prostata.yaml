@@ -1,0 +1,27 @@
+id: prostata
+nome: Próstata — fracionamento convencional (74–78 Gy)
+sitio: Pelve
+fonte: "RTOG 0126 / 0415 (convencional), QUANTEC. Hipofracionado (60 Gy/20, CHHiP): criar arquivo próprio da clínica"
+palavras: [prostata, prostatico, vesiculas seminais, leito prostatico, prostatectomia]
+dose_fracao_ref: 2.0
+arcos: 2
+essenciais: [Rectum, Bladder, Femur_Head_L, Femur_Head_R]
+orgaos:
+  Rectum:
+    - {metrica: V75Gy, valor: 15}
+    - {metrica: V70Gy, valor: 25}
+    - {metrica: V65Gy, valor: 35}
+    - {metrica: V60Gy, valor: 50}
+  Bladder:
+    - {metrica: V80Gy, valor: 15}
+    - {metrica: V75Gy, valor: 25}
+    - {metrica: V70Gy, valor: 35}
+    - {metrica: V65Gy, valor: 50}
+  PenileBulb:
+    - {metrica: Dmean, valor: 52.5}
+  Femur_Head_L:
+    - {metrica: D0.03cc, valor: 50}
+  Femur_Head_R:
+    - {metrica: D0.03cc, valor: 50}
+  Bowel_Small:
+    - {metrica: D0.03cc, valor: 52}

@@ -1,0 +1,26 @@
+id: esofago
+nome: Esôfago — 41,4–50,4 Gy
+sitio: Tórax
+fonte: "CROSS / RTOG 1010, QUANTEC"
+palavras: [esofago, esofagico, juncao esofagogastrica, jeg, cardia]
+dose_fracao_ref: 1.8
+arcos: 2
+essenciais: [Lung_L, Lung_R, Heart, SpinalCord, Liver]
+orgaos:
+  Lungs:
+    - {metrica: V20Gy, valor: 20}
+    - {metrica: V5Gy, valor: 50}
+    - {metrica: Dmean, valor: 15}
+  Heart:
+    - {metrica: V30Gy, valor: 30}
+    - {metrica: Dmean, valor: 26}
+  SpinalCord:
+    - {metrica: D0.03cc, valor: 45}
+  Liver:
+    - {metrica: Dmean, valor: 25}
+  Kidney_L:
+    - {metrica: V20Gy, valor: 33}
+  Kidney_R:
+    - {metrica: V20Gy, valor: 33}
+  Stomach:
+    - {metrica: D0.03cc, valor: 54}

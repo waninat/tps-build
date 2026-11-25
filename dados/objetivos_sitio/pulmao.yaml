@@ -1,0 +1,26 @@
+id: pulmao
+nome: Pulmão — 60–66 Gy convencional
+sitio: Tórax
+fonte: "RTOG 0617, QUANTEC"
+palavras: [pulmao, pulmonar, cpnpc, nsclc, pequenas celulas, mediastino, mediastinal]
+dose_fracao_ref: 2.0
+arcos: 2
+arco_parcial: true
+essenciais: [Lung_L, Lung_R, Heart, Esophagus, SpinalCord]
+orgaos:
+  Lungs:
+    - {metrica: V20Gy, valor: 33}
+    - {metrica: Dmean, valor: 20}
+    - {metrica: V5Gy, valor: 65}
+  Heart:
+    - {metrica: V50Gy, valor: 25}
+    - {metrica: Dmean, valor: 20}
+  Esophagus:
+    - {metrica: Dmean, valor: 34}
+    - {metrica: D0.03cc, valor: 66}
+  SpinalCord:
+    - {metrica: D0.03cc, valor: 45}
+  BrachialPlex_L:
+    - {metrica: D0.03cc, valor: 66}
+  BrachialPlex_R:
+    - {metrica: D0.03cc, valor: 66}
