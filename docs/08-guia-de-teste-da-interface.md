@@ -45,6 +45,34 @@ Separação AP de 12 cm ("pescoço") a 26 cm ("tórax"), PTV na linha média, me
 Exporte do Monaco/CT a série de CT **com o RTSTRUCT** na mesma pasta (HFS). Planos 3D convencionais (mama
 tangente, pelve 4 campos, paliativos) servem para comparar UM e DVH com o Monaco.
 
+### E. IMRT e VMAT (versão 0.8)
+**Objetivos** (comuns aos dois): tipo *alvo*, *mín*, *máx*, *média*, *DVH*, *serial* (gEUD, expoente k) e
+*paralelo* (no máximo v% acima da dose). A coluna **R** marca o objetivo como *restrito* (estilo Monaco: o
+otimizador cumpre e busca o melhor alvo possível); sem R ele é ponderado (estilo Eclipse). *Sugerir objetivos*
+monta a lista pelas restrições do protocolo.
+**Avoidance** (estilo Eclipse): estrutura + *entrada*, *saída* ou *ambos*. **Auto-flash** (estilo Monaco, para
+mama): margem fora da pele onde o alvo encosta nela.
+
+IMRT step-and-shoot:
+1. Técnica *IMRT* → *Campos equiespaçados* (ex.: 7 campos, início 0°, margem 5 mm).
+2. Objetivos → *Otimizar IMRT*. A barra mostra o andamento; no fim aparecem segmentos, UM e as restrições.
+
+VMAT (Precise e Synergy):
+1. Técnica *VMAT* → *Arcos*: nº de arcos, início/fim (cheio = 181→179), sentido, colimador por arco
+   (ex.: "10, 350") e margem → *Criar arcos* (substituem os campos).
+2. *Setor* 40° (padrão), *PC a cada* 2° (ou 1°: mais modulação, cálculo mais lento), iterações 2–5.
+3. *Otimizar VMAT*: aparecem UM e tempo de entrega estimado de cada arco. O checklist confere colisão a cada 5°,
+   pontos de controle por arco e o tempo.
+4. Exportação: um feixe **DYNAMIC** por arco. **Testar no Mosaiq 2.83 antes de qualquer uso clínico.**
+
+QA de paciente (IMRT e VMAT): *QA de paciente* → fantoma e modo (*ângulos reais* ou *gantry 0*). Saem o RTPLAN de
+verificação, o RTDOSE no fantoma e o plano coronal (CSV). No VMAT em *gantry 0* o RTPLAN é o arco real (detector
+preso ao gantry) e só o cálculo junta os pontos no gantry 0.
+
+**Pendências a confirmar na máquina/Monaco** (`dados/maquinas/*/maquina.yaml`, marcadas CONFIRMAR): gap mínimo do
+MLCi (hoje 5 mm — é o que mais limita o VMAT no Precise), máximo de pontos de controle por arco, UM mínima por
+grau, velocidade das lâminas e taxa de dose.
+
 ## Integração com o Mosaiq 2.83 (pendente de teste)
 - Em *Enviar ao Mosaiq*, informe IP, porta e AE Title do destino DICOM do Mosaiq (a TI ou a Elekta informam).
   O envio usa C-STORE; a importação no Mosaiq segue o fluxo normal de RTPLAN.
@@ -55,9 +83,8 @@ tangente, pelve 4 campos, paliativos) servem para comparar UM e DVH com o Monaco
   número de segmentos e UM de cada um.
 
 ## O que esta versão ainda não tem
-Contorno (as estruturas vêm do RTSTRUCT), registro de imagens, edição de jaws com o mouse, pontos de referência,
-soma de planos, campos de setup, bolus, elétrons, usuários com senha e auditoria em banco. A dose é calculada pelo
-collapsed cone com o modelo v2 do Precise; perfis medidos ainda não entraram no comissionamento.
+Registro (fusão) de imagens, RM e PET, elétrons, blocos (Mevatron) e cálculo por Monte Carlo. A dose é calculada
+pelo collapsed cone; o comissionamento ainda depende dos dados medidos pendentes (doc. 06).
 
 ## Como relatar problemas
 Anote o que fez, o que esperava e o que aconteceu; mande o print e, se houver, o texto vermelho que aparece embaixo

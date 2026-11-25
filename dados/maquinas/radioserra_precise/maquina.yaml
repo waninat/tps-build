@@ -35,6 +35,7 @@ vmat:                                 # limites usados na otimização e na esti
   um_por_grau_max: 20.0
   deslocamento_max_mm_grau: 4.0       # percurso da lâmina por grau na otimização (≈ v_lâmina ÷ v_gantry ≈ 3,3)
   espacamento_cp_graus: 4.0           # entre pontos de controle
+  max_pontos_arco: 360                # limite de pontos de controle por arco no Mosaiq/Integrity — CONFIRMAR
 cunha_motorizada: null                # fora do escopo: o serviço não usa cunha (field-in-field automático)
 dados_de_feixe:
   "6MV":

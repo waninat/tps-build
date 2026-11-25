@@ -42,6 +42,7 @@ class LimitesVMAT:
     um_por_grau_max: float = 20.0
     deslocamento_max_mm_grau: float = 4.0
     espacamento_cp_graus: float = 4.0
+    max_pontos_arco: float = 360.0
 
     @classmethod
     def da_maquina(cls, raw: dict | None) -> "LimitesVMAT":
@@ -492,7 +493,7 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
                   permitir_demonstracao: bool = False, progresso=None, evitar: list | None = None,
                   flash_mm: float = 0.0, flash_pele_mm: float = 5.0, grade_grossa: bool = True,
                   polimento_fino: bool = True, passo_aberto: int = 2,
-                  espacamento_cp_graus: float | None = None, segurar: bool = False,
+                  espacamento_cp_graus: float | None = None, segurar: bool = False, um_exata: bool = True,
                   _so_sequenciar: bool = False) -> ResultadoVMAT:
     """Otimiza os arcos do plano (campos com arco_fim/sentido). objetivos: imrt.Objetivo. evitar: [(nome, máscara,
     modo)]; flash_mm > 0 liga o auto-flash."""
@@ -822,12 +823,44 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         return I._minimizar_al(obj_w, np.clip(w0, [b[0] for b in bnds_w], [b[1] for b in bnds_w]), bnds_w, custo,
                                lambda x: modelo_cp.avaliar(Acp, Bcp, x), 4, 300)
 
-    for r in range(2):
+    def doses_intervalos(Ak, Bk, rotulo):
+        """Dose/UM exata de cada intervalo (motor, grade grossa, cones reduzidos): a dose é linear nas UM, então a
+        otimização das UM com esta matriz é exata."""
+        cs_l = []
+        for k, arco in enumerate(arcos):
+            c, angs = arco["campo"], arco["angs"]
+            jx, jy = jaws[k]
+            for j in range(len(angs) - 1):
+                d = (angs[j + 1] - angs[j] + 180.0) % 360.0 - 180.0
+                cs_l.append(Campo(f"{c.nome}#{j:03d}", float((angs[j] + d / 2) % 360.0), c.colimador, c.mesa,
+                                  c.isocentro_mm, jaw_x=jx, jaw_y=jy,
+                                  mlc_a=(0.5 * (Ak[k][j] + Ak[k][j + 1])).tolist(),
+                                  mlc_b=(0.5 * (Bk[k][j] + Bk[k][j + 1])).tolist()))
+        am = amostrar(cs_l, rotulo, rapido=True)
+        return np.column_stack([fx * am[cs.nome] for cs in cs_l])
+
+    def otimizar_um_exata(M, w0):
+        def obj_w(x):
+            f, gD = custo(M @ x)
+            return f, M.T @ gD
+        return I._minimizar_al(obj_w, np.clip(w0, [b[0] for b in bnds_w], [b[1] for b in bnds_w]), bnds_w, custo,
+                               lambda x: M @ x, 4, 500)
+
+    M = None
+    if um_exata:
+        M = doses_intervalos(Acp, Bcp, "Calculando os intervalos dos arcos com o motor completo")
         aviso("Otimizando as UM dos pontos de controle…")
-        w = otimizar_um(Acp, Bcp, w)
-        D = dose_total(Acp, Bcp, w, gg, True, "Recalculando os arcos com as UM novas…")
+        w = otimizar_um_exata(M, w)
+        D = M @ w
         modelo_cp.corr[:] = 0.0
         modelo_cp.corr = D - modelo_cp.avaliar(Acp, Bcp, w)
+    else:
+        for r in range(2):
+            aviso("Otimizando as UM dos pontos de controle…")
+            w = otimizar_um(Acp, Bcp, w)
+            D = dose_total(Acp, Bcp, w, gg, True, "Recalculando os arcos com as UM novas…")
+            modelo_cp.corr[:] = 0.0
+            modelo_cp.corr = D - modelo_cp.avaliar(Acp, Bcp, w)
     etapas["depois_das_um"] = round(float(custo(D)[0]), 5)
     hist = [float(custo(D)[0])]
     passo_mm = 10.0
@@ -844,6 +877,10 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
                 a, b = Ak[k][j].copy(), Bk[k][j].copy()
                 reparar(a, b, colim, lo, hi, (b - a) > colim.gap_minimo_mm + 0.5)
                 Ak[k][j], Bk[k][j] = a, b
+        if um_exata and g_ is gg:                          # dose exata por intervalo → UM exatas
+            M2 = doses_intervalos(Ak, Bk, f"Recalculando os intervalos ({rotulo})")
+            w2 = otimizar_um_exata(M2, w2)
+            return Ak, Bk, w2, M2 @ w2
         D2 = dose_total(Ak, Bk, w2, g_, rapido, f"Recalculando os arcos ({rotulo})…")
         return Ak, Bk, w2, D2
 

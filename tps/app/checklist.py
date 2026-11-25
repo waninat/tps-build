@@ -152,6 +152,14 @@ def checklist(sessao) -> list[dict]:
         out.append(_item("imrt_qa", "VMAT: QA de paciente antes do 1º tratamento", "aviso",
                          f"{len(arcos)} arco(s), {sum(float(c.mu or 0) for c in arcos):.0f} UM — gere o plano de "
                          "verificação no fantoma e meça (gama)"))
+        from tps.planejamento.vmat import LimitesVMAT
+        lim = LimitesVMAT.da_maquina(getattr(s.maquina, "raw", None))
+        muitos = [f"{c.nome} {len(c.pontos_controle)}" for c in arcos
+                  if c.pontos_controle and len(c.pontos_controle) > lim.max_pontos_arco]
+        if muitos:
+            out.append(_item("vmat_pontos", "VMAT: pontos de controle por arco", "erro",
+                             f"{', '.join(muitos)} — acima do limite da máquina ({lim.max_pontos_arco:.0f}); aumente o "
+                             "espaçamento dos pontos"))
         info = (s.resultado.get("info") or {}).get("vmat") or {}
         lentos = [f"{n} {a['tempo_s']:.0f} s" for n, a in (info.get("arcos") or {}).items()
                   if a.get("tempo_s", 0) > 240]
