@@ -110,14 +110,29 @@ def segmentos_do_campo(c: Campo, colim: Colimacao, sad_mm: float = 1000.0) -> li
     return out
 
 
+# cones reduzidos (≈ 45 direções em vez de 113) para as iterações dos otimizadores; a dose final usa os completos
+BANDAS_RAPIDAS = [(0, 1, 1), (1, 6, 6), (6, 14, 8), (14, 22, 8), (22, 30, 8), (30, 42, 8), (42, 48, 6)]
+_CONES: dict = {}
+
+
+def _cones(kernels, modelo, rapido: bool):
+    from tps import paths
+    from tps.physics.kernels import DEFAULT_BANDS
+    arq = str(kernels or paths.kernels_file())
+    ch = (arq, modelo.energy_mv, modelo.spectrum_hardening_k, float(getattr(modelo, "escala_espalhamento", 1.0)),
+          rapido)
+    if ch not in _CONES:
+        _CONES[ch] = cones_do_modelo(load_mono(arq), modelo, BANDAS_RAPIDAS if rapido else DEFAULT_BANDS)
+    return _CONES[ch]
+
+
 def dose_por_um(grade: GradeDose, campos: list[Campo], colim: Colimacao, modelo: BeamModelParams,
                 kernels: str | Path | None = None, posicao: str = "HFS",
-                permitir_demonstracao: bool = False) -> dict[str, np.ndarray]:
-    """Dose (Gy) por 1 UM de cada campo, na grade."""
+                permitir_demonstracao: bool = False, rapido: bool = False) -> dict[str, np.ndarray]:
+    """Dose (Gy) por 1 UM de cada campo, na grade. rapido=True: cones reduzidos (só para iterações de otimização)."""
     if not modelo.comissionado and not (permitir_demonstracao and modelo.demonstracao):
         raise ModeloNaoComissionado("Modelo de feixe não comissionado: não calcula plano de paciente")
-    from tps import paths
-    cones = cones_do_modelo(load_mono(kernels or paths.kernels_file()), modelo)
+    cones = _cones(kernels, modelo, rapido)
     g = grade.para_motor()
     return {c.nome: compute_dose(g, segmentos_do_campo(c, colim), modelo, cones, patient_position=posicao)
             for c in campos}

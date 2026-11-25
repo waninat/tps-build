@@ -730,7 +730,7 @@ async function calcular() {
       flash_mm: $("#im-flash").checked ? +$("#im-flash-mm").value : 0, flash_pele_mm: +$("#im-flash-pele").value };
     const corpo = tec === "VMAT"
       ? { ...normalizacaoDoForm(), vmat: { ...comum, setor_graus: +$("#vm-setor").value, iteracoes: +$("#vm-it").value,
-          peso_nto: +$("#vm-nto").value } }
+          peso_nto: +$("#vm-nto").value, espacamento_cp: $("#vm-cp").value ? +$("#vm-cp").value : null } }
       : { ...normalizacaoDoForm(), imrt: { ...comum, niveis: +$("#im-niveis").value, um_min: +$("#im-ummin").value,
           area_min_cm2: +$("#im-area").value, peso_nto: +$("#im-nto").value, iteracoes: +$("#im-it").value,
           forma_segmentos: $("#im-forma").checked } };

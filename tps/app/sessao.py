@@ -1670,7 +1670,9 @@ class Sessao:
                                 setor_graus=float(vm.get("setor_graus", 40)), iteracoes=int(vm.get("iteracoes", 2)),
                                 peso_nto=float(vm.get("peso_nto", 1.0)), progresso=prog, evitar=evitar,
                                 flash_mm=float(vm.get("flash_mm", 0) or 0),
-                                flash_pele_mm=float(vm.get("flash_pele_mm", 5) or 5))
+                                flash_pele_mm=float(vm.get("flash_pele_mm", 5) or 5),
+                                espacamento_cp_graus=float(vm["espacamento_cp"]) if vm.get("espacamento_cp") else None,
+                                polimento_fino=bool(vm.get("polimento_fino", True)))
         except ValueError as ex:
             raise ErroUsuario(str(ex)) from ex
         finally:

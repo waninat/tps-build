@@ -276,6 +276,8 @@ class ModeloIntervalos:
     def __init__(self, arcos, mapas, abertos: list[Campo], d0: list[np.ndarray], grade, idx, sigma_px, posicao):
         self.mapas = mapas
         self.sigma = sigma_px
+        self.esp = 0.0                   # fração de espalhamento (kernel largo)
+        self.sigma2 = {}
         self.n = len(idx)
         self.corr = np.zeros(self.n)
         self.perto = {}
@@ -292,6 +294,20 @@ class ModeloIntervalos:
                 k0 = (i * len(u) + j0)[sel].astype(np.int32)
                 self.itens.append((k, j, o, s_nome, sel, k0, t[sel].astype(np.float32), dd[sel].astype(np.float32)))
 
+    def espalhamento(self, fracao: float, alcance_mm: float) -> None:
+        """D ∝ (1−f)·G_σ ∗ cobertura + f·G_largo ∗ cobertura: com f > 0, aberturas pequenas recebem menos
+        espalhamento que o campo aberto em que d_j foi calculado."""
+        self.esp = float(fracao)
+        for nome, (u, v, ab) in self.mapas.items():
+            dv = float(np.mean(np.abs(np.diff(v)))) if len(v) > 1 else 5.0
+            self.sigma2[nome] = (alcance_mm / dv, alcance_mm / float(u[1] - u[0]))
+
+    def _borrar(self, x, s_nome):
+        y = gaussian_filter(x, self.sigma, mode="nearest")
+        if self.esp > 0:
+            y = (1 - self.esp) * y + self.esp * gaussian_filter(x, self.sigma2[s_nome], mode="nearest")
+        return y
+
     def avaliar(self, Ak, Bk, w, custo=None):
         """(custo, gA, gB, gw, D); sem custo devolve só a dose."""
         D = self.corr.copy()
@@ -302,7 +318,7 @@ class ModeloIntervalos:
             b = 0.5 * (Bk[k][j] + Bk[k][j + 1])
             m, da, db = I._cobertura(a, b, u, u[1] - u[0])
             nn = m.size
-            Fe = gaussian_filter(m.ravel()[self.perto[s_nome]].reshape(m.shape), self.sigma, mode="nearest").ravel()
+            Fe = self._borrar(m.ravel()[self.perto[s_nome]].reshape(m.shape), s_nome).ravel()
             k1 = np.minimum(k0 + 1, nn - 1)
             val = (1 - t) * Fe[k0] + t * Fe[k1]
             D[sel] += w[o] * dd * val
@@ -320,7 +336,7 @@ class ModeloIntervalos:
             ge = np.zeros(nn)
             np.add.at(ge, k0, w[o] * gx * (1 - t))
             np.add.at(ge, k1, w[o] * gx * t)
-            ge = gaussian_filter(ge.reshape(shape), self.sigma, mode="nearest").ravel()
+            ge = self._borrar(ge.reshape(shape), s_nome).ravel()
             gm = np.zeros(nn)
             np.add.at(gm, self.perto[s_nome], ge)
             gm = gm.reshape(shape)
@@ -423,19 +439,44 @@ def otimizar_pontos(arcos, Acp, Bcp, w, modelo: ModeloIntervalos, custo, colim, 
     return Ak, Bk, np.asarray(r.x[nX:], float)
 
 
+def _mesmos_pontos(p1, p2) -> bool:
+    """Mesmos pontos de controle (mesma geometria e mesmas frações de UM): a dose/UM do arco é a mesma."""
+    if len(p1) != len(p2):
+        return False
+    for a, b in zip(p1, p2):
+        if a["gantry"] != b["gantry"] or a["mlc_a"] != b["mlc_a"] or a["mlc_b"] != b["mlc_b"] or \
+                a["jaw_y"] != b["jaw_y"] or a.get("jaw_x") != b.get("jaw_x") or abs(a["mw"] - b["mw"]) > 1e-9:
+            return False
+    return True
+
+
+def _pontos_controle(arco, A, B, wk, jaws_k) -> list[dict]:
+    jx, jy = jaws_k
+    tot = float(np.sum(wk))
+    mw = np.r_[0.0, np.cumsum(wk) / max(tot, 1e-12)]
+    mw[-1] = 1.0
+    return [{"gantry": round(float(arco["angs"][j]), 2), "mlc_a": [round(float(x), 1) for x in A[j]],
+             "mlc_b": [round(float(x), 1) for x in B[j]], "jaw_x": list(jx) if jx else None, "jaw_y": list(jy),
+             "mw": round(float(mw[j]), 6)} for j in range(len(arco["angs"]))]
+
+
 # ------------------------------------------------------------------ otimização completa
 def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objetivos: list, corpo: np.ndarray,
                   colim: Colimacao, modelo, limites: LimitesVMAT | None = None, setor_graus: float = 40.0,
                   iteracoes: int = 2, margem_mm: float = 5.0, res_u_mm: float = 2.5, sigma_mm: tuple = (3.0, 3.5),
                   peso_nto: float = 1.0, suavidade: float = 0.2, kernels=None, posicao: str = "HFS",
                   permitir_demonstracao: bool = False, progresso=None, evitar: list | None = None,
-                  flash_mm: float = 0.0, flash_pele_mm: float = 5.0, grade_grossa: bool = True) -> ResultadoVMAT:
+                  flash_mm: float = 0.0, flash_pele_mm: float = 5.0, grade_grossa: bool = True,
+                  polimento_fino: bool = True, passo_aberto: int = 2,
+                  espacamento_cp_graus: float | None = None) -> ResultadoVMAT:
     """Otimiza os arcos do plano (campos com arco_fim/sentido). objetivos: imrt.Objetivo. evitar: [(nome, máscara,
     modo)]; flash_mm > 0 liga o auto-flash."""
     t0 = time.time()
     plano._exigir_rascunho()
     aviso = progresso or (lambda m: None)
-    lim = limites or LimitesVMAT()
+    lim = copy.copy(limites or LimitesVMAT())
+    if espacamento_cp_graus:
+        lim.espacamento_cp_graus = float(espacamento_cp_graus)
     principais = [c for c in plano.campos if c.campo_pai is None]
     arcos_c = [c for c in principais if c.e_arco]
     if not arcos_c:
@@ -523,12 +564,13 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
     pts = (grade.x[kx], grade.y[ky], grade.z[kz])
     gg = I._grade_grossa(grade) if grade_grossa and passo_g < 4.5 else grade
 
-    def amostrar(lista_campos, rotulo):
+    def amostrar(lista_campos, rotulo, rapido=False):
         out = {}
         for j, cs in enumerate(lista_campos):
             if j % 15 == 0:
                 aviso(f"{rotulo}… {j}/{len(lista_campos)}")
-            d = calculo.dose_por_um(gg, [cs], colim, modelo, kernels, posicao, permitir_demonstracao)[cs.nome]
+            d = calculo.dose_por_um(gg, [cs], colim, modelo, kernels, posicao, permitir_demonstracao,
+                                    rapido=rapido)[cs.nome]
             out[cs.nome] = I._amostrar_grossa(d, gg, pts)
         return out
 
@@ -647,62 +689,92 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
             rows |= mapas[cs.nome][2].any(axis=1)
         linhas_arco.append(np.nonzero(rows)[0])
 
-    # ---- 3. dose dos intervalos, UM e otimização direta dos pontos
-    def campos_intervalo(Ak, Bk):
+    # ---- 3. otimização direta dos pontos de controle
+    # A cada iteração o motor calcula a dose TOTAL de cada arco numa chamada só (intervalos agrupados em setores de 10°,
+    # cones reduzidos, grade grossa); o modelo rápido por intervalo dá os gradientes e é recalibrado (correção aditiva)
+    # pela dose do motor. Folhas e UM de todos os pontos são otimizadas juntas.
+    def arcos_temporarios(Ak, Bk, wv):
         out = []
         for k, arco in enumerate(arcos):
-            c, angs = arco["campo"], arco["angs"]
-            jx, jy = jaws[k]
-            for j in range(len(angs) - 1):
-                d = (angs[j + 1] - angs[j] + 180.0) % 360.0 - 180.0
-                out.append(Campo(f"{c.nome}#{j:03d}", float((angs[j] + d / 2) % 360.0), c.colimador, c.mesa,
-                                 c.isocentro_mm, jaw_x=jx, jaw_y=jy,
-                                 mlc_a=(0.5 * (Ak[k][j] + Ak[k][j + 1])).tolist(),
-                                 mlc_b=(0.5 * (Bk[k][j] + Bk[k][j + 1])).tolist()))
+            c = copy.copy(arco["campo"])
+            c.pontos_controle = _pontos_controle(arco, Ak[k], Bk[k], wv[arco["ofs_w"]], jaws[k])
+            c.mu = float(wv[arco["ofs_w"]].sum())
+            out.append(c)
         return out
 
-    bnds_w = [(lim.um_por_grau_min * dg, lim.um_por_grau_max * dg) for a in arcos for dg in a["dtheta"]]
+    cache_fino = {}                                          # nome → (pontos de controle, dose/UM na grade do plano)
 
-    def doses_intervalos(Ak, Bk, rotulo):
-        cs_l = campos_intervalo(Ak, Bk)
-        am = amostrar(cs_l, rotulo)
-        return np.column_stack([fx * am[cs.nome] for cs in cs_l])
+    def dose_total(Ak, Bk, wv, g_, rapido, rotulo):
+        aviso(rotulo)
+        D = np.zeros(len(idx))
+        for c in arcos_temporarios(Ak, Bk, wv):
+            d = calculo.dose_por_um(g_, [c], colim, modelo, kernels, posicao, permitir_demonstracao,
+                                    rapido=rapido)[c.nome]
+            if g_ is gr_fina and not rapido:
+                cache_fino.setdefault(c.nome, []).append((c.pontos_controle, d))
+            D += fx * c.mu * (I._amostrar_grossa(d, g_, pts) if g_ is not gr_fina else d.ravel()[idx])
+        return D
 
-    def otimizar_um(M, w0):
-        def obj_w(x):
-            f, gD = custo(M @ x)
-            return f, M.T @ gD
-        return I._minimizar_al(obj_w, np.clip(w0, [b[0] for b in bnds_w], [b[1] for b in bnds_w]), bnds_w, custo,
-                               lambda x: M @ x, 4, 500)
-
-    M = doses_intervalos(Acp, Bcp, "Calculando os pontos de controle com o motor completo")
-    etapas["sequenciada_motor"] = round(float(custo(M @ w)[0]), 5)
-    aviso("Otimizando a UM dos pontos de controle…")
-    w = otimizar_um(M, w)
-    hist = [float(custo(M @ w)[0])]
-    aviso(f"Custo {hist[-1]:.4f} depois do sequenciamento")
-    modelo_cp = None
-    if iteracoes > 0:
-        # modelo rápido por intervalo: campo aberto do setor no gantry de cada intervalo (motor, grade grossa)
-        abertos_int = []
-        for k, arco in enumerate(arcos):
-            c, angs = arco["campo"], arco["angs"]
-            setor_de = {cs.nome: cs for _, _, cs in arco["setores"]}
-            for j in range(len(angs) - 1):
-                cs = setor_de[arco["setor_int"][j]]
+    gr_fina = grade
+    # modelo rápido: campo aberto do setor no gantry dos intervalos (um cálculo a cada `passo_aberto` intervalos do
+    # setor; a geometria de cada intervalo usa o próprio gantry)
+    abertos_int, rep = [], []
+    for k, arco in enumerate(arcos):
+        c, angs = arco["campo"], arco["angs"]
+        for s0, s1, cs in arco["setores"]:
+            for j in range(s0, s1):
                 d = (angs[j + 1] - angs[j] + 180.0) % 360.0 - 180.0
                 abertos_int.append(Campo(f"{c.nome}^{j:03d}", float((angs[j] + d / 2) % 360.0), c.colimador, c.mesa,
                                          c.isocentro_mm, jaw_x=cs.jaw_x, jaw_y=cs.jaw_y, mlc_a=cs.mlc_a,
                                          mlc_b=cs.mlc_b))
-        am = amostrar(abertos_int, "Calculando o campo aberto em cada ponto de controle")
-        modelo_cp = ModeloIntervalos(arcos, mapas, abertos_int, [fx * am[cs.nome] for cs in abertos_int], grade, idx,
-                                     sig, posicao)
-        etapas["modelo_sem_correcao"] = round(float(custo(modelo_cp.avaliar(Acp, Bcp, w))[0]), 5)
-    passo_mm = 10.0
-    for it in range(iteracoes):
+                jr = s0 + min(((j - s0) // passo_aberto) * passo_aberto + passo_aberto // 2, s1 - 1 - s0)
+                rep.append(arco["ofs_w"][jr])
+    unicos = sorted(set(rep))
+    am = amostrar([abertos_int[o] for o in unicos], "Calculando o campo aberto ao longo dos arcos", rapido=True)
+    d0 = {o: fx * am[abertos_int[o].nome] for o in unicos}
+    modelo_cp = ModeloIntervalos(arcos, mapas, abertos_int, [d0[r] for r in rep], grade, idx, sig, posicao)
+    D = dose_total(Acp, Bcp, w, gg, True, "Calculando os arcos sequenciados com o motor completo")
+    etapas["sequenciada_motor"] = round(float(custo(D)[0]), 5)
+    # espalhamento do modelo: ajusta (fração, alcance) à dose do motor — aberturas pequenas espalham menos
+    melhor = None
+    for fr_esp in (0.0, 0.2, 0.4, 0.6, 0.8):
+        for alc_mm in (15.0, 30.0, 60.0):
+            modelo_cp.espalhamento(fr_esp, alc_mm)
+            Dm = modelo_cp.avaliar(Acp, Bcp, w)
+            esc = float(Dm @ D) / max(float(Dm @ Dm), 1e-30)
+            err = float(np.mean((esc * Dm - D) ** 2))
+            if melhor is None or err < melhor[0]:
+                melhor = (err, fr_esp, alc_mm)
+    modelo_cp.espalhamento(melhor[1], melhor[2])
+    Dm = modelo_cp.avaliar(Acp, Bcp, w)
+    etapas["modelo_erro_rel_pct"] = round(100 * float(np.sqrt(np.mean((Dm - D) ** 2)) /
+                                                     max(float(np.sqrt(np.mean(D ** 2))), 1e-9)), 1)
+    etapas["espalhamento"] = [melhor[1], melhor[2]]
+    modelo_cp.corr = D - Dm
+    bnds_w = [(lim.um_por_grau_min * dg, lim.um_por_grau_max * dg) for a in arcos for dg in a["dtheta"]]
+
+    def otimizar_um(Acp, Bcp, w0):
+        """Só as UM (lâminas paradas), no modelo calibrado: a dose é linear nas UM, então o modelo acerta bem."""
+        def obj_w(x):
+            f, _, _, gw, _ = modelo_cp.avaliar(Acp, Bcp, x, custo)
+            return f, gw
+        return I._minimizar_al(obj_w, np.clip(w0, [b[0] for b in bnds_w], [b[1] for b in bnds_w]), bnds_w, custo,
+                               lambda x: modelo_cp.avaliar(Acp, Bcp, x), 4, 300)
+
+    for r in range(2):
+        aviso("Otimizando as UM dos pontos de controle…")
+        w = otimizar_um(Acp, Bcp, w)
+        D = dose_total(Acp, Bcp, w, gg, True, "Recalculando os arcos com as UM novas…")
         modelo_cp.corr[:] = 0.0
-        modelo_cp.corr = (M @ w) - modelo_cp.avaliar(Acp, Bcp, w)
-        aviso(f"Otimizando as lâminas dos pontos de controle (iteração {it + 1})…")
+        modelo_cp.corr = D - modelo_cp.avaliar(Acp, Bcp, w)
+    etapas["depois_das_um"] = round(float(custo(D)[0]), 5)
+    hist = [float(custo(D)[0])]
+    passo_mm = 10.0
+
+    def iterar(Acp, Bcp, w, D, passo_mm, g_, rapido, rotulo):
+        modelo_cp.corr[:] = 0.0
+        modelo_cp.corr = D - modelo_cp.avaliar(Acp, Bcp, w)
+        aviso(f"Otimizando as lâminas e as UM dos pontos de controle ({rotulo})…")
         Ak, Bk, w2 = otimizar_pontos(arcos, Acp, Bcp, w, modelo_cp, custo, colim, lim, linhas_arco, limites_x, faixas,
                                      passo_mm=passo_mm)
         for k in range(len(arcos)):
@@ -711,18 +783,32 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
                 a, b = Ak[k][j].copy(), Bk[k][j].copy()
                 reparar(a, b, colim, lo, hi, (b - a) > colim.gap_minimo_mm + 0.5)
                 Ak[k][j], Bk[k][j] = a, b
-        M2 = doses_intervalos(Ak, Bk, f"Recalculando os pontos de controle (iteração {it + 1})")
-        w2 = otimizar_um(M2, w2)
-        f2 = float(custo(M2 @ w2)[0])
+        D2 = dose_total(Ak, Bk, w2, g_, rapido, f"Recalculando os arcos ({rotulo})…")
+        return Ak, Bk, w2, D2
+
+    for it in range(iteracoes):
+        Ak, Bk, w2, D2 = iterar(Acp, Bcp, w, D, passo_mm, gg, True, f"iteração {it + 1}")
+        f2 = float(custo(D2)[0])
         aviso(f"Custo {f2:.4f} (iteração {it + 1})")
         if f2 < hist[-1]:
-            Acp, Bcp, M, w = Ak, Bk, M2, w2
+            Acp, Bcp, w, D = Ak, Bk, w2, D2
             hist.append(f2)
             passo_mm = min(passo_mm * 1.5, 15.0)
         else:                                                  # passo grande demais para o modelo: encolhe
             passo_mm /= 2.0
             if passo_mm < 2.0:
                 break
+    # polimento na grade do plano com os cones completos: o que a grade grossa não enxerga (gradientes na borda do
+    # alvo); só fica se melhorar
+    if polimento_fino and iteracoes > 0:
+        Df = dose_total(Acp, Bcp, w, gr_fina, False, "Calculando os arcos na grade do plano…")
+        f_f = float(custo(Df)[0])
+        etapas["fino_antes_polimento"] = round(f_f, 5)
+        Ak, Bk, w2, D2 = iterar(Acp, Bcp, w, Df, 4.0, gr_fina, False, "polimento na grade do plano")
+        f2 = float(custo(D2)[0])
+        etapas["fino_depois_polimento"] = round(f2, 5)
+        if f2 < f_f:
+            Acp, Bcp, w = Ak, Bk, w2
 
     # ---- final: pontos de controle nos arcos e dose na grade do plano
     restr_viol = None
@@ -732,12 +818,7 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
         jx, jy = jaws[k]
         wk = w[arco["ofs_w"]]
         tot = float(wk.sum())
-        mw = np.r_[0.0, np.cumsum(wk) / tot]
-        mw[-1] = 1.0
-        c.pontos_controle = [{"gantry": round(float(angs[j]), 2), "mlc_a": [round(float(x), 1) for x in Acp[k][j]],
-                              "mlc_b": [round(float(x), 1) for x in Bcp[k][j]],
-                              "jaw_x": list(jx) if jx else None, "jaw_y": list(jy), "mw": round(float(mw[j]), 6)}
-                             for j in range(len(angs))]
+        c.pontos_controle = _pontos_controle(arco, Acp[k], Bcp[k], wk, jaws[k])
         c.jaw_x, c.jaw_y = (tuple(jx) if jx else None), tuple(jy)
         c.mlc_a = [round(float(x), 1) for x in Acp[k].min(axis=0)]
         c.mlc_b = [round(float(x), 1) for x in Bcp[k].max(axis=0)]
@@ -751,8 +832,9 @@ def otimizar_vmat(plano: Plano, grade: calculo.GradeDose, doses_um: dict, objeti
             raise ValueError(f"{c.nome}: pontos de controle com violação mecânica — {'; '.join(ruins[:3])}")
     aviso("Calculando os arcos na grade do plano…")
     for c in arcos_c:
-        doses_um[c.nome] = calculo.dose_por_um(grade, [c], colim, modelo, kernels, posicao,
-                                               permitir_demonstracao)[c.nome]
+        pronta = [d for pcs, d in cache_fino.get(c.nome, []) if _mesmos_pontos(pcs, c.pontos_controle)]
+        doses_um[c.nome] = pronta[-1] if pronta else calculo.dose_por_um(grade, [c], colim, modelo, kernels, posicao,
+                                                                         permitir_demonstracao)[c.nome]
     for n in [n for n in doses_um if n not in {c.nome for c in plano.campos}]:
         doses_um.pop(n)
     alvo_norm = alvos[0].mascara
