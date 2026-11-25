@@ -53,8 +53,12 @@ o checklist e a tela mostram a incerteza obtida e se a dose é no meio ou na ág
 | Laje de pulmão (η 0,26, 5–15 cm), 10×10 | MC 4–5% abaixo do CCC dentro do pulmão; +3 a +8% nas interfaces — esperado em MC, **a confirmar com medida** |
 | Laje de osso (η 1,7) | MC (dose no meio) 5–9% abaixo do CCC — coerente com (S/ρ)_w,osso ≈ 1,11 |
 
-Tempo (2 núcleos do servidor de desenvolvimento): ~0,7 milhão de histórias/s; fantoma VMAT a 1% em ~6 min. Escala
-com os núcleos (16 núcleos: ~45 s).
+| Pelve real, VMAT 2 arcos (mesmos arcos) | MC × CCC: UM +0,6%; PTV D98 42,4 × 42,7 Gy; reto/bexiga ±0,3 Gy; conferência +2,7% |
+| Placas do Monaco (CC do Monaco como referência), descontado o desvio comum de ~2,3% antes da placa | pulmão: MC +0,3 a +1,9% (CCC +5 a +6%); osso: MC ≈ −2,5% (dose no meio) — falta o MC do Monaco e a medida |
+
+Tempo (2 núcleos do servidor de desenvolvimento): ~0,7 milhão de histórias/s; fantoma VMAT a 1% em ~6 min; pelve VMAT
+(2 arcos, grade 3 mm, 1,2 bilhão de histórias) em 55 min. Escala com os núcleos: num PC de 8–16 núcleos, ~2–5 min.
+Próximo passo de desempenho: GPU (NVIDIA) e reaproveitamento de trajetórias de elétrons (até ~1,7×).
 
 ## Limitações conhecidas
 * Sem transporte de partículas no cabeçote/MLC (o MLC entra pela fluência do modelo: transmissão, ponta, groove).
