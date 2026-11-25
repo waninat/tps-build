@@ -130,6 +130,14 @@ Resolvidas em 8/11/2026: MLC do Synergy = **Agility**; calibração = **1,000 cG
 7. 10–20 casos 3D anonimizados (CT + RTSTRUCT + RTPLAN + RTDOSE do Monaco).
 8. Curva HU→DE atual de cada tomógrafo.
 9. Tolerance tables e nomes exatos das máquinas no Mosaiq.
+10. **Monte Carlo (25/11/2026; detalhes em 10-monte-carlo.md)**: os mesmos 6 planos de placa (pulmão/osso, 3×3,
+    5×5, 10×10) **calculados no Monaco em Monte Carlo** (1%, grade 2 mm) e, se possível, medidos (câmara/filme);
+    dizer se o Monaco reporta dose no meio ou na água; RTDOSE do Monaco (MC) de 3 planos VMAT reais (pelve, mama com
+    auto-flash, pulmão); PDDs e perfis medidos (1×1 a 40×40, incluindo diagonais do maior campo) para o ajuste do
+    espectro e da contaminação do MC; se houver, modelo MCNP do cabeçote do Precise (espaços de fase de referência).
+11. **VMAT**: gap mínimo do MLCi (hoje 5 mm), máximo de pontos de controle por arco no Mosaiq/Integrity, UM mínima
+    por grau, velocidade máxima das lâminas e taxa de dose máxima (máquina.yaml, marcados CONFIRMAR); um RTPLAN VMAT
+    do Monaco para o Precise, para conferir o formato que o Mosaiq aceita.
 
 ## 22/11/2026 — plano 3D do Monaco (pelve, Precise) e fantomas de placa
 

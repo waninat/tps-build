@@ -65,6 +65,12 @@ VMAT (Precise e Synergy):
    pontos de controle por arco e o tempo.
 4. Exportação: um feixe **DYNAMIC** por arco. **Testar no Mosaiq 2.83 antes de qualquer uso clínico.**
 
+**Dose final** (4 · Cálculo): *automático* (VMAT: Monte Carlo; o resto: collapsed cone), *collapsed cone* ou
+*Monte Carlo*, com a incerteza-alvo (1% padrão) e *dose na água* (padrão: dose no meio, como o Monaco). Os
+otimizadores iteram com o collapsed cone e a dose final é recalculada pelo MC; a primeira vez com um modelo de feixe
+faz a calibração do MC (alguns minutos). O aviso mostra a incerteza obtida, as histórias e o tempo; o checklist
+marca a incerteza e o comissionamento provisório do MC. Detalhes em 10-monte-carlo.md.
+
 QA de paciente (IMRT e VMAT): *QA de paciente* → fantoma e modo (*ângulos reais* ou *gantry 0*). Saem o RTPLAN de
 verificação, o RTDOSE no fantoma e o plano coronal (CSV). No VMAT em *gantry 0* o RTPLAN é o arco real (detector
 preso ao gantry) e só o cálculo junta os pontos no gantry 0.
