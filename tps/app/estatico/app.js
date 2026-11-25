@@ -11,7 +11,12 @@ const E = {
   ocultas: new Set(), dvh: null, arrasto: null, token: null, usuario: null,
   isoCfg: { niveis: [], ref: "rx", unidade: "pct" }, fonte: "plano", dvhAlt: {}, bevDes: { pts: [], mouse: null, livre: false },
 };
-try { const c = JSON.parse(localStorage.getItem("tps_iso") || "null"); if (c) E.isoCfg = c; } catch (e) { /* ok */ }
+try { const c = JSON.parse(localStorage.getItem("tps_iso") || "null"); if (c) E.isoCfg = { ...E.isoCfg, ...c }; } catch (e) { /* ok */ }
+try { const w = JSON.parse(localStorage.getItem("tps_wl") || "null"); if (w && w.janela > 0) E.wl = w; } catch (e) { /* ok */ }
+E.isoCfg.gy = E.isoCfg.gy || [];
+if (E.isoCfg.unidade === "gy" && E.isoCfg.niveis && E.isoCfg.niveis.length && !E.isoCfg.v2) E.isoCfg.niveis = [];   // antes: níveis em Gy
+E.isoCfg.v2 = true;
+const NIVEIS_PADRAO = [30, 50, 70, 80, 90, 95, 100, 105, 107, 110];
 try { E.token = sessionStorage.getItem("tps_token"); } catch (e) { /* sem storage */ }
 const ISO_CORES = { 30: "#3355ff", 50: "#00b7ff", 70: "#00e08a", 80: "#9be000", 90: "#ffe100", 95: "#ffae00",
                     100: "#ff7a00", 105: "#ff2d55", 107: "#ff00c8", 110: "#ffffff" };
@@ -130,6 +135,7 @@ async function iniciar() {
     $("#mod-sel").onchange();
   } catch (e) { /* sem modelos */ }
   mostrarIA();
+  carregarSitios();
   window.addEventListener("resize", () => desenharTudo());
 }
 
@@ -166,13 +172,14 @@ function ligar() {
     atualizar(await api("POST", `/api/${E.sid}/calcular`, corpo, "Renormalizando…"));
     aviso("Plano renormalizado (dose relativa igual, UM novas)", true);
   });
-  $("#b-iso-cfg").onclick = () => tentar(configurarIsodoses);
+  $("#b-iso-cfg").onclick = () => abaDireita("iso");
   $("#o-tecnica").onchange = () => {
     const t = $("#o-tecnica").value, im = t !== "3D";
     $("#o-imrt").classList.toggle("oculto", !im); $("#o-3d").classList.toggle("oculto", im);
     $$("#o-imrt .so-imrt").forEach(e => e.classList.toggle("oculto", t !== "IMRT"));
     $$("#o-imrt .so-vmat").forEach(e => e.classList.toggle("oculto", t !== "VMAT"));
     $("#b-calc").textContent = t === "IMRT" ? "Otimizar IMRT" : t === "VMAT" ? "Otimizar VMAT" : "Calcular dose";
+    $("#b-calc-topo").textContent = "▶ " + $("#b-calc").textContent;
     if (im && !(E.objetivos || []).length) tentar(sugerirObjetivos);
   };
   $("#b-vm-arcos").onclick = () => tentar(async () => {
@@ -188,8 +195,10 @@ function ligar() {
     atualizar(await api("POST", `/api/${E.sid}/imrt/campos`, { n: +$("#im-n").value, inicio: +$("#im-ini").value,
       margem_mm: +$("#im-mg").value }, "Criando os campos…"));
   });
-  $("#b-obj-add").onclick = () => { E.objetivos = E.objetivos || []; E.objetivos.push({ estrutura: "", tipo: "max", dose_gy: "", volume_pct: "", peso: 1 }); listarObjetivos(); };
-  $("#b-obj-sug").onclick = () => tentar(sugerirObjetivos);
+  $("#b-obj-sug").onclick = () => tentar(async () => {
+    if ((E.objetivos || []).length && !confirm("Substituir os objetivos atuais pelos sugeridos pelas restrições?")) return;
+    await sugerirObjetivos(true);
+  });
   $("#b-avoid-add").onclick = () => { E.avoid = E.avoid || []; E.avoid.push({ estrutura: "", modo: "ambos" }); listarAvoid(); };
   $("#b-qa").onclick = () => tentar(async () => {
     const pr = $("#qa-prof").value.trim();
@@ -384,7 +393,7 @@ function ligar() {
     atualizar(await api("POST", `/api/${E.sid}/desaprovar`, v));
   });
   $("#b-exportar").onclick = () => tentar(exportar);
-  $("#b-salvar").onclick = () => tentar(async () => aviso("Salvo em " + (await api("POST", `/api/${E.sid}/salvar`)).arquivo, true));
+  $("#b-salvar").onclick = () => tentar(async () => { aviso("Salvo em " + (await api("POST", `/api/${E.sid}/salvar`)).arquivo, true); listarPlanos(); });
   $("#b-relatorio").onclick = () => window.open(`/api/${E.sid}/relatorio.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
   $("#t-wash").onchange = () => desenharTudo();
   $("#wash-min").onchange = () => desenharTudo();
@@ -422,8 +431,8 @@ function ligar() {
     atualizar(await api("POST", `/api/${E.sid}/ponto`, { nome: $("#pt-nome").value, xyz: E.cruz }));
     $("#pt-nome").value = "";
   });
-  $("#v-axial .wl").onchange = (e) => { const [j, n] = e.target.value.split(",").map(Number); E.wl = { janela: j, nivel: n }; E.imgs = {}; carregarCortes(); };
-  $("#v-axial .t-iso").onchange = () => desenharTudo();
+  $("#t-iso").onchange = () => desenharTudo();
+  ligarInterface();
   $("#bev-campo").onchange = () => tentar(() => carregarBev($("#bev-campo").value));
   $("#t-drr").onchange = () => tentar(() => carregarBev(E.bev && E.bev.campo.nome));
   $("#bev-seg-r").oninput = (e) => { E.bevSeg = +e.target.value; desenharBev(); };
@@ -484,25 +493,6 @@ function preencherPrescricao(r) {
   if (rx.ponto_mm) { $("#p-px").value = rx.ponto_mm[0]; $("#p-py").value = rx.ponto_mm[1]; $("#p-pz").value = rx.ponto_mm[2]; }
   mostrarPonto();
 }
-async function configurarIsodoses() {
-  const c = E.isoCfg, ref = E.isoRef;
-  const v = await modal("Isodoses", `
-    <label>Curvas (vazio = padrão 30 50 70 80 90 95 100 105 107 110 %)<input name="niveis" value="${(c.niveis || []).join(" ")}"
-      placeholder="ex.: 95 100 105  ou em Gy: 45 50 52.5"></label>
-    <div class="linha2">
-      <label>100% é<select name="ref"><option value="rx" ${c.ref !== "max" ? "selected" : ""}>a prescrição</option>
-        <option value="max" ${c.ref === "max" ? "selected" : ""}>o máximo do plano</option></select></label>
-      <label>Mostrar em<select name="unidade"><option value="pct" ${c.unidade !== "gy" ? "selected" : ""}>% (relativo)</option>
-        <option value="gy" ${c.unidade === "gy" ? "selected" : ""}>Gy (absoluto, dose total)</option></select></label>
-    </div>
-    <div class="pequeno-txt">O ponto de dose máxima do plano aparece sempre (▲) com o valor na legenda.${ref ? ` Máximo atual: ${f1(ref.dmax_gy, 2)} Gy
-      (${f1(ref.dmax_gy / ref.rx_gy * 100, 1)}% da prescrição).` : ""}</div>`, { ok: "Aplicar" });
-  if (!v) return;
-  E.isoCfg = { niveis: v.niveis.trim() ? lerNiveis(v.niveis) : [], ref: v.ref, unidade: v.unidade };
-  try { localStorage.setItem("tps_iso", JSON.stringify(E.isoCfg)); } catch (e) { /* ok */ }
-  E.sobre = {}; carregarSobre();
-}
-
 // ------------------------------------------------------------------ caso e plano
 async function abrirCaso(r) {
   E.sid = r.id; E.imgs = {}; E.sobre = {}; E.campoSel = null; E.bev = null; E.dvh = null; E.ocultas = new Set();
@@ -514,6 +504,7 @@ async function abrirCaso(r) {
   preencherPrescricao(E.resumo);
   if (r.isocentro) irPara(r.isocentro);
   carregarCortes();
+  abaEsquerda(E.resumo.plano ? "campos" : "plano");
 }
 
 async function criarPlano() {
@@ -531,6 +522,7 @@ async function criarPlano() {
     cobertura_volume_pct: n.cobertura_volume_pct, cobertura_dose_pct: n.cobertura_dose_pct,
   }));
   if (E.resumo.isocentro) irPara(E.resumo.isocentro);
+  abaEsquerda("campos");
 }
 
 function atualizar(r) {
@@ -638,7 +630,7 @@ function atualizar(r) {
   $$("[data-ir]").forEach(b => b.onclick = () => irPara(b.dataset.ir.split(",").map(Number)));
   $$("[data-rem-pt]").forEach(b => b.onclick = () => tentar(async () => atualizar(await api("DELETE", `/api/${E.sid}/ponto/${encodeURIComponent(b.dataset.remPt)}`))));
   doseCruz();
-  listarCampos(); tabelas();
+  listarCampos(); tabelas(); atualizarBarra();
   $("#avisos").innerHTML = (r.avisos || []).map(a => `<li>${a}</li>`).join("");
   $("#n-avisos").textContent = (r.avisos || []).length || "";
   if (p && (p.tecnica === "IMRT" || p.tecnica === "VMAT") && $("#o-tecnica").value !== p.tecnica) { $("#o-tecnica").value = p.tecnica; $("#o-tecnica").onchange(); }
@@ -831,8 +823,8 @@ function listarOars() {
     E.oarCfg[n] = o; listarOars();
   }));
 }
-async function sugerirObjetivos() {
-  E.objetivos = await api("GET", `/api/${E.sid}/imrt/objetivos`);
+async function sugerirObjetivos(refazer = false) {
+  E.objetivos = await api("GET", `/api/${E.sid}/imrt/objetivos${refazer ? "?refazer=true" : ""}`);
   listarObjetivos();
 }
 function listarAvoid() {
@@ -883,6 +875,7 @@ function mostrarIA() {
   $("#ia-orgaos").innerHTML = Object.entries(grupos).map(([g, os]) => `<optgroup label="${g}">` +
     os.map(o => `<option value="${o.id}">${o.nome.replace(/_/g, " ")}</option>`).join("") + "</optgroup>").join("");
   $("#ia-orgaos").disabled = !ia.disponivel; $("#b-ia").disabled = !ia.disponivel;
+  $("#b-ia-instalar").textContent = ia.disponivel ? "Configurar…" : "Instalar…";
 }
 
 // ------------------------------------------------------------------ tabelas
@@ -959,7 +952,8 @@ async function carregarSobreVista(vista) {
   const i = E.idx[vista], chave = `${vista}:${i}`;
   if (E.sobre[chave]) return desenharCorte(vista);
   E.sobre[chave] = "carregando";
-  const c = E.isoCfg, q = `?ref=${c.ref}&unidade=${c.unidade}&fonte=${E.fonte}&niveis=${encodeURIComponent(E.fonte === "dif" ? "" : (c.niveis || []).join(","))}`;
+  const c = E.isoCfg, q = `?ref=${c.ref}&unidade=pct&fonte=${E.fonte}&niveis=${encodeURIComponent(E.fonte === "dif" ? "" : (c.niveis || []).join(","))}` +
+    `&niveis_gy=${encodeURIComponent(E.fonte === "dif" ? "" : (c.gy || []).join(","))}`;
   try { E.sobre[chave] = await api("GET", `/api/${E.sid}/sobreposicao/${vista}/${i}${q}`); if (E.sobre[chave].iso_ref) E.isoRef = E.sobre[chave].iso_ref; }
   catch (e) { delete E.sobre[chave]; return; }
   desenharCorte(vista);
@@ -994,7 +988,9 @@ function desenharCorte(vista) {
   g.fillStyle = "#000"; g.fillRect(0, 0, w, h);
   if (!E.resumo || !E.resumo.ct) return;
   const T = transf(vista, w, h), i = E.idx[vista];
-  const img = E.imgs[`${vista}:${i}`];
+  let img = E.imgs[`${vista}:${i}`];
+  if (img && img.complete && img.naturalWidth) E.ultImg = { ...(E.ultImg || {}), [vista]: { i, img } };
+  else if (E.ultImg && E.ultImg[vista] && E.ultImg[vista].i === i) img = E.ultImg[vista].img;
   if (img && img.complete && img.naturalWidth) {
     g.imageSmoothingEnabled = true;
     g.drawImage(img, T.ox, T.oy, (T.H1 - T.H0) * T.s, (T.V1 - T.V0) * T.s);
@@ -1035,9 +1031,14 @@ function desenharCorte(vista) {
       if (E.ocultas.has(c.nome)) continue;
       g.strokeStyle = `rgb(${c.cor})`; c.linhas.forEach(l => linha(l, true));
     }
-    if ($("#v-axial .t-iso").checked) {
+    if ($("#t-iso").checked) {
       g.lineWidth = 1.2;
-      for (const iso of sob.isodoses) { g.strokeStyle = corIso(iso.nivel); iso.linhas.forEach(l => linha(l, false)); }
+      for (const iso of sob.isodoses) {
+        if (iso.absoluta) { g.setLineDash([6, 3]); g.lineWidth = 1.8; g.strokeStyle = corAbs(iso.nivel); }
+        else { g.setLineDash([]); g.lineWidth = 1.2; g.strokeStyle = corIso(iso.nivel); }
+        iso.linhas.forEach(l => linha(l, false));
+      }
+      g.setLineDash([]);
     }
     if (vista === "axial") {
       g.setLineDash([5, 4]);
@@ -1079,14 +1080,17 @@ function desenharCorte(vista) {
     }
   }
   // legenda de isodoses (curvas escolhidas + máximo do plano)
-  if (vista === "axial" && sob && sob.iso_ref && $("#v-axial .t-iso").checked) {
-    const ir = sob.iso_ref, gy = ir.unidade === "gy";
+  if (vista === "axial" && sob && sob.iso_ref && $("#t-iso").checked) {
+    const ir = sob.iso_ref, gy = E.isoCfg.unidade === "gy" && !ir.dif;
     g.font = "11px system-ui"; let yy = 16;
     const txtMax = ir.dif ? `máx +${f1(ir.dmax_gy, 2)} Gy` : gy ? `máx ${f1(ir.dmax_gy, 2)} Gy` : `máx ${f1(ir.dmax_gy / ir.cem_gy * 100, 1)}%`;
     g.fillStyle = "#ff00c8"; g.textAlign = "right"; g.fillText("▲ " + txtMax, w - 6, yy); yy += 14;
     for (const n of ir.niveis.slice().reverse()) {
       const sn = ir.dif && n > 0 ? "+" : "";
-      g.fillStyle = corIso(n); g.fillText(gy ? `${sn}${+n.toFixed(2)} Gy` : `${sn}${+n.toFixed(1)}%`, w - 6, yy); yy += 13;
+      g.fillStyle = corIso(n); g.fillText(gy ? `${sn}${+(n * ir.cem_gy / 100).toFixed(2)} Gy` : `${sn}${+n.toFixed(1)}%`, w - 6, yy); yy += 13;
+    }
+    for (const n of (ir.niveis_gy || []).slice().reverse()) {
+      g.fillStyle = corAbs(n); g.fillText(`┄ ${+n.toFixed(2)} Gy (${f1(n / ir.cem_gy * 100, 1)}%)`, w - 6, yy); yy += 13;
     }
     g.fillStyle = "#8b95a3"; g.fillText(ir.dif ? `${ir.descricao} · % de ${f1(ir.rx_gy, 2)} Gy` : (ir.referencia === "max" ? `100% = máx (${f1(ir.cem_gy, 2)} Gy)` : `100% = ${f1(ir.rx_gy, 2)} Gy`) + (ir.fonte === "soma" ? ` · ${ir.descricao}` : ""), w - 6, yy + 2);
     g.textAlign = "left";
@@ -1347,7 +1351,7 @@ async function doseCruz() {
 async function listarPlanos() {
   try {
     const ps = await api("GET", "/api/planos");
-    $("#planos-salvos").innerHTML = ps.map(p => `<option value="${p.arquivo}">${p.paciente_id} · ${p.rotulo} · ${p.estado} · ${p.atualizado.slice(0, 16).replace("T", " ")}</option>`).join("");
+    $("#planos-salvos").innerHTML = ps.map(p => `<option value="${p.arquivo}" data-chave="${p.chave}">${p.paciente_id} · ${p.rotulo} · ${p.estado} · ${p.atualizado.slice(0, 16).replace("T", " ")}</option>`).join("");
   } catch (e) { /* sem planos */ }
 }
 
@@ -1369,7 +1373,6 @@ async function verAuditoria() {
   if (r && r.login) { await api("POST", "/api/usuarios", r); aviso(`Usuário ${r.login} criado`, true); }
 }
 
-iniciar().catch(e => aviso(e.message));
 
 
 // ------------------------------------------------------------------ ferramentas de contorno (corte axial)
@@ -1455,3 +1458,466 @@ function desenharContornoPreview(g, T) {
   }
   g.restore();
 }
+
+// ------------------------------------------------------------------ interface: menus, abas, barra, divisórias, W/L
+const WL_PRESETS = [["Tecidos moles", 400, 40], ["Abdome / pelve", 350, 40], ["Mediastino", 350, 50], ["Pulmão", 1500, -600],
+  ["Osso", 1800, 400], ["Cérebro", 80, 40], ["Cabeça e pescoço", 350, 60], ["Fígado", 160, 60], ["Mama / parede", 500, 20],
+  ["Larga", 2000, 0]];
+const ABAS_E = { caso: "sec-caso", plano: "sec-plano", campos: "sec-campos", otim: "sec-calc", aprov: "sec-aprov" };
+const COR_ABS = ["#00ffff", "#ff66ff", "#ffff66", "#7dff7d", "#ff9933", "#ffffff", "#a0a0ff"];
+const esc = (t) => String(t ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const guardar = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* ok */ } };
+const lerGuardado = (k) => { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch (e) { return null; } };
+
+function corAbs(v) {
+  const l = (E.isoCfg.gy || []).slice().sort((a, b) => a - b), k = l.findIndex(x => Math.abs(x - v) < 1e-6);
+  return COR_ABS[(k < 0 ? 0 : k) % COR_ABS.length];
+}
+function abaEsquerda(id) {
+  if (!ABAS_E[id]) id = "caso";
+  $$(".aba-e").forEach(b => b.classList.toggle("ativa", b.dataset.abae === id));
+  $$(".aba-e-p").forEach(p => p.classList.toggle("oculto", p.id !== ABAS_E[id]));
+  guardar("tps_aba_e", id);
+}
+function abaDireita(id) { const b = $(`.aba-d[data-abad=${id}]`); if (b) b.click(); }
+
+function ligarInterface() {
+  // abas do painel esquerdo
+  $$(".aba-e").forEach(b => b.onclick = () => abaEsquerda(b.dataset.abae));
+  abaEsquerda(lerGuardado("tps_aba_e") || "caso");
+  $(".aba-d[data-abad=iso]").addEventListener("click", desenharPainelIso);
+  // menus
+  const fechar = () => $$(".menu").forEach(m => m.classList.remove("aberto"));
+  $$(".menu-b").forEach(b => {
+    b.onclick = (ev) => { ev.stopPropagation(); const m = b.parentElement, ab = m.classList.contains("aberto"); fechar(); if (!ab) m.classList.add("aberto"); };
+    b.onmouseenter = () => { if ($(".menu.aberto") && !b.parentElement.classList.contains("aberto")) { fechar(); b.parentElement.classList.add("aberto"); } };
+  });
+  document.addEventListener("click", (ev) => { if (!ev.target.closest(".menu")) fechar(); });
+  $$(".menu-l [data-acao]").forEach(b => b.onclick = () => { fechar(); tentar(() => acao(b.dataset.acao)); });
+  // barra de ferramentas
+  $("#b-calc-topo").onclick = () => $("#b-calc").click();
+  $("#b-aprovar-topo").onclick = () => $("#b-aprovar").click();
+  $("#b-exportar-topo").onclick = () => abaEsquerda("aprov");
+  $("#b-plano-apagar").onclick = () => tentar(apagarPlanoAtual);
+  $("#b-apagar-salvo").onclick = () => tentar(apagarPlanoSalvo);
+  $("#b-ia-instalar").onclick = () => tentar(janelaIA);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "F5") { ev.preventDefault(); if (!$("#b-calc").disabled) $("#b-calc").click(); }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "s") { ev.preventDefault(); if (!$("#b-salvar").disabled) $("#b-salvar").click(); }
+    if (ev.key === "Escape") fechar();
+  });
+  // janela/nível
+  $("#wl-preset").innerHTML = WL_PRESETS.map(([n, j, l]) => `<option value="${j},${l}">${n} (${j}/${l})</option>`).join("") +
+    `<option value="" disabled>personalizado</option>`;
+  $("#wl-preset").onchange = () => { const [j, l] = $("#wl-preset").value.split(",").map(Number); aplicarWL(j, l); };
+  $("#wl-janela").oninput = () => aplicarWL(+$("#wl-janela").value, E.wl.nivel);
+  $("#wl-brilho").oninput = () => aplicarWL(E.wl.janela, -$("#wl-brilho").value);
+  for (const v of ["axial", "coronal", "sagital"]) {
+    const cv = $(`#v-${v} canvas`);
+    cv.addEventListener("contextmenu", (ev) => ev.preventDefault());
+    cv.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 2) return;
+      ev.preventDefault();
+      const ini = { x: ev.clientX, y: ev.clientY, j: E.wl.janela, n: E.wl.nivel };
+      const mover = (e) => aplicarWL(Math.max(1, ini.j + (e.clientX - ini.x) * 4), ini.n + (e.clientY - ini.y) * 2);
+      const soltar = () => { window.removeEventListener("mousemove", mover); window.removeEventListener("mouseup", soltar); };
+      window.addEventListener("mousemove", mover); window.addEventListener("mouseup", soltar);
+    });
+  }
+  mostrarWL();
+  // isodoses
+  $("#iso-ref").onchange = () => { E.isoCfg.ref = $("#iso-ref").value; salvarIso(); };
+  $("#iso-uni").onchange = () => { E.isoCfg.unidade = $("#iso-uni").value; salvarIso(); };
+  $("#b-iso-rel").onclick = () => tentar(async () => {
+    const v = +String($("#iso-rel-novo").value).replace(",", "."); if (!(v > 0)) throw new Error("Informe a curva em %");
+    const l = (E.isoCfg.niveis.length ? E.isoCfg.niveis : NIVEIS_PADRAO).filter(x => x !== v);
+    E.isoCfg.niveis = [...l, v].sort((a, b) => a - b); $("#iso-rel-novo").value = ""; salvarIso();
+  });
+  $("#b-iso-padrao").onclick = () => { E.isoCfg.niveis = []; salvarIso(); };
+  const addGy = (inp) => tentar(async () => {
+    const v = +String($(inp).value).replace(",", "."); if (!(v > 0)) throw new Error("Informe a dose em Gy");
+    E.isoCfg.gy = [...new Set([...(E.isoCfg.gy || []), Math.round(v * 100) / 100])].sort((a, b) => a - b);
+    $(inp).value = ""; $("#t-iso").checked = true; salvarIso();
+  });
+  $("#b-iso-abs").onclick = () => addGy("#iso-abs-novo");
+  $("#b-iso-gy-rapido").onclick = () => addGy("#iso-gy-rapido");
+  $("#iso-gy-rapido").onkeydown = (ev) => { if (ev.key === "Enter") addGy("#iso-gy-rapido"); };
+  // objetivos
+  $("#obj-est-nova").onchange = () => { const n = $("#obj-est-nova").value; if (n) novoGrupo(n); };
+  $("#b-obj-limpar").onclick = () => { if ((E.objetivos || []).length && confirm("Apagar todos os objetivos?")) { E.objetivos = []; listarObjetivos(); } };
+  $("#b-obj-prot").onclick = () => tentar(aplicarProtocolo);
+  $("#b-obj-assist").onclick = () => tentar(() => assistente());
+  // layout: divisórias, troca e maximizar
+  ligarLayout();
+  atualizarBarra();
+}
+
+async function acao(a) {
+  const [k, arg] = a.split(":");
+  const clicar = (id) => { const b = $(id); if (b && !b.disabled) b.click(); };
+  switch (k) {
+    case "aba": abaEsquerda(arg); break;
+    case "aba-d": abaDireita(arg); break;
+    case "abrir-plano": abaEsquerda("caso"); $(".aba[data-aba=abrir]").click(); await listarPlanos(); break;
+    case "apagar-salvos": abaEsquerda("caso"); $(".aba[data-aba=abrir]").click(); await listarPlanos();
+      aviso("Escolha o plano na lista e clique em Apagar…", true); break;
+    case "salvar": clicar("#b-salvar"); break;
+    case "apagar-plano": await apagarPlanoAtual(); break;
+    case "relatorio": clicar("#b-relatorio"); break;
+    case "rel-medico": clicar("#b-rel-medico"); break;
+    case "checkfilm": clicar("#b-checkfilm"); break;
+    case "sair": clicar("#b-sair"); break;
+    case "copiar": clicar("#b-plano-copiar"); break;
+    case "remover": clicar("#b-plano-rem"); break;
+    case "calcular": clicar("#b-calc"); break;
+    case "aprovar": clicar("#b-aprovar"); break;
+    case "ia": await janelaIA(); break;
+    case "assistente": abaEsquerda("otim"); await assistente(); break;
+    case "qa": abaEsquerda("aprov"); $("#sec-qa").open = true; break;
+    case "auditoria": clicar("#b-auditoria"); break;
+    case "lay": definirLayout(arg); break;
+    case "wash": $("#t-wash").checked = !$("#t-wash").checked; desenharTudo(); break;
+    case "paineis": $("main").classList.toggle("sem-paineis"); break;
+    case "sobre": await modal("Sobre o TPS", `<p>TPS ${esc(E.info.versao)} — planejamento de radioterapia (3D, IMRT, VMAT; collapsed cone e
+      Monte Carlo).</p><p class="avisotxt">Versão em desenvolvimento: não usar para tratar pacientes.</p>
+      <p class="pequeno-txt">Pasta de dados: ${esc(E.info.home || "")}</p>`, { cancelar: false }); break;
+    case "atalhos": await modal("Atalhos", `<ul class="assist-lista">
+      <li><b>F5</b> calcular / otimizar · <b>Ctrl+S</b> salvar</li>
+      <li><b>Roda do mouse</b> ou <b>↑ ↓</b> muda o corte</li>
+      <li><b>Botão direito + arrastar</b> na imagem: ←→ contraste, ↑↓ brilho</li>
+      <li><b>Arrastar o título</b> de uma vista sobre outra troca as duas; <b>duplo clique</b> no título maximiza</li>
+      <li><b>Divisórias</b> (linhas entre os painéis e as vistas): arraste para mudar o tamanho</li>
+      <li><b>Shift + clique</b> no corte com normalização por ponto: usa a cruz como ponto</li></ul>`, { cancelar: false }); break;
+    default: break;
+  }
+}
+
+function atualizarBarra() {
+  const r = E.resumo, p = r && r.plano;
+  $("#b-calc-topo").disabled = $("#b-calc").disabled;
+  $("#b-calc-topo").textContent = "▶ " + $("#b-calc").textContent;
+  $("#b-aprovar-topo").disabled = $("#b-aprovar").disabled;
+  $("#b-exportar-topo").disabled = !p;
+  $("#b-plano-apagar").disabled = !p || p.estado !== "RASCUNHO";
+  $$("[data-precisa]").forEach(b => {
+    const q = b.dataset.precisa;
+    b.disabled = q === "plano" ? !p : q === "dose" ? !(p && r.dose_atualizada) : !(p && p.campos.length);
+  });
+  if (r) listarObjetivos();
+}
+
+// ---- janela/nível
+function mostrarWL() {
+  const { janela, nivel } = E.wl;
+  $("#wl-janela").value = janela; $("#wl-brilho").value = -nivel;
+  $("#wl-txt").textContent = `J ${Math.round(janela)} / N ${Math.round(nivel)}`;
+  const p = WL_PRESETS.find(([, j, l]) => j === Math.round(janela) && l === Math.round(nivel));
+  $("#wl-preset").value = p ? `${p[1]},${p[2]}` : "";
+}
+function aplicarWL(j, n) {
+  E.wl = { janela: Math.round(Math.max(1, j)), nivel: Math.round(n) };
+  mostrarWL(); guardar("tps_wl", E.wl);
+  clearTimeout(E.wlT);
+  E.wlT = setTimeout(() => { E.imgs = {}; carregarCortes(); }, 90);
+}
+
+// ---- isodoses
+function salvarIso() {
+  guardar("tps_iso", E.isoCfg); E.sobre = {}; carregarSobre(); desenharPainelIso();
+}
+function desenharPainelIso() {
+  const c = E.isoCfg;
+  $("#iso-ref").value = c.ref || "rx"; $("#iso-uni").value = c.unidade || "pct";
+  const rel = c.niveis && c.niveis.length ? c.niveis : NIVEIS_PADRAO, ref = E.isoRef;
+  $("#iso-rel").innerHTML = rel.map(v => `<span class="iso-chip"><i style="background:${corIso(v)}"></i>${v}%` +
+    (ref && ref.cem_gy ? `<small class="pequeno-txt">${f1(v * ref.cem_gy / 100, 1)} Gy</small>` : "") +
+    `<button data-rem-rel="${v}" title="tirar">×</button></span>`).join("");
+  $("#iso-abs").innerHTML = (c.gy || []).map(v => `<span class="iso-chip"><i class="tracejado" style="border-color:${corAbs(v)}"></i>${v} Gy` +
+    (ref && ref.cem_gy ? `<small class="pequeno-txt">${f1(v / ref.cem_gy * 100, 1)}%</small>` : "") +
+    `<button data-rem-abs="${v}" title="tirar">×</button></span>`).join("") || `<span class="pequeno-txt">nenhuma</span>`;
+  $$("[data-rem-rel]").forEach(b => b.onclick = () => { E.isoCfg.niveis = rel.filter(x => x !== +b.dataset.remRel); salvarIso(); });
+  $$("[data-rem-abs]").forEach(b => b.onclick = () => { E.isoCfg.gy = c.gy.filter(x => x !== +b.dataset.remAbs); salvarIso(); });
+  $("#iso-info").textContent = ref ? `Máximo atual: ${f1(ref.dmax_gy, 2)} Gy (${f1(ref.dmax_gy / ref.rx_gy * 100, 1)}% da prescrição) · 100% = ${f1(ref.cem_gy, 2)} Gy` : "";
+}
+
+// ---- objetivos agrupados por estrutura
+const TIPOS_OBJ = { alvo: "alvo (uniforme)", min: "mínimo ≥", max: "máximo ≤", media: "média ≤", dvh: "DVH: V(Gy) ≤ vol%",
+  serial: "serial: EUD(k) ≤", paralelo: "paralelo: ≤ v% acima" };
+const eAlvoNome = (n) => /^(PTV|CTV|GTV|ITV)/i.test(n || "");
+function doseDoNome(n) {
+  const m = /(\d+(?:[.,]\d+)?)/.exec((n || "").replace(/^(PTV|CTV|GTV|ITV)/i, ""));
+  if (!m) return null;
+  let v = +m[1].replace(",", "."); if (v >= 1000) v /= 100;
+  return v >= 10 && v <= 90 ? v : null;
+}
+function listarObjetivos() {
+  if (!E.resumo) return;
+  const objs = E.objetivos || [], ests = E.resumo.estruturas || [];
+  const cor = (n) => { const e = ests.find(x => x.nome === n); return e ? `rgb(${e.cor})` : "#666"; };
+  const pos = {}; objs.forEach((o, k) => { if (!(o.estrutura in pos)) pos[o.estrutura] = k; });
+  const doseAlvo = (n) => Math.max(0, ...objs.filter(o => o.estrutura === n && o.tipo === "alvo").map(o => +String(o.dose_gy).replace(",", ".") || 0));
+  const grupos = Object.keys(pos).sort((a, b) => (doseAlvo(b) - doseAlvo(a)) || (pos[a] - pos[b]));
+  $("#tab-objetivos tbody").innerHTML = grupos.map(n => {
+    const linhas = objs.map((o, k) => [o, k]).filter(([o]) => o.estrutura === n);
+    const da = doseAlvo(n);
+    return `<tr class="grupo"><td colspan="6"><span class="cor" style="background:${cor(n)}"></span>${esc(n)}` +
+      (da ? `<span class="alvo-tag">alvo ${f1(da, 2)} Gy</span>` : "") + (ests.some(e => e.nome === n) ? "" : ` <span class="falha">(não existe)</span>`) +
+      `<button data-rem-g="${esc(n)}" title="tirar a estrutura e os objetivos dela">×</button><button data-add-g="${esc(n)}" title="mais um objetivo nesta estrutura">+ objetivo</button></td></tr>` +
+      linhas.map(([o, k]) => `<tr class="obj" data-k="${k}" title="${esc(o.origem ? "de: " + o.origem : "")}">
+      <td><select data-c="tipo">${Object.entries(TIPOS_OBJ).map(([v, t]) => `<option value="${v}" ${v === o.tipo ? "selected" : ""}>${t}</option>`).join("")}</select></td>
+      <td><input data-c="dose_gy" value="${o.dose_gy ?? ""}"></td>
+      <td><input data-c="volume_pct" value="${o.volume_pct ?? (o.tipo === "serial" ? 8 : "")}" ${["dvh", "paralelo", "serial"].includes(o.tipo) ? "" : "disabled"}></td>
+      <td><input data-c="peso" type="number" min="0.1" step="0.5" value="${o.peso ?? 1}"></td>
+      <td><input data-c="restrito" type="checkbox" ${o.restrito ? "checked" : ""} ${o.tipo === "alvo" ? "disabled" : ""}></td>
+      <td><button class="pequeno" data-rem-obj="${k}">×</button></td></tr>`).join("");
+  }).join("") || `<tr><td colspan="6" class="pequeno-txt" style="text-align:left">Sem objetivos: escolha um protocolo, use o assistente ou acrescente as estruturas abaixo.</td></tr>`;
+  $$("#tab-objetivos [data-c]").forEach(i => i.onchange = () => {
+    const k = +i.closest("tr").dataset.k; E.objetivos[k][i.dataset.c] = i.type === "checkbox" ? i.checked : i.value;
+    if (i.dataset.c === "tipo") { if (i.value === "serial" && !E.objetivos[k].volume_pct) E.objetivos[k].volume_pct = 8; listarObjetivos(); }
+    if (i.dataset.c === "dose_gy" && E.objetivos[k].tipo === "alvo") listarObjetivos();
+  });
+  $$("[data-rem-obj]").forEach(b => b.onclick = () => { E.objetivos.splice(+b.dataset.remObj, 1); listarObjetivos(); });
+  $$("[data-rem-g]").forEach(b => b.onclick = () => { E.objetivos = objs.filter(o => o.estrutura !== b.dataset.remG); listarObjetivos(); });
+  $$("[data-add-g]").forEach(b => b.onclick = () => {
+    const n = b.dataset.addG, da = doseAlvo(n);
+    E.objetivos.push(da ? { estrutura: n, tipo: "max", dose_gy: Math.round(da * 1.07 * 100) / 100, volume_pct: "", peso: 1 }
+      : { estrutura: n, tipo: "dvh", dose_gy: "", volume_pct: "", peso: 1 });
+    listarObjetivos();
+  });
+  const livres = ests.filter(e => e.tipo !== "BOLUS" && !(e.nome in pos)).map(e => e.nome);
+  livres.sort((a, b) => (eAlvoNome(b) - eAlvoNome(a)) || a.localeCompare(b));
+  $("#obj-est-nova").innerHTML = `<option value="">+ estrutura…</option>` + livres.map(n => `<option>${esc(n)}</option>`).join("");
+}
+function novoGrupo(n) {
+  const p = E.resumo.plano, rx = p && p.prescricao;
+  E.objetivos = E.objetivos || [];
+  if (eAlvoNome(n)) {
+    const d = (rx && rx.estrutura_alvo === n) ? rx.dose_total_gy : (doseDoNome(n) || (rx ? rx.dose_total_gy : ""));
+    E.objetivos.push({ estrutura: n, tipo: "alvo", dose_gy: d, volume_pct: "", peso: 5 });
+  } else E.objetivos.push({ estrutura: n, tipo: "max", dose_gy: "", volume_pct: "", peso: 1 });
+  listarObjetivos();
+}
+
+// ---- protocolo do sítio e assistente do caso
+async function carregarSitios() {
+  try {
+    E.sitios = await api("GET", "/api/objetivos_sitio");
+    $("#obj-sitio").innerHTML = `<option value="">Protocolo do sítio…</option>` +
+      E.sitios.map(s => `<option value="${s.id}" title="${esc(s.fonte)}">${esc(s.nome)}${s.clinica ? " (clínica)" : ""}</option>`).join("");
+  } catch (e) { /* sem protocolos */ }
+}
+async function aplicarProtocolo() {
+  const sitio = $("#obj-sitio").value;
+  if (!sitio) throw new Error("Escolha o protocolo do sítio");
+  if ((E.objetivos || []).length && !confirm("Substituir os objetivos atuais pelos do protocolo?")) return;
+  const r = await api("POST", `/api/${E.sid}/imrt/assistente`, { sitio, aplicar: true }, "Montando os objetivos do protocolo…");
+  E.objetivos = r.objetivos;
+  if (r.criar.length) atualizar(await api("GET", `/api/${E.sid}`)); else listarObjetivos();
+  const falta = r.faltando.map(f => f.tg).join(", ");
+  aviso(`${r.sitio_nome}: ${r.objetivos.length} objetivos` + (falta ? ` · faltam: ${falta}` : "") +
+    (r.avisos.length ? ` · ${r.avisos[0]}` : "") + " — revise os valores", !r.avisos.length);
+}
+async function assistente(textoIni) {
+  if (!E.resumo || !E.resumo.plano) throw new Error("Crie o plano primeiro");
+  const v = await modal("Assistente do caso", `<p class="pequeno-txt">Descreva o caso como para um colega: sítio, estadiamento, cirurgia,
+    doses e frações, boost integrado, lado. O assistente lê também a TC e as estruturas (alvos e doses pelos nomes, lado do
+    alvo, órgãos perto do alvo e os que faltam) e escolhe os objetivos pelo protocolo do sítio. São regras explicadas, não
+    uma IA generativa: confira tudo.</p>
+    <label>Descrição<textarea name="texto" rows="4" placeholder="ex.: colo do útero IIB, 45 Gy em 25 frações na pelve com boost integrado de 55 Gy nos linfonodos">${esc(textoIni ?? E.assistTexto ?? "")}</textarea></label>
+    <label>Protocolo<select name="sitio"><option value="">automático (pela descrição e pela anatomia)</option>
+      ${(E.sitios || []).map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join("")}</select></label>`, { ok: "Analisar" });
+  E.assistTexto = v.texto;
+  const r = await api("POST", `/api/${E.sid}/imrt/assistente`, { texto: v.texto, sitio: v.sitio || null }, "Analisando a TC e as estruturas…");
+  const faltIA = r.faltando.filter(f => f.ia_disponivel).map(f => f.ia);
+  const p = r.parametros || {};
+  const tabela = r.objetivos.map(o => `<tr><td>${esc(o.estrutura)}</td><td>${TIPOS_OBJ[o.tipo] || o.tipo}</td><td>${o.dose_gy}</td>` +
+    `<td>${o.volume_pct ?? ""}</td><td class="pequeno-txt">${esc(o.origem || "")}</td></tr>`).join("");
+  const html = `<p><b>${esc(r.sitio_nome || "Sítio não reconhecido")}</b>${r.fonte ? ` <span class="pequeno-txt">(${esc(r.fonte)})</span>` : ""}</p>
+    ${r.avisos.length ? `<ul class="assist-lista avisotxt">${r.avisos.map(a => `<li>${esc(a)}</li>`).join("")}</ul>` : ""}
+    <h3>O que o assistente concluiu</h3><ul class="assist-lista">${r.explicacao.map(a => `<li>${esc(a)}</li>`).join("")}</ul>
+    ${r.faltando.length ? `<h3>Órgãos que faltam</h3><div class="pequeno-txt">${r.faltando.map(f => esc(f.tg)).join(", ")}</div>
+      ${faltIA.length ? `<button id="b-assist-ia" class="pequeno">Contornar por IA (${faltIA.length}) e analisar de novo</button>` :
+        `<div class="pequeno-txt">Contorne-os (ou instale o contorno por IA em Ferramentas) para entrarem nos objetivos.</div>`}` : ""}
+    <h3>Objetivos propostos (${r.objetivos.length})</h3>
+    <table><thead><tr><th>Estrutura</th><th>Tipo</th><th>Gy</th><th>V%</th><th>limite</th></tr></thead><tbody>${tabela}</tbody></table>
+    ${p.inicio != null ? `<label>Arcos<select name="arcos"><option value="sim">usar ${p.arcos} arcos parciais ${p.inicio}°→${p.fim}° (lado do alvo)</option>
+      <option value="nao">manter os arcos do formulário</option></select></label>` : `<input type="hidden" name="arcos" value="nao">`}`;
+  E.assistIA = null;
+  $("#modal .caixa").classList.add("larga");
+  const pr = modal("Assistente: proposta", html, { ok: r.objetivos.length ? "Aplicar objetivos" : "Fechar" });
+  const bia = $("#b-assist-ia");
+  if (bia) bia.onclick = () => { E.assistIA = faltIA; $("#modal-cancelar").click(); };
+  let ok;
+  try { ok = await pr; } catch (e) {
+    $("#modal .caixa").classList.remove("larga");
+    if (!E.assistIA) throw e;
+    const s = await api("POST", `/api/${E.sid}/contorno/ia`, { orgaos: E.assistIA }, "Segmentando com IA (1–5 min por grupo na CPU)…");
+    atualizar(s); aviso("Criado por IA: " + s.contorno.criadas.join(", ") + " — revise", true);
+    return assistente(v.texto);
+  }
+  $("#modal .caixa").classList.remove("larga");
+  if (!r.objetivos.length) return;
+  const r2 = await api("POST", `/api/${E.sid}/imrt/assistente`, { texto: v.texto, sitio: v.sitio || r.sitio, aplicar: true }, "Aplicando…");
+  E.objetivos = r2.objetivos;
+  if ($("#o-tecnica").value === "3D") { $("#o-tecnica").value = "VMAT"; $("#o-tecnica").onchange(); }
+  if (ok.arcos === "sim" && p.inicio != null) {
+    $("#vm-n").value = String(p.arcos); $("#vm-ini").value = p.inicio; $("#vm-fim").value = p.fim; $("#vm-sent").value = "CW";
+    aviso("Arcos ajustados no formulário: clique em Criar arcos", true);
+  }
+  if (r2.criar.length) atualizar(await api("GET", `/api/${E.sid}`)); else listarObjetivos();
+  abaEsquerda("otim");
+}
+
+// ---- apagar planos
+async function apagarPlanoAtual() {
+  const p = E.resumo && E.resumo.plano;
+  if (!p) throw new Error("Nenhum plano aberto");
+  if (p.estado !== "RASCUNHO") throw new Error("Plano aprovado: desaprove antes (fica na auditoria) e então apague");
+  const v = await modal(`Apagar o plano ${p.rotulo}`, `<p>O plano sai desta sessão e o arquivo salvo, se houver, vai para a
+    lixeira da pasta de dados (<code>planos/lixeira</code>), de onde pode ser recuperado. A ação fica na auditoria.</p>
+    <label>Senha<input name="senha" type="password"></label>`, { ok: "Apagar" });
+  const r = await api("POST", `/api/${E.sid}/plano/apagar`, { rotulo: p.rotulo, senha: v.senha }, "Apagando…");
+  E.campoSel = null; E.objetivos = [];
+  atualizar(r); preencherPrescricao(r); await listarPlanos();
+  aviso(`Plano ${p.rotulo} apagado (arquivo na lixeira)`, true);
+}
+async function apagarPlanoSalvo() {
+  const op = $("#planos-salvos").selectedOptions[0];
+  if (!op) throw new Error("Escolha o plano na lista");
+  const v = await modal("Apagar plano salvo", `<p>${esc(op.textContent)}</p><p class="pequeno-txt">O arquivo vai para a lixeira da
+    pasta de dados (recuperável) e sai da lista. Planos aprovados não são apagados.</p>
+    <label>Senha<input name="senha" type="password"></label>`, { ok: "Apagar" });
+  await api("POST", "/api/planos/apagar", { chave: op.dataset.chave, senha: v.senha }, "Apagando…");
+  await listarPlanos(); aviso("Plano apagado (arquivo na lixeira)", true);
+}
+
+// ---- contorno por IA: instalação e estado
+async function janelaIA() {
+  let e = await api("GET", "/api/ia/instalacao");
+  const estadoTxt = () => e.segmentacao.disponivel ? `<span class="ok">instalado</span> — ${esc(e.segmentacao.executavel)}`
+    : `<span class="avisotxt">não instalado</span>`;
+  const pr = modal("Contorno por IA (TotalSegmentator)", `<p>Estado: <span id="ia-st">${estadoTxt()}</span></p>
+    <p class="pequeno-txt">A rede roda neste computador (servidor do TPS), num ambiente Python próprio em <code>${esc(e.destino)}</code>.
+    Precisa de internet uma vez (~2 GB)${e.plataforma === "win32" ? " e do Python 3.10–3.12 do python.org (marque “Add to PATH”)" : ""}.
+    Com placa NVIDIA, a versão GPU segmenta em segundos; na CPU, 1–5 min por grupo de órgãos.</p>
+    <label>Sua senha (físico/administrador)<input id="ia-senha" type="password"></label>
+    <div class="botoes"><button id="b-ia-cpu" class="primario">Instalar (CPU)</button><button id="b-ia-gpu">Instalar (GPU NVIDIA)</button></div>
+    <label>Ou usar um TotalSegmentator já instalado (caminho do executável)
+      <span class="linha-inline"><input id="ia-exe" placeholder="C:\\…\\Scripts\\TotalSegmentator.exe"><button id="b-ia-apontar" class="pequeno">Usar</button></span></label>
+    <div class="pequeno-txt" id="ia-rodando"></div>
+    <pre class="log" id="ia-log">${esc((e.log || []).join("\n")) || "—"}</pre>`, { ok: "Fechar", cancelar: false });
+  $("#modal .caixa").classList.add("larga");
+  const mostrar = () => {
+    $("#ia-st").innerHTML = estadoTxt();
+    $("#ia-log").textContent = (e.log || []).join("\n") || "—";
+    $("#ia-log").scrollTop = 1e9;
+    $("#ia-rodando").innerHTML = e.rodando ? `Instalando desde ${esc(e.inicio)}… (pode fechar esta janela; continua em segundo plano)`
+      : (e.fim ? `Última instalação terminou em ${esc(e.fim)} (código ${e.codigo}${e.codigo === 0 ? ", ok" : ", veja o registro"})` : "");
+    $("#b-ia-cpu").disabled = $("#b-ia-gpu").disabled = !!e.rodando;
+  };
+  const instalar = (gpu) => tentar(async () => {
+    e = await api("POST", "/api/ia/instalar", { gpu, senha: $("#ia-senha").value }); mostrar();
+  });
+  $("#b-ia-cpu").onclick = () => instalar(false);
+  $("#b-ia-gpu").onclick = () => instalar(true);
+  $("#b-ia-apontar").onclick = () => tentar(async () => {
+    e = await api("POST", "/api/ia/apontar", { executavel: $("#ia-exe").value, senha: $("#ia-senha").value }); mostrar();
+    aviso("TotalSegmentator configurado", true);
+  });
+  mostrar();
+  const t = setInterval(async () => { try { e = await api("GET", "/api/ia/instalacao"); if ($("#ia-log")) mostrar(); } catch (x) { /* ok */ } }, 3000);
+  try { await pr; } finally {
+    clearInterval(t); $("#modal .caixa").classList.remove("larga");
+    E.info.ia = e.segmentacao; mostrarIA();
+  }
+}
+
+// ---- layout: divisórias arrastáveis, troca de vistas, maximizar
+function ligarLayout() {
+  const lay = lerGuardado("tps_layout") || {};
+  const main = $("main"), centro = $("#centro");
+  for (const [k, v] of Object.entries(lay.vars || {})) (k.startsWith("--l-") ? main : centro).style.setProperty(k, v);
+  if (lay.slots) for (const [id, s] of Object.entries(lay.slots)) { const el = $("#" + id); if (el) el.dataset.slot = s; }
+  if (lay.modo) centro.className = "lay-" + lay.modo;
+  const salvar = () => {
+    const vars = {};
+    for (const k of ["--l-esq", "--l-dir"]) { const v = main.style.getPropertyValue(k); if (v) vars[k] = v; }
+    for (const k of ["--c1", "--c2", "--c3", "--r1", "--r2"]) { const v = centro.style.getPropertyValue(k); if (v) vars[k] = v; }
+    const slots = Object.fromEntries($$("#centro .vista").map(v => [v.id, v.dataset.slot]));
+    guardar("tps_layout", { vars, slots, modo: (centro.className.match(/lay-(\w+)/) || [])[1] || "padrao" });
+  };
+  E.salvarLayout = salvar;
+  $$(".divisor").forEach(d => d.addEventListener("mousedown", (ev) => {
+    ev.preventDefault();
+    const tipo = d.dataset.div; d.classList.add("ativo"); document.body.classList.add("arrastando");
+    const rm = main.getBoundingClientRect(), rc = centro.getBoundingClientRect();
+    const mover = (e) => {
+      if (tipo === "esq") main.style.setProperty("--l-esq", Math.max(230, Math.min(e.clientX - rm.left, rm.width * 0.6)) + "px");
+      else if (tipo === "dir") main.style.setProperty("--l-dir", Math.max(230, Math.min(rm.right - e.clientX, rm.width * 0.6)) + "px");
+      else if (tipo === "c1") centro.style.setProperty("--c1", Math.max(120, Math.min(e.clientX - rc.left - 4, rc.width - 140)) + "px");
+      else if (tipo === "c2") {
+        const c = $("#centro [data-slot=C]").getBoundingClientRect();
+        centro.style.setProperty("--c2", Math.max(80, Math.min(e.clientX - c.left, rc.right - c.left - 90)) + "px");
+        centro.style.setProperty("--c3", "1fr");
+      } else if (tipo === "r1") {
+        centro.style.setProperty("--r1", Math.max(80, Math.min(e.clientY - rc.top - 4, rc.height - 90)) + "px");
+        centro.style.setProperty("--r2", "1fr");
+      }
+    };
+    const soltar = () => {
+      d.classList.remove("ativo"); document.body.classList.remove("arrastando");
+      window.removeEventListener("mousemove", mover); window.removeEventListener("mouseup", soltar); salvar(); desenharTudo();
+    };
+    window.addEventListener("mousemove", mover); window.addEventListener("mouseup", soltar);
+  }));
+  // arrastar o título de uma vista sobre outra troca as duas; duplo clique maximiza
+  $$("#centro .vista").forEach(v => {
+    const topo = v.querySelector(".vista-topo");
+    topo.addEventListener("dblclick", (ev) => {
+      if (ev.target.closest("select,input,button,label")) return;
+      const max = !v.classList.contains("max");
+      $$("#centro .vista").forEach(x => x.classList.remove("max"));
+      v.classList.toggle("max", max); centro.classList.toggle("tem-max", max);
+    });
+    topo.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0 || ev.target.closest("select,input,button,label")) return;
+      ev.preventDefault();
+      let alvo = null;
+      const mover = (e) => {
+        const el = document.elementFromPoint(e.clientX, e.clientY), w = el && el.closest("#centro .vista");
+        alvo = w && w !== v ? w : null;
+        $$("#centro .vista").forEach(x => x.classList.toggle("alvo-troca", x === alvo));
+      };
+      const soltar = () => {
+        window.removeEventListener("mousemove", mover); window.removeEventListener("mouseup", soltar);
+        $$("#centro .vista").forEach(x => x.classList.remove("alvo-troca"));
+        if (alvo) { const s = v.dataset.slot; v.dataset.slot = alvo.dataset.slot; alvo.dataset.slot = s; salvar(); desenharTudo(); }
+      };
+      window.addEventListener("mousemove", mover); window.addEventListener("mouseup", soltar);
+    });
+  });
+  // redesenha quando o tamanho de uma vista muda
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(() => {
+      if (E.rafRedim) return;
+      E.rafRedim = requestAnimationFrame(() => { E.rafRedim = null; if (E.resumo) desenharTudo(); });
+    });
+    $$("#centro .vista canvas").forEach(c => ro.observe(c));
+  }
+}
+function definirLayout(modo) {
+  const main = $("main"), centro = $("#centro");
+  $$("#centro .vista").forEach(x => x.classList.remove("max")); centro.classList.remove("tem-max");
+  if (modo === "reset") {
+    for (const k of ["--l-esq", "--l-dir"]) main.style.removeProperty(k);
+    for (const k of ["--c1", "--c2", "--c3", "--r1", "--r2"]) centro.style.removeProperty(k);
+    for (const [id, s] of [["v-axial", "A"], ["v-bev", "B"], ["v-coronal", "C"], ["v-sagital", "D"]]) $("#" + id).dataset.slot = s;
+    main.classList.remove("sem-paineis");
+    modo = "padrao";
+  } else for (const k of ["--c1", "--c2", "--c3"]) centro.style.removeProperty(k);
+  centro.className = "lay-" + modo;
+  if (E.salvarLayout) E.salvarLayout();
+  setTimeout(desenharTudo, 30);
+}
+
+iniciar().catch(e => aviso(e.message));

@@ -12,7 +12,7 @@ Todo contorno automático é **rascunho**: o físico/médico revisa e corrige co
 ## Instalar a IA no computador do TPS
 
 1. Instale o Python 3.12 (python.org, marcar "Add python.exe to PATH").
-2. Menu Iniciar › TPS › **Instalar contorno por IA (TotalSegmentator)** (pede administrador). Com placa NVIDIA, rode o
+2. No TPS: Ferramentas › **Contorno por IA…** › *Instalar (CPU)* ou *Instalar (GPU NVIDIA)* (pede a senha de físico/administrador; acompanha o registro na tela). Também dá pelo Menu Iniciar › TPS › **Instalar contorno por IA (TotalSegmentator)**. Com placa NVIDIA, rode o
    script com `-GPU`. Ocupa ~2 GB (CPU) ou ~6 GB (GPU) em `C:\ProgramData\TPS\ia\venv`; precisa de internet uma vez.
 3. Reabra o TPS. Outra instalação pode ser apontada em `C:\ProgramData\TPS\ia\config.yaml` (`executavel: ...`) ou
    na variável `TPS_TOTALSEG`.

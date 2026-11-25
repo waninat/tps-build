@@ -6,9 +6,51 @@
 <title>TPS — planejamento</title>
 <link rel="stylesheet" href="/estatico/estilo.css">
 </head>
-<body>
 <header id="topo">
   <div class="marca">TPS <span id="versao"></span></div>
+  <nav id="menus">
+    <div class="menu"><button class="menu-b">Arquivo</button><div class="menu-l">
+      <button data-acao="aba:caso">Abrir caso (CT/RTSTRUCT)…</button>
+      <button data-acao="abrir-plano">Abrir plano salvo…</button>
+      <button data-acao="salvar" data-precisa="plano">Salvar <kbd>Ctrl+S</kbd></button>
+      <hr><button data-acao="apagar-plano" data-precisa="plano">Apagar o plano atual…</button>
+      <button data-acao="apagar-salvos">Apagar planos salvos…</button>
+      <hr><button data-acao="relatorio" data-precisa="plano">Relatório PDF</button>
+      <button data-acao="rel-medico" data-precisa="dose">Relatório para o médico</button>
+      <button data-acao="checkfilm" data-precisa="campos">Check film</button>
+      <hr><button data-acao="sair">Sair</button></div></div>
+    <div class="menu"><button class="menu-b">Plano</button><div class="menu-l">
+      <button data-acao="aba:plano">Prescrição e novo plano</button>
+      <button data-acao="copiar" data-precisa="plano">Copiar o plano…</button>
+      <button data-acao="remover" data-precisa="plano">Tirar o plano da sessão</button>
+      <button data-acao="apagar-plano" data-precisa="plano">Apagar o plano…</button>
+      <hr><button data-acao="aba:campos">Feixes</button>
+      <button data-acao="aba:otim">Otimização</button>
+      <button data-acao="calcular" data-precisa="campos">Calcular / otimizar <kbd>F5</kbd></button>
+      <hr><button data-acao="aprovar" data-precisa="dose">Aprovar…</button>
+      <button data-acao="aba:aprov">Aprovação e exportação</button></div></div>
+    <div class="menu"><button class="menu-b">Ferramentas</button><div class="menu-l">
+      <button data-acao="ia">Contorno por IA (instalar / estado)…</button>
+      <button data-acao="assistente" data-precisa="plano">Assistente de objetivos (IMRT/VMAT)…</button>
+      <button data-acao="aba-d:est">Estruturas e contorno</button>
+      <button data-acao="aba-d:pl">Comparar / somar planos</button>
+      <button data-acao="aba-d:um">UM e pontos</button>
+      <button data-acao="qa" data-precisa="dose">QA de paciente</button>
+      <hr><button data-acao="auditoria">Auditoria e usuários</button></div></div>
+    <div class="menu"><button class="menu-b">Exibir</button><div class="menu-l">
+      <button data-acao="lay:padrao">Layout: axial grande + 3 vistas</button>
+      <button data-acao="lay:grade">Layout: grade 2 × 2</button>
+      <button data-acao="lay:axial">Layout: só a vista principal</button>
+      <button data-acao="lay:reset">Restaurar divisórias e posições</button>
+      <hr><button data-acao="aba-d:iso">Isodoses…</button>
+      <button data-acao="wash">Colorwash liga/desliga</button>
+      <button data-acao="paineis">Esconder/mostrar os painéis laterais</button>
+      <hr><div class="menu-dica">Arraste o título de uma vista sobre outra para trocar de lugar; duplo clique maximiza.
+        Botão direito + arrastar na imagem: contraste (←→) e brilho (↑↓).</div></div></div>
+    <div class="menu"><button class="menu-b">Ajuda</button><div class="menu-l">
+      <button data-acao="sobre">Sobre o TPS</button>
+      <button data-acao="atalhos">Atalhos</button></div></div>
+  </nav>
   <div id="caso-nome" class="caso">Nenhum caso aberto</div>
   <div id="estado" class="selo">—</div>
   <button id="dmax-topo" class="oculto" title="dose máxima do plano (no corpo) — clique para ir até o ponto"></button>
@@ -16,21 +58,49 @@
     <select id="plano-sel"></select>
     <button id="b-plano-copiar" class="pequeno" title="cria uma cópia do plano atual (rascunho) para testar alternativas">Copiar</button>
     <button id="b-plano-rem" class="pequeno" title="tira o plano desta sessão (o arquivo salvo continua)">Remover</button>
+    <button id="b-plano-apagar" class="pequeno perigo" title="apaga o plano: sai da sessão e o arquivo salvo vai para a lixeira (pede a senha)">Apagar…</button>
   </div>
   <div class="espaco"></div>
   <span class="nao-clinico" title="Em desenvolvimento — não usar em paciente">não clínico</span>
-  <button id="b-salvar" disabled title="salva todos os planos desta TC">Salvar</button>
-  <button id="b-relatorio" disabled>Relatório PDF</button>
-  <button id="b-rel-medico" disabled title="1–2 páginas para o médico aprovar: imagens com isodoses, DVH, órgãos de risco e pontos de atenção">Para o médico</button>
-  <button id="b-checkfilm" disabled title="DRR de cada campo com MLC e escala, para comparar com o filme de verificação">Check film</button>
-  <button id="b-auditoria" title="Trilha de auditoria e usuários">Auditoria</button>
   <span id="usuario-txt" class="usuario"></span>
   <button id="b-sair" class="pequeno">Sair</button>
 </header>
+<div id="ferramentas">
+  <button id="b-salvar" disabled title="salva todos os planos desta TC (Ctrl+S)">💾 Salvar</button>
+  <span class="sep"></span>
+  <button id="b-calc-topo" class="primario" disabled title="calcula ou otimiza (F5)">▶ Calcular</button>
+  <button id="b-aprovar-topo" disabled title="aprovar (pede a senha)">✔ Aprovar</button>
+  <button id="b-exportar-topo" disabled title="aprovação e exportação">⇪ Exportar</button>
+  <span class="sep"></span>
+  <button id="b-relatorio" disabled>Relatório</button>
+  <button id="b-rel-medico" disabled title="1–2 páginas para o médico aprovar: imagens com isodoses, DVH, órgãos de risco e pontos de atenção">Para o médico</button>
+  <button id="b-checkfilm" disabled title="DRR de cada campo com MLC e escala, para comparar com o filme de verificação">Check film</button>
+  <button id="b-auditoria" class="oculto" title="Trilha de auditoria e usuários">Auditoria</button>
+  <span class="sep"></span>
+  <label class="ferr-l" title="janela/nível do CT em todas as vistas">CT<select id="wl-preset"></select></label>
+  <label class="ferr-l" title="contraste = largura da janela (HU)">Contraste<input type="range" id="wl-janela" min="20" max="4000" step="10"></label>
+  <label class="ferr-l" title="brilho = centro da janela (HU), invertido: para a direita fica mais claro">Brilho<input type="range" id="wl-brilho" min="-1200" max="1200" step="5"></label>
+  <span id="wl-txt" class="pequeno-txt"></span>
+  <span class="sep"></span>
+  <label class="check ferr-l"><input type="checkbox" id="t-iso" checked> isodoses</label>
+  <button id="b-iso-cfg" class="pequeno" title="curvas relativas e absolutas (Gy), referência e colorwash">⚙</button>
+  <span class="linha-inline ferr-gy" title="acrescenta uma isodose em dose absoluta (Gy, dose total)"><input id="iso-gy-rapido" type="number" step="0.5" min="0.1" placeholder="Gy"><button id="b-iso-gy-rapido" class="pequeno">+ Gy</button></span>
+  <select id="fonte-dose" class="oculto" title="dose mostrada nas imagens e no DVH">
+    <option value="plano">plano atual</option><option value="soma">soma de planos</option><option value="dif">diferença B − A</option>
+  </select>
+</div>
 
 <main>
 <aside id="esquerda">
-  <details open id="sec-caso"><summary>1 · Caso</summary>
+  <nav class="abas-esq">
+    <button class="aba-e ativa" data-abae="caso" title="paciente: CT, fantoma ou plano salvo">Paciente</button>
+    <button class="aba-e" data-abae="plano" title="máquina, prescrição e normalização">Prescrição</button>
+    <button class="aba-e" data-abae="campos" title="campos, arcos, bolus e setup">Feixes</button>
+    <button class="aba-e" data-abae="otim" title="técnica, objetivos e parâmetros da otimização">Otimização</button>
+    <button class="aba-e" data-abae="aprov" title="checklist, QA, aprovação e exportação">Aprovação</button>
+  </nav>
+  <div class="painel-esq">
+  <section class="aba-e-p" id="sec-caso">
     <div class="abas">
       <button class="aba ativa" data-aba="ct">CT + RTSTRUCT</button>
       <button class="aba" data-aba="fantoma">2D (sem CT)</button>
@@ -59,11 +129,11 @@
     </div>
     <div class="painel-aba oculto" id="aba-abrir">
       <select id="planos-salvos" size="6"></select>
-      <button id="b-abrir">Abrir</button>
+      <div class="botoes"><button id="b-abrir" class="primario">Abrir</button>
+        <button id="b-apagar-salvo" class="perigo" title="apaga o plano salvo escolhido (vai para a lixeira; pede a senha)">Apagar…</button></div>
     </div>
-  </details>
-
-  <details open id="sec-plano"><summary>2 · Máquina e prescrição</summary>
+  </section>
+  <section class="aba-e-p oculto" id="sec-plano">
     <label>Máquina <select id="maquina"></select></label>
     <div class="linha3">
       <label>Rótulo<input id="p-rotulo" value="PLANO1" maxlength="16"></label>
@@ -106,9 +176,8 @@
     </div>
     <div class="isocentro">Isocentro (mm): <span id="iso-txt">—</span>
       <button id="b-iso" class="pequeno" title="Usar a posição da cruz no corte axial" disabled>usar cruz</button></div>
-  </details>
-
-  <details open id="sec-campos"><summary>3 · Campos</summary>
+  </section>
+  <section class="aba-e-p oculto" id="sec-campos">
     <div class="modelos">
       <span>Arranjos:</span>
       <button class="pequeno" data-arranjo="appa">AP/PA</button>
@@ -189,9 +258,8 @@
         <button id="b-campo-rem" class="perigo">Remover</button>
       </div>
     </fieldset>
-  </details>
-
-  <details open id="sec-calc"><summary>4 · Cálculo</summary>
+  </section>
+  <section class="aba-e-p oculto" id="sec-calc">
     <label>Técnica
       <select id="o-tecnica">
         <option value="3D">3D conformada</option>
@@ -223,14 +291,26 @@
         </div>
         <button id="b-im-campos" class="pequeno">Criar campos</button>
       </div>
-      <div class="pequeno-txt"><b>Objetivos</b> (dose total, Gy). Alvo: dose uniforme (sub &lt; 95% e sobre &gt; 107% penalizadas);
+      <details class="sub"><summary><b>Objetivos</b> — como funcionam</summary>
+        <div class="pequeno-txt">Dose total, Gy. Alvo: dose uniforme (sub &lt; 95% e sobre &gt; 107% penalizadas);
         vários alvos com doses diferentes = boost integrado. Órgãos: só a parte fora do alvo. <b>R</b> = restrito (como o
         Monaco: tem de ser cumprido; o alvo fica com o melhor possível). Sem R = ponderado pelo peso (como o Eclipse).
         Serial: EUD com expoente k (medula 12–20, reto 8); paralelo: no máx. v% do volume acima da dose.</div>
-      <table id="tab-objetivos"><thead><tr><th>Estrutura</th><th>Tipo</th><th>Gy</th><th title="DVH/paralelo: volume %; serial: expoente k">V%/k</th><th>Peso</th><th title="restrito (Monaco)">R</th><th></th></tr></thead><tbody></tbody></table>
-      <div class="botoes">
-        <button id="b-obj-add" class="pequeno">+ objetivo</button>
-        <button id="b-obj-sug" class="pequeno" title="alvo da prescrição + limites do protocolo (QUANTEC/clínica) e restrições próprias">Sugerir pelas restrições</button>
+      </details>
+      <div class="caixa-import" id="obj-protocolo">
+        <div class="linha-inline">
+          <select id="obj-sitio" title="objetivos de partida por sítio (RTOG/NRG/QUANTEC — revisar)"><option value="">Protocolo do sítio…</option></select>
+          <button id="b-obj-prot" class="pequeno" title="substitui os objetivos pelos do protocolo, para as estruturas deste caso">Aplicar</button>
+        </div>
+        <div class="botoes">
+          <button id="b-obj-assist" class="pequeno" title="descreva o caso: o assistente lê a TC e as estruturas, aponta o que falta e escolhe os objetivos">🧭 Assistente do caso…</button>
+          <button id="b-obj-sug" class="pequeno" title="alvo da prescrição + limites do protocolo de restrições (QUANTEC/clínica) e restrições próprias">Sugerir pelas restrições</button>
+        </div>
+      </div>
+      <table id="tab-objetivos"><thead><tr><th>Tipo</th><th>Gy</th><th title="DVH/paralelo: volume %; serial: expoente k">V%/k</th><th>Peso</th><th title="restrito (Monaco)">R</th><th></th></tr></thead><tbody></tbody></table>
+      <div class="linha-inline obj-add">
+        <select id="obj-est-nova"><option value="">+ estrutura…</option></select>
+        <button id="b-obj-limpar" class="pequeno" title="apaga todos os objetivos">limpar</button>
       </div>
       <div class="linha3 so-vmat">
         <label title="cada setor do arco vira um mapa de fluência; menor = mais modulação e mais tempo">Setor (°)<select id="vm-setor"><option>24</option><option>32</option><option selected>40</option><option>48</option></select></label>
@@ -293,16 +373,9 @@
       <label>UM mín. por segmento<input id="o-ummin" type="number" value="2" step="0.5"></label>
     </div>
     </div>
-    <div class="linha3" title="algoritmo da dose final: o VMAT usa Monte Carlo por padrão; as otimizações iteram com o collapsed cone">
-      <label>Dose final<select id="o-alg"><option value="">automático (VMAT: MC)</option><option value="CCC">collapsed cone</option><option value="MC">Monte Carlo</option></select></label>
-      <label title="incerteza estatística (1σ) do plano nos voxels acima de 50% da dose máxima">Incerteza MC<select id="o-mc-inc"><option value="0.5">0,5%</option><option value="1" selected>1%</option><option value="2">2%</option><option value="3">3%</option></select></label>
-      <label class="check" title="padrão: dose no meio (como o Monaco); marcado: dose na água (razão de poderes de freamento por material)"><input type="checkbox" id="o-mc-agua">Dose na água</label>
-    </div>
-    <button id="b-calc" class="primario grande" disabled>Calcular dose</button>
-    <button id="b-renorm" disabled title="aplica a normalização escolhida em 2 · Prescrição sem recalcular a dose (mesma forma, outras UM)">Renormalizar (sem recalcular)</button>
-  </details>
 
-  <details id="sec-aprov"><summary>5 · Aprovação e exportação</summary>
+  </section>
+  <section class="aba-e-p oculto" id="sec-aprov">
     <div id="checklist" class="checklist"></div>
     <details class="sub" id="sec-qa"><summary>QA de paciente (plano de verificação)</summary>
       <div class="pequeno-txt">Os campos de uma fração recalculados no fantoma de água: RTPLAN para entregar,
@@ -336,24 +409,26 @@
     <label class="check"><input id="e-imagens" type="checkbox"> incluir CT e RTSTRUCT (sempre no plano 2D)</label>
     <button id="b-exportar" class="primario" disabled>Exportar RTPLAN</button>
     <div id="exportados"></div>
-  </details>
-</aside>
-
-<section id="centro">
-  <div class="vista grande" id="v-axial">
-    <div class="vista-topo"><b>Axial</b><span class="pos"></span>
-      <select class="wl"><option value="400,40">Tecidos moles</option><option value="1500,-600">Pulmão</option><option value="2000,400">Osso</option></select>
-      <label class="check"><input type="checkbox" class="t-iso" checked> isodoses</label>
-      <button id="b-iso-cfg" class="pequeno" title="quais isodoses, referência (prescrição ou máximo do plano) e % ou Gy">⚙</button>
-      <select id="fonte-dose" class="oculto" title="dose mostrada nas imagens e no DVH">
-        <option value="plano">plano atual</option><option value="soma">soma de planos</option><option value="dif">diferença B − A</option>
-      </select>
-      <label class="check" title="dose em cores sobre o CT, nos três cortes"><input type="checkbox" id="t-wash"> colorwash</label>
-      <select id="wash-min" title="dose mínima mostrada no colorwash (% da prescrição)"><option>10</option><option selected>20</option><option>30</option><option>50</option><option>80</option><option>90</option><option>95</option></select>
+  </section>
+  </div>
+  <div id="rodape-esq">
+    <div class="linha3" title="algoritmo da dose final: o VMAT usa Monte Carlo por padrão; as otimizações iteram com o collapsed cone">
+      <label>Dose final<select id="o-alg"><option value="">automático (VMAT: MC)</option><option value="CCC">collapsed cone</option><option value="MC">Monte Carlo</option></select></label>
+      <label title="incerteza estatística (1σ) do plano nos voxels acima de 50% da dose máxima">Incerteza MC<select id="o-mc-inc"><option value="0.5">0,5%</option><option value="1" selected>1%</option><option value="2">2%</option><option value="3">3%</option></select></label>
+      <label class="check" title="padrão: dose no meio (como o Monaco); marcado: dose na água (razão de poderes de freamento por material)"><input type="checkbox" id="o-mc-agua">Dose na água</label>
     </div>
+    <button id="b-calc" class="primario grande" disabled>Calcular dose</button>
+    <button id="b-renorm" disabled title="aplica a normalização escolhida em 2 · Prescrição sem recalcular a dose (mesma forma, outras UM) — normalização da aba Prescrição">Renormalizar (sem recalcular)</button>
+  </div>
+</aside>
+<div class="divisor dv" data-div="esq" title="arraste para mudar a largura do painel"></div>
+
+<section id="centro" class="lay-padrao">
+  <div class="vista" id="v-axial" data-slot="A">
+    <div class="vista-topo"><b>Axial</b><span class="pos"></span></div>
     <canvas></canvas>
   </div>
-  <div class="vista" id="v-bev">
+  <div class="vista" id="v-bev" data-slot="B">
     <div class="vista-topo"><b>BEV</b><select id="bev-campo"></select>
       <label class="check"><input type="checkbox" id="t-drr"> DRR</label>
       <span id="bev-seg" class="oculto">segmento <input type="range" id="bev-seg-r" min="0" max="0" value="0"> <span id="bev-seg-t"></span></span>
@@ -370,21 +445,26 @@
     </div>
     <canvas></canvas>
   </div>
-  <div class="vista" id="v-coronal">
+  <div class="vista" id="v-coronal" data-slot="C">
     <div class="vista-topo"><b>Coronal</b><span class="pos"></span></div>
     <canvas></canvas>
   </div>
-  <div class="vista" id="v-sagital">
+  <div class="vista" id="v-sagital" data-slot="D">
     <div class="vista-topo"><b>Sagital</b><span class="pos"></span></div>
     <canvas></canvas>
   </div>
+  <div class="divisor dv" data-div="c1" title="arraste para mudar a largura"></div>
+  <div class="divisor dh" data-div="r1" title="arraste para mudar a altura"></div>
+  <div class="divisor dv" data-div="c2" title="arraste para mudar a largura"></div>
 </section>
 
+<div class="divisor dv" data-div="dir" title="arraste para mudar a largura do painel"></div>
 <aside id="direita">
   <div class="abas abas-dir">
     <button class="aba-d ativa" data-abad="est">Estruturas</button>
+    <button class="aba-d" data-abad="iso">Isodoses</button>
     <button class="aba-d" data-abad="aval">Avaliação</button>
-    <button class="aba-d" data-abad="um">UM e pontos</button>
+    <button class="aba-d" data-abad="um" title="UM, conferência independente e pontos de referência">UM</button>
     <button class="aba-d" data-abad="pl">Planos</button>
     <button class="aba-d" data-abad="reg">Registro <span id="n-avisos"></span></button>
   </div>
@@ -401,7 +481,8 @@
         <select id="ia-orgaos" multiple size="10"></select>
         <label title="o reto sai do cólon da IA, do corte mais inferior até a junção retossigmoide detectada; para mudar, informe o z (mm) do último corte e segmente de novo">
           Limite superior do reto (z, mm)<input id="ia-reto-z" placeholder="automático"></label>
-        <button id="b-ia" class="pequeno" disabled>Segmentar</button>
+        <div class="botoes"><button id="b-ia" class="pequeno" disabled>Segmentar</button>
+          <button id="b-ia-instalar" class="pequeno" title="instalar ou configurar o TotalSegmentator">Instalar / configurar…</button></div>
       </div>
       <div class="pequeno-txt">Todo contorno automático precisa ser revisado e corrigido antes do plano.</div>
     </details>
@@ -463,6 +544,27 @@
     <div id="ne-iso" class="linha2 oculto"><label>Dose (Gy)<input id="ne-gy" type="number" value="45" step="0.5"></label></div>
     <button id="b-nova-est" class="pequeno" disabled>Criar</button>
   </details>
+  </div>
+  <div class="painel-d oculto" id="pd-iso">
+  <h3>Isodoses</h3>
+  <div class="linha2">
+    <label>100% é<select id="iso-ref"><option value="rx">a prescrição</option><option value="max">o máximo do plano</option></select></label>
+    <label>Rótulos em<select id="iso-uni"><option value="pct">% (relativo)</option><option value="gy">Gy (dose total)</option></select></label>
+  </div>
+  <h3>Relativas (%)</h3>
+  <div id="iso-rel" class="iso-lista"></div>
+  <div class="linha-inline"><input id="iso-rel-novo" placeholder="nova curva, %" type="number" step="0.5" min="1"><button id="b-iso-rel" class="pequeno">+ %</button>
+    <button id="b-iso-padrao" class="pequeno" title="volta às curvas padrão">padrão</button></div>
+  <h3>Absolutas (Gy, dose total)</h3>
+  <div class="pequeno-txt">Ex.: 40 Gy para a medula, 45 Gy para o intestino. Desenhadas tracejadas, junto com as relativas.</div>
+  <div id="iso-abs" class="iso-lista"></div>
+  <div class="linha-inline"><input id="iso-abs-novo" placeholder="dose, Gy" type="number" step="0.1" min="0.1"><button id="b-iso-abs" class="pequeno">+ Gy</button></div>
+  <h3>Colorwash</h3>
+  <div class="linha2">
+    <label class="check"><input type="checkbox" id="t-wash"> mostrar (3 cortes)</label>
+    <label>Mínimo (% da prescrição)<select id="wash-min"><option>10</option><option selected>20</option><option>30</option><option>50</option><option>80</option><option>90</option><option>95</option></select></label>
+  </div>
+  <div id="iso-info" class="pequeno-txt"></div>
   </div>
   <div class="painel-d oculto" id="pd-aval">
   <h3>Dose</h3>

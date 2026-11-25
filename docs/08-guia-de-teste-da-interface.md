@@ -79,6 +79,34 @@ preso ao gantry) e só o cálculo junta os pontos no gantry 0.
 MLCi (hoje 5 mm — é o que mais limita o VMAT no Precise), máximo de pontos de controle por arco, UM mínima por
 grau, velocidade das lâminas e taxa de dose.
 
+### F. Tela no estilo Monaco (versão 0.9)
+* **Menu** (Arquivo, Plano, Ferramentas, Exibir, Ajuda) e **barra de ferramentas**: salvar (Ctrl+S), calcular/otimizar
+  (F5), aprovar, exportar, relatórios, CT (janela/nível), isodoses.
+* **Painel esquerdo em abas**: *Paciente*, *Prescrição*, *Feixes*, *Otimização*, *Aprovação*. O botão de cálculo e a
+  escolha da dose final ficam sempre visíveis no rodapé do painel.
+* **Divisórias arrastáveis** entre os painéis e entre as vistas; *arrastar o título* de uma vista sobre outra troca as
+  duas; *duplo clique* no título maximiza. Exibir › layouts (axial grande, grade 2×2, só a vista principal) e
+  *Restaurar divisórias*. O arranjo fica guardado neste computador.
+* **CT**: predefinições (tecidos moles, abdome/pelve, mediastino, pulmão, osso, cérebro, cabeça e pescoço, fígado,
+  mama, larga), barras de *contraste* e *brilho*, e botão direito + arrastar na imagem (←→ contraste, ↑↓ brilho),
+  nas três vistas.
+* **Isodoses** (aba à direita ou ⚙): curvas relativas (% da prescrição ou do máximo) e **absolutas em Gy** (ex.: 40 Gy),
+  tracejadas, juntas. Atalho na barra: digite a dose e *+ Gy*.
+* **Apagar plano**: *Apagar…* no topo (plano aberto) ou na lista *Abrir plano*. Pede a senha; o arquivo vai para
+  `planos/lixeira` da pasta de dados (recuperável) e sai da lista. Plano aprovado precisa ser desaprovado antes.
+* **Objetivos agrupados por estrutura**: *+ estrutura…* acrescenta a estrutura uma vez; *+ objetivo* na linha dela
+  acrescenta mais objetivos.
+* **Protocolo do sítio**: objetivos de partida por sítio (pelve ginecológica, reto, próstata, mama, pulmão, esôfago,
+  cabeça e pescoço, encéfalo — RTOG/NRG/QUANTEC, a revisar; arquivos em `dados/objetivos_sitio`, a clínica pode
+  substituir em `<pasta de dados>/objetivos_sitio`). *Sugerir pelas restrições* agora refaz a lista (antes devolvia
+  a gravada).
+* **Assistente do caso**: descreva o caso (sítio, doses, frações, lado, cirurgia). Ele lê a TC e as estruturas (alvos e
+  doses pelos nomes, lado, órgãos perto do alvo, sobreposição com o PTV, pele), aponta os órgãos que faltam (e
+  contorna por IA, se instalada), propõe os objetivos e, na mama/pulmão, arcos parciais do lado do alvo. São regras
+  explicadas, não uma IA generativa.
+* **Contorno por IA**: Ferramentas › *Contorno por IA…* instala o TotalSegmentator pelo próprio TPS (CPU ou GPU;
+  precisa de internet e, no Windows, do Python 3.10–3.12) ou aponta um já instalado.
+
 ## Integração com o Mosaiq 2.83 (pendente de teste)
 - Em *Enviar ao Mosaiq*, informe IP, porta e AE Title do destino DICOM do Mosaiq (a TI ou a Elekta informam).
   O envio usa C-STORE; a importação no Mosaiq segue o fluxo normal de RTPLAN.
