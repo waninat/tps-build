@@ -24,16 +24,20 @@ class Regras:
     area_min_cm2: float = 2.0
     largura_min_mm: float = 5.0
     folga_diafragma_mm: float = 0.0      # o diafragma X não pode ficar para dentro de lâmina aberta
+    um_por_grau_min: float = 0.1         # arcos (Elekta): UM por grau entre o mínimo e o máximo da máquina
+    um_por_grau_max: float = 20.0
 
     @classmethod
     def da_maquina(cls, colim, raw: dict | None = None) -> "Regras":
         imrt = ((raw or {}).get("imrt") or {})
+        vm = ((raw or {}).get("vmat") or {})
         mlc = (((raw or {}).get("collimation") or {}).get("mlc") or {})
         return cls(gap_min_mm=float(colim.gap_minimo_mm), interdigitacao=bool(mlc.get("interdigitation", True)),
                    overtravel_mm=float(getattr(colim, "overtravel_mm", 125.0) or 125.0), tem_jaw_x=colim.tem_jaw_x,
                    um_min_segmento=float(imrt.get("um_min_segmento", 2.0)),
                    area_min_cm2=float(imrt.get("area_min_cm2", 2.0)),
-                   largura_min_mm=float(getattr(colim, "largura_min_segmento_mm", 0.0) or max(5.0, colim.gap_minimo_mm)))
+                   largura_min_mm=float(getattr(colim, "largura_min_segmento_mm", 0.0) or max(5.0, colim.gap_minimo_mm)),
+                   um_por_grau_min=float(vm.get("um_por_grau_min", 0.1)), um_por_grau_max=float(vm.get("um_por_grau_max", 20.0)))
 
 
 def _pos(cp, tipo):
@@ -66,6 +70,18 @@ def conferir(ds, regras: Regras) -> list[dict]:
             out.append({"gravidade": "erro", "feixe": nome, "cp": None, "msg": "pesos acumulados fora de ordem"})
         mu = mus.get(int(b.BeamNumber), 0.0)
         dinamico = str(b.BeamType) == "DYNAMIC"
+        if dinamico and len(cps) > 1:
+            gs = [float(getattr(cp, "GantryAngle", 0) or 0) for cp in cps]
+            for k in range(1, len(cps)):
+                dg = abs((gs[k] - gs[k - 1] + 180.0) % 360.0 - 180.0)
+                if dg < 1e-6:
+                    continue
+                upg = mu * (pesos[k] - pesos[k - 1]) / dg
+                if upg < regras.um_por_grau_min - 1e-6 or upg > regras.um_por_grau_max + 1e-6:
+                    out.append({"gravidade": "erro", "feixe": nome, "cp": k,
+                                "msg": f"{upg:.3f} UM/grau fora da faixa da máquina "
+                                       f"({regras.um_por_grau_min:g}–{regras.um_por_grau_max:g})"})
+                    break
         for k, cp in enumerate(cps):
             jx = _pos(cp, ("ASYMX", "X")) or jx
             jy = _pos(cp, ("ASYMY", "Y")) or jy

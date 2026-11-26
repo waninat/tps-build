@@ -404,6 +404,25 @@ def imrt_campos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     return r
 
 
+@app.post("/api/{sid}/dca/arcos")
+def dca_arcos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    """Arcos conformacionais dinâmicos (DCA) — arco 3D sem modulação."""
+    col = d.get("colimadores", "auto")
+    if isinstance(col, str) and col not in ("", "auto"):
+        col = [float(x) for x in col.replace(";", ",").split(",") if x.strip()]
+    with TRAVA:
+        return _s(sid).campos_dca(int(d.get("n", 1)), float(d.get("inicio", 181)), float(d.get("fim", 179)),
+                                  str(d.get("sentido", "CW")), d.get("alvo") or None, float(d.get("margem_mm", 5)),
+                                  col if isinstance(col, list) else "auto", float(d.get("passo_cp", 5)),
+                                  d.get("oars") or None, float(d.get("max_bloqueio_pct", 25)), d.get("mesas") or None)
+
+
+@app.get("/api/{sid}/cq_calculo")
+def cq_calculo(sid: str, u: dict = Depends(usuario)):
+    with TRAVA:
+        return _s(sid).cq_por_calculo()
+
+
 @app.post("/api/{sid}/vmat/arcos")
 def vmat_arcos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     s = _s(sid)

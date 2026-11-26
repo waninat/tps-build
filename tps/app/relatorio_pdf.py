@@ -197,6 +197,23 @@ def relatorio_pdf(s, usuario: dict | None = None) -> bytes:
         t = Table(lin, repeatRows=1, colWidths=[8 * mm, 60 * mm, 112 * mm])
         t.setStyle(estilo_tab)
         el.append(t)
+    if s.dose_atualizada and p.tecnica in ("3D", "DCA"):
+        try:
+            cq = s.cq_por_calculo()
+        except Exception:  # noqa: BLE001
+            cq = None
+        if cq and cq.get("itens"):
+            el.append(Paragraph("Complexidade e CQ por cálculo independente — "
+                                + ("dentro dos critérios" if cq["elegivel"] else "fora dos critérios (CQ por medida)")
+                                + ("" if cq.get("confirmado") else " (critérios ainda não confirmados pela clínica)"), sub))
+            lin = [["Critério", "Plano", "Limite", ""]]
+            for i in cq["itens"]:
+                lin.append([Paragraph(f"<font size=7>{i['nome']}</font>", normal),
+                            "—" if i["valor"] is None else f"{i['valor']:g} {i['unidade']}", i["limite"],
+                            "OK" if i["ok"] else "X"])
+            t = Table(lin, repeatRows=1, colWidths=[90 * mm, 35 * mm, 45 * mm, 10 * mm])
+            t.setStyle(estilo_tab)
+            el.append(t)
     if p.historico:
         el.append(Paragraph("Histórico: " + " · ".join(f"{h['evento']} {h.get('usuario', '')} {h.get('quando', '')}"
                                                        for h in p.historico), normal))

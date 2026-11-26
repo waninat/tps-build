@@ -165,6 +165,26 @@ def checklist(sessao) -> list[dict]:
                   if a.get("tempo_s", 0) > 240]
         if lentos:
             out.append(_item("vmat_tempo", "VMAT: tempo de entrega", "aviso", ", ".join(lentos)))
+    if p.tecnica == "DCA":
+        from tps.planejamento.vmat import LimitesVMAT, tempo_entrega
+        lim = LimitesVMAT.da_maquina(getattr(s.maquina, "raw", None))
+        tempos = [f"{c.nome} {tempo_entrega(c, lim)['tempo_s']:.0f} s" for c in p.campos if c.pontos_controle]
+        out.append(_item("dca_tempo", "Arco conformacional: tempo de entrega", "ok", ", ".join(tempos)))
+    if p.tecnica in ("3D", "DCA") and s.resultado:
+        try:
+            cq = s.cq_por_calculo()
+        except Exception as e:  # noqa: BLE001
+            cq = {"elegivel": False, "itens": [], "motivo": str(e)}
+        falhas = [f"{i['nome']} ({i['valor'] if i['valor'] is not None else '—'}; limite {i['limite']})"
+                  for i in cq.get("itens", []) if not i["ok"]]
+        if cq.get("elegivel"):
+            out.append(_item("cq_calculo", "Elegível para CQ só por cálculo independente",
+                             "ok" if cq.get("confirmado") else "aviso",
+                             "dentro dos critérios" + ("" if cq.get("confirmado") else
+                                                       " (critérios da literatura, ainda não confirmados pela clínica)")))
+        else:
+            out.append(_item("cq_calculo", "CQ por medida antes do 1º tratamento", "aviso",
+                             "fora dos critérios de CQ só por cálculo: " + ("; ".join(falhas) or cq.get("motivo", ""))))
     cd = getattr(p, "calculo_dose", None) or {}
     if cd.get("algoritmo") == "MC":
         inc = float(cd.get("incerteza_obtida_pct") or 0)

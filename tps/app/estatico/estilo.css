@@ -291,3 +291,5 @@ pre.log { background: #0a0d10; border: 1px solid var(--borda); border-radius: 4p
   #topo { height: 34px; }
   .vista-topo { padding: 2px 6px; }
 }
+
+.oculto-dca { display: none !important; }

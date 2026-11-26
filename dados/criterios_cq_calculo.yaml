@@ -1,0 +1,17 @@
+# Critérios para dispensar o CQ por medida antes do 1º tratamento (só cálculo independente) — SRS-PLN-111.
+# PONTO DE PARTIDA DA LITERATURA, A DEFINIR PELA FÍSICA DA CLÍNICA. Para mudar, copie este arquivo para a pasta de
+# dados (<dados>/criterios_cq_calculo.yaml), ajuste e marque confirmado_pela_clinica: true.
+# Referências: AAPM TG-218 (CQ de IMRT/VMAT), MPPG 5.b / TG-219 (cálculo independente), McNiven 2010 (MCS),
+# Masi 2013 / Du 2014 (métricas de complexidade e passagem no gama).
+confirmado_pela_clinica: false
+tecnicas: ["3D", "DCA"]          # field-in-field conta como 3D; IMRT e VMAT seguem com CQ por medida
+area_min_cm2: 9.0                # menor abertura (≈ 3 × 3 cm): campos pequenos têm mais incerteza no cálculo
+lado_eq_min_cm: 3.0              # menor quadrado equivalente (4A/P)
+fenda_mm: 10.0                   # o que conta como fenda estreita
+fendas_max_pct: 5.0              # % dos pares abertos (ponderada pela UM) com menos que fenda_mm
+mcs_min: 0.4                     # MCS: 1 = campo aberto; VMAT típico 0,2–0,4
+um_por_gy_max: 250.0             # UM por Gy da fração (3D típico 100–180)
+cv_um_grau_max_pct: 1.0          # arco: UM por grau constante (DCA)
+desloc_lamina_max_mm_grau: 3.3   # informativo (não reprova): MLCi 2 cm/s ÷ 6 °/s; acima disso o gantry desacelera
+alvo_bloqueado_max_pct: 15.0     # alvo projetado no BEV coberto por bloqueio de órgão (média)
+conferencia_max_pct: 3.0         # maior diferença na conferência independente de UM

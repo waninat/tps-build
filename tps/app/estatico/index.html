@@ -266,7 +266,32 @@
         <option value="3D">3D conformada</option>
         <option value="IMRT">IMRT step-and-shoot (inverso)</option>
         <option value="VMAT">VMAT (arcos)</option>
+        <option value="DCA">Arco conformacional (DCA, sem modulação)</option>
       </select></label>
+    <div id="o-dca" class="caixa-import oculto">
+      <div class="pequeno-txt"><b>Arco conformacional dinâmico</b> — arco 3D: as lâminas acompanham o alvo + margem em
+        cada ponto de controle e as UM por grau são constantes (sem modulação). Substitui os campos atuais; o 2º arco
+        volta no sentido contrário. Elekta: −185° a +185° (cheio = 181→179).</div>
+      <div class="linha3">
+        <label>Nº<select id="dca-n"><option>1</option><option selected>2</option><option>3</option><option>4</option></select></label>
+        <label>Início (°)<input id="dca-ini" type="number" value="181" step="1"></label>
+        <label>Fim (°)<input id="dca-fim" type="number" value="179" step="1"></label>
+      </div>
+      <div class="linha3">
+        <label>Sentido<select id="dca-sent"><option value="CW">horário (CW)</option><option value="CC">anti-horário (CC)</option></select></label>
+        <label title="auto = ângulo com menos abertura além do alvo; ou um valor por arco, separados por vírgula">Colimador (°)<input id="dca-col" value="auto"></label>
+        <label>Margem (mm)<input id="dca-mg" type="number" value="5" min="0" max="20"></label>
+      </div>
+      <div class="linha3">
+        <label title="mais pontos = conformação mais fiel; 5° é o usual">Pontos a cada (°)<select id="dca-passo"><option>2</option><option>3</option><option selected>5</option><option>10</option></select></label>
+        <label title="mesa por arco, separados por vírgula (vazio = 0)">Mesa (°)<input id="dca-mesa" value=""></label>
+        <label title="quanto da largura do alvo, em cada par, a abertura pode recuar sobre o órgão">Bloqueio máx. (%)<input id="dca-bloq" type="number" value="25" min="0" max="60"></label>
+      </div>
+      <label title="a abertura recua sobre o órgão no BEV, sem abrir buraco (continua sem modulação)">Bloquear órgãos (opcional)<select id="dca-oars" multiple size="3"></select></label>
+      <label>Margem do bloqueio (mm)<input id="dca-oar-mg" type="number" value="3" min="0" max="15"></label>
+      <button id="b-dca-arcos" class="pequeno">Criar arcos conformacionais</button>
+      <div id="dca-info" class="pequeno-txt"></div>
+    </div>
     <div id="o-imrt" class="oculto">
       <div class="caixa-import so-vmat">
         <div class="pequeno-txt"><b>Arcos</b> — conformados ao alvo + margem (substituem os campos atuais); o 2º arco volta
@@ -342,7 +367,7 @@
       </details>
     </div>
     <div id="o-3d">
-    <label class="check"><input id="o-pesos" type="checkbox"> otimizar pesos dos campos</label>
+    <label class="check"><input id="o-pesos" type="checkbox"> otimizar pesos dos campos (no DCA: das UM de cada arco)</label>
     <label>Field-in-field
       <select id="o-fif-modo">
         <option value="">não</option>
@@ -378,6 +403,7 @@
   </section>
   <section class="aba-e-p oculto" id="sec-aprov">
     <div id="checklist" class="checklist"></div>
+    <button id="b-cq-calc" class="pequeno" title="métricas de complexidade e os critérios da clínica para CQ só por cálculo independente">Complexidade e CQ por cálculo…</button>
     <details class="sub" id="sec-qa"><summary>QA de paciente (plano de verificação)</summary>
       <div class="pequeno-txt">Os campos de uma fração recalculados no fantoma de água: RTPLAN para entregar,
         RTDOSE para o software do detector e o plano coronal no isocentro (CSV) para filme/gama.</div>

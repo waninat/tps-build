@@ -177,14 +177,33 @@ function ligar() {
   });
   $("#b-iso-cfg").onclick = () => abaDireita("iso");
   $("#o-tecnica").onchange = () => {
-    const t = $("#o-tecnica").value, im = t !== "3D";
+    const t = $("#o-tecnica").value, im = t === "IMRT" || t === "VMAT", dca = t === "DCA";
     $("#o-imrt").classList.toggle("oculto", !im); $("#o-3d").classList.toggle("oculto", im);
+    $("#o-dca").classList.toggle("oculto", !dca);
+    Array.from($("#o-3d").children).forEach((e, k) => { if (k > 0) e.classList.toggle("oculto-dca", dca); });
     $$("#o-imrt .so-imrt").forEach(e => e.classList.toggle("oculto", t !== "IMRT"));
     $$("#o-imrt .so-vmat").forEach(e => e.classList.toggle("oculto", t !== "VMAT"));
     $("#b-calc").textContent = t === "IMRT" ? "Otimizar IMRT" : t === "VMAT" ? "Otimizar VMAT" : "Calcular dose";
     $("#b-calc-topo").textContent = "▶ " + $("#b-calc").textContent;
     if (im && !(E.objetivos || []).length) tentar(sugerirObjetivos);
   };
+  $("#b-dca-arcos").onclick = () => tentar(async () => {
+    if (E.resumo.plano.campos.length && !confirm("Substituir os campos atuais pelos arcos conformacionais?")) return;
+    E.campoSel = null;
+    const lista = (t) => t.split(/[,;\s]+/).filter(x => x !== "").map(Number);
+    const col = $("#dca-col").value.trim().toLowerCase();
+    const r = await api("POST", `/api/${E.sid}/dca/arcos`, { n: +$("#dca-n").value, inicio: +$("#dca-ini").value,
+      fim: +$("#dca-fim").value, sentido: $("#dca-sent").value, colimadores: col === "" || col === "auto" ? "auto" : lista(col),
+      margem_mm: +$("#dca-mg").value, passo_cp: +$("#dca-passo").value, mesas: lista($("#dca-mesa").value),
+      max_bloqueio_pct: +$("#dca-bloq").value,
+      oars: Array.from($("#dca-oars").selectedOptions).map(o => ({ estrutura: o.value, margem_mm: +$("#dca-oar-mg").value })) },
+      "Criando os arcos conformacionais…");
+    atualizar(r);
+    $("#dca-info").innerHTML = Object.entries(r.dca || {}).map(([n, i]) => `${n}: colimador ${i.colimador}°, ${i.pontos} pontos, ` +
+      `${i.area_fora_cm2} cm² além do alvo${i.bloqueio_pct ? `, ${i.bloqueio_pct}% do alvo bloqueado` : ""}`).join("<br>") +
+      "<br>Agora calcule a dose (marque “otimizar pesos” para ajustar as UM de cada arco).";
+  });
+  $("#b-cq-calc").onclick = () => tentar(janelaCQ);
   $("#b-vm-arcos").onclick = () => tentar(async () => {
     if (E.resumo.plano.campos.length && !confirm("Substituir os campos atuais pelos arcos?")) return;
     E.campoSel = null;
@@ -636,7 +655,12 @@ function atualizar(r) {
   listarCampos(); tabelas(); atualizarBarra();
   $("#avisos").innerHTML = (r.avisos || []).map(a => `<li>${a}</li>`).join("");
   $("#n-avisos").textContent = (r.avisos || []).length || "";
-  if (p && (p.tecnica === "IMRT" || p.tecnica === "VMAT") && $("#o-tecnica").value !== p.tecnica) { $("#o-tecnica").value = p.tecnica; $("#o-tecnica").onchange(); }
+  if (p && (p.tecnica === "IMRT" || p.tecnica === "VMAT" || p.tecnica === "DCA") && $("#o-tecnica").value !== p.tecnica) { $("#o-tecnica").value = p.tecnica; $("#o-tecnica").onchange(); }
+  { const sel = $("#dca-oars"), atual = new Set(Array.from(sel.selectedOptions).map(o => o.value));
+    const alvo = p && p.prescricao.estrutura_alvo;
+    sel.innerHTML = (r.estruturas || []).filter(e => e.nome !== alvo && !/^(EXTERNAL|BOLUS)$/i.test(e.tipo) &&
+      !/^(body|external|corpo|externo)$/i.test(e.nome) && !/^(PTV|CTV|GTV|ITV)/i.test(e.nome))
+      .map(e => `<option ${atual.has(e.nome) ? "selected" : ""}>${esc(e.nome)}</option>`).join(""); }
   if (p && p.calculo_dose) {
     const cd = p.calculo_dose;
     if (cd.algoritmo) $("#o-alg").value = cd.algoritmo;
@@ -776,6 +800,7 @@ async function calcular() {
   const oars = Object.entries(E.oarCfg || {}).filter(([n, o]) => o.on && E.resumo.estruturas.some(e => e.nome === n))
     .map(([n, o]) => ({ estrutura: n, metrica: o.metrica, valor: o.valor === "" ? null : +o.valor, volume_pct: o.vol === "" ? null : +o.vol, prioridade: +o.prio || 5 }));
   if (oars.length) corpo.proteger_oars = { oars, subcampos: $("#oar-sub").checked, margem_mm: +$("#oar-mg").value };
+  if (tec === "DCA") { corpo.field_in_field = false; corpo.compensador = null; delete corpo.proteger_oars; }
   const mc = corpo.algoritmo === "MC";
   const t = acompanharProgresso();
   let r;
@@ -1983,4 +2008,22 @@ async function janelaClaude() {
   });
   $("#modal .caixa").classList.add("larga");
   try { await pr; } finally { $("#modal .caixa").classList.remove("larga"); E.claude = e; }
+}
+
+// ---- complexidade do plano e CQ só por cálculo
+async function janelaCQ() {
+  const r = await api("GET", `/api/${E.sid}/cq_calculo`);
+  const linhas = r.itens.map(i => `<tr><td>${esc(i.nome)}</td><td>${i.valor == null ? "—" : f1(i.valor, 2) + " " + esc(i.unidade)}</td>` +
+    `<td>${esc(i.limite)}</td><td class="${i.ok ? "ok" : "falha"}">${i.ok ? "✔" : "✘"}</td></tr>`).join("");
+  $("#modal .caixa").classList.add("larga");
+  try {
+    await modal("Complexidade e CQ por cálculo", `<p><b class="${r.elegivel ? "ok" : "avisotxt"}">${r.elegivel ?
+      "Dentro dos critérios para CQ só por cálculo independente" : "Fora dos critérios: CQ por medida antes do 1º tratamento"}</b></p>
+      ${r.confirmado ? "" : `<p class="avisotxt pequeno-txt">Critérios da literatura, ainda não confirmados pela física da clínica
+        (${esc(r.criterios_arquivo)}). A decisão de dispensar a medida é do protocolo da clínica.</p>`}
+      <table><thead><tr><th>Critério</th><th>Plano</th><th>Limite</th><th></th></tr></thead><tbody>${linhas}</tbody></table>
+      <p class="pequeno-txt">MCS: McNiven 2010 (1 = campo aberto). Conferência independente: a maior diferença entre o cálculo do
+      TPS e a conferência de UM (inclui a composta dos arcos). Para mudar os limites, copie o arquivo para a pasta de dados.</p>`,
+      { ok: "Fechar", cancelar: false });
+  } finally { $("#modal .caixa").classList.remove("larga"); }
 }

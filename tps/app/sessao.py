@@ -1531,6 +1531,8 @@ class Sessao:
         arcos = [c for c in p.campos if c.e_arco]
         manter_vmat = bool(arcos) and not opcoes.get("vmat")             # idem para o VMAT: mesmos pontos de controle
         if manter_vmat and not all(c.pontos_controle for c in arcos):
+            if p.tecnica == "DCA":
+                raise ErroUsuario("Arcos conformacionais alterados: recrie os arcos (Criar arcos conformacionais)")
             raise ErroUsuario("Plano com arcos: otimize o VMAT (os arcos ainda não têm pontos de controle)")
         if opcoes.get("vmat") and not arcos:
             raise ErroUsuario("Crie os arcos antes de otimizar o VMAT")
@@ -1552,7 +1554,8 @@ class Sessao:
             if opcoes.get("otimizar_pesos") and alvo is not None and len(p.campos) > 1:
                 oars = [(self.estruturas[n].mascara, float(i)) for n, i in (opcoes.get("oars") or {}).items()
                         if n in self.estruturas]
-                w = otimizar_pesos(self.doses_um, alvo, oars)
+                # DCA: nenhum arco abaixo de 30% do maior (UM por grau mínima da máquina e entrega estável)
+                w = otimizar_pesos(self.doses_um, alvo, oars, peso_min_rel=0.3 if p.tecnica == "DCA" else 0.05)
                 for c in p.campos:
                     c.peso = round(w[c.nome], 4)
             corpo = self._corpo()
@@ -1583,6 +1586,10 @@ class Sessao:
                 info["field_in_field"] = {"subcampos": [c.nome for c in r.subcampos], "hi_antes": r.hi_antes,
                                           "hi_depois": r.hi_depois, "avisos": r.avisos}
                 self.avisos = list(r.avisos)
+            if p.tecnica == "DCA" and (fif or opcoes.get("compensador") or opcoes.get("proteger_oars") or
+                                       opcoes.get("imrt")):
+                raise ErroUsuario("Arco conformacional: field-in-field, compensador, proteção de OARs e IMRT não se "
+                                  "aplicam (use o bloqueio de órgão ao criar os arcos)")
             vm = opcoes.get("vmat")
             if vm:
                 if fif or opcoes.get("compensador") or opcoes.get("proteger_oars") or opcoes.get("imrt") or \
@@ -1645,7 +1652,7 @@ class Sessao:
         for k in conf:
             c = self._campo(k["campo"])
             k["compensado"] = bool(c.segmentos or c.pontos_controle)
-        if p.tecnica in ("IMRT", "VMAT") and m.tabelas and alvo is not None:
+        if p.tecnica in ("IMRT", "VMAT", "DCA") and m.tabelas and alvo is not None:
             conf.append(self._conferencia_composta(alvo))
         hi = indice_homogeneidade(total, alvo) if alvo is not None and alvo.any() else None
         self.resultado = {"dvh": hist, "conferencia_um": conf, "info": info, "hi": hi,
@@ -1846,6 +1853,98 @@ class Sessao:
         self.dose_atualizada = False
         self._registrar(f"{n_arcos} arco(s) VMAT {inicio:g}→{fim:g} {sentido} (alvo {alvo} + {margem_mm:g} mm)")
         return self.resumo()
+
+    def campos_dca(self, n_arcos: int = 1, inicio: float = 181.0, fim: float = 179.0, sentido: str = "CW",
+                   alvo: str | None = None, margem_mm: float = 5.0, colimadores="auto", passo_cp: float = 5.0,
+                   oars: list | None = None, max_bloqueio_pct: float = 25.0, mesas: list | None = None) -> dict:
+        """Arco conformacional dinâmico (DCA): troca os campos por arcos com as lâminas conformadas ao alvo em cada
+        ponto de controle e UM por grau constante. colimadores "auto" escolhe o ângulo de menor abertura fora do
+        alvo; oars [{"estrutura", "margem_mm"}] recua a abertura sobre o órgão (sem buraco). SRS-PLN-110."""
+        from tps.planejamento import dca as D
+        from tps.planejamento.vmat import validar_arco
+        self._exigir_plano()
+        p = self.plano
+        p._exigir_rascunho()
+        alvo = alvo or p.prescricao.estrutura_alvo
+        if alvo not in self.estruturas:
+            raise ErroUsuario("Escolha o alvo dos arcos")
+        if not 1 <= int(n_arcos) <= 6:
+            raise ErroUsuario("Use de 1 a 6 arcos")
+        if not 1.0 <= float(passo_cp) <= 10.0:
+            raise ErroUsuario("Espaçamento dos pontos de controle entre 1° e 10°")
+        erros = validar_arco(float(inicio), float(fim), sentido)
+        if erros:
+            raise ErroUsuario("; ".join(erros))
+        g = self.grade
+        eixos = (g.x, g.y, g.z)
+        masc = self.estruturas[alvo].mascara
+        orgaos = []
+        for o in oars or []:
+            e = self.estruturas.get(o.get("estrutura"))
+            if e is None:
+                raise ErroUsuario(f"Estrutura {o.get('estrutura')} não existe")
+            orgaos.append((e.mascara & ~masc, float(o.get("margem_mm", 3.0))))
+        cols = colimadores if isinstance(colimadores, list) else []
+        mesas = list(mesas or [])
+        for c in list(p.campos):
+            p.campos.remove(c)
+            self.doses_um.pop(c.nome, None)
+        nomes = []
+        for k in range(int(n_arcos)):
+            ida = k % 2 == 0
+            ini, fi = (float(inicio), float(fim)) if ida else (float(fim), float(inicio))
+            sen = sentido if ida else ("CC" if sentido == "CW" else "CW")
+            nome = f"DCA{k + 1}"
+            self.salvar_campo({"nome": nome, "gantry": ini, "colimador": 0.0,
+                               "mesa": float(mesas[k]) if k < len(mesas) else 0.0, "modo": "conformado",
+                               "alvo": alvo, "margem": {q: margem_mm for q in ("x1", "x2", "y1", "y2")},
+                               "ponto_encontro": "fora"})
+            c = self._campo(nome)
+            c.arco_fim, c.sentido = fi % 360.0, sen
+            nomes.append(nome)
+        resumo, usados = {}, []
+        for k, nome in enumerate(nomes):
+            c = self._campo(nome)
+            try:
+                if k < len(cols) and cols[k] not in (None, "", "auto"):
+                    c.colimador = float(cols[k]) % 360.0
+                else:
+                    best, custo = D.melhor_colimador(c, masc, eixos, self.maquina.colim, float(margem_mm),
+                                                     posicao=p.posicao_paciente)
+                    # arcos seguintes: outro colimador quase tão bom (espalha as "orelhas" das lâminas)
+                    livres = {a: v for a, v in custo.items() if a not in usados}
+                    if usados and livres and min(livres.values()) <= 1.25 * custo[best] + 1.0:
+                        best = min(livres, key=livres.get)
+                    c.colimador = best
+                usados.append(c.colimador)
+                inf = D.gerar_arco(c, masc, eixos, self.maquina.colim, float(margem_mm), float(passo_cp),
+                                   p.posicao_paciente, oars=orgaos, max_bloqueio_pct=float(max_bloqueio_pct))
+            except ValueError as e:
+                raise ErroUsuario(f"{nome}: {e}") from e
+            resumo[nome] = {"colimador": c.colimador, "pontos": inf.n_pontos,
+                            "desloc_mm_grau": round(inf.deslocamento_max_mm_grau, 2),
+                            "area_fora_cm2": round(inf.area_fora_cm2, 1), "bloqueio_pct": round(inf.bloqueio_pct, 1)}
+        p.tecnica = "DCA"
+        self.dose_atualizada = False
+        self._dca_info = resumo
+        self._registrar(f"{n_arcos} arco(s) conformacional(is) {inicio:g}→{fim:g} {sentido} (alvo {alvo} + "
+                        f"{margem_mm:g} mm; colimador {', '.join(f'{v['colimador']:g}°' for v in resumo.values())}"
+                        + (f"; bloqueio de {', '.join(o.get('estrutura') for o in oars)}" if oars else "") + ")")
+        r = self.resumo()
+        r["dca"] = resumo
+        return r
+
+    def cq_por_calculo(self) -> dict:
+        """Elegibilidade do plano para CQ só por cálculo independente (critérios da clínica). SRS-PLN-111."""
+        from tps.planejamento import complexidade
+        self._exigir_plano()
+        self._exigir(self.dose_atualizada, "Calcule a dose primeiro")
+        p = self.plano
+        alvo = self.estruturas.get(p.prescricao.estrutura_alvo)
+        g = self.grade
+        return complexidade.avaliar(p, self.maquina.colim, (self.resultado or {}).get("conferencia_um"),
+                                    alvo.mascara if alvo is not None else None, (g.x, g.y, g.z) if g is not None else None,
+                                    p.posicao_paciente)
 
     def _otimizar_imrt(self, im: dict, corpo) -> dict:
         """IMRT step-and-shoot nos campos do plano (já conformados aos alvos). SRS-IMR-001."""
