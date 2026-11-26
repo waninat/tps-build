@@ -55,6 +55,15 @@ def autoteste() -> int:
         r = c.post(f"/api/{sid}/calcular", json={}).json()
         conf = r["resultado"]["conferencia_um"]
         ok = all(k["ok"] for k in conf) and r["resultado"]["estatisticas"]["PTV_fantoma"]["D95"] > 47
+        # assistente com Claude: o cliente da API monta sem rede (pega falta de metadados no programa compilado)
+        try:
+            from tps.planejamento import assistente_claude as C
+            C._cliente("sk-ant-autoteste")
+            from importlib import metadata
+            print("anthropic", metadata.version("anthropic"), "httpx2", metadata.version("httpx2"))
+        except Exception as e:  # noqa: BLE001
+            print("AUTOTESTE claude FALHOU:", e)
+            ok = False
         print("AUTOTESTE", "OK" if ok else "FALHOU", [round(k["dif_pct"], 2) for k in conf])
         paths.set_home(None)
         return 0 if ok else 1

@@ -34,12 +34,25 @@ def distribuicoes() -> set[str]:
                 nomes.add(m.group(1))
     nomes |= {"llvmlite", "numpy", "pillow", "pdfminer.six", "packaging", "starlette", "pydantic", "anyio"}
     nomes -= {"nuitka", "ordered-set", "zstandard", "pytest"}
-    ok = set()
-    for n in nomes:
+    # fecho transitivo: pacotes que leem a própria versão (ex.: httpx2, dependência do anthropic) quebram no
+    # programa compilado sem os metadados ("No package metadata was found for httpx2")
+    ok, fila = set(), list(nomes)
+    while fila:
+        n = fila.pop()
         try:
-            ok.add(metadata.distribution(n).metadata["Name"])
+            d = metadata.distribution(n)
         except metadata.PackageNotFoundError:
-            pass
+            continue
+        nome = d.metadata["Name"]
+        if nome.lower() in {x.lower() for x in ok}:
+            continue
+        ok.add(nome)
+        for req in d.requires or []:
+            if "extra ==" in req:
+                continue
+            m = re.match(r"^\s*([A-Za-z0-9_.\-]+)", req)
+            if m:
+                fila.append(m.group(1))
     return ok
 
 
@@ -69,7 +82,8 @@ def nuitka(jobs: int | None) -> Path:
         "--include-package=llvmlite", "--include-package=contourpy", "--include-package=yaml",
         "--include-package=scipy", "--include-package=matplotlib", "--include-package=reportlab",
         "--include-package=pdfplumber", "--include-package=pdfminer", "--include-package=PIL", "--include-package=httpx",
-        "--include-package=anthropic",
+        "--include-package=anthropic", "--include-package=httpx2", "--include-package=jiter",
+        "--include-package=docstring_parser", "--include-package=opentelemetry",
         "--include-package-data=pydicom", "--include-package-data=pynetdicom", "--include-package-data=matplotlib",
         "--include-package-data=reportlab", "--include-package-data=pdfminer",
         "--enable-plugin=pywebview",          # o plugin do Nuitka escolhe a plataforma (WebView2 no Windows)
