@@ -49,7 +49,7 @@ def _comando(gpu: bool) -> list[str]:
         raise RuntimeError("Python 3.10–3.12 não encontrado")
     venv = destino / "venv"
     pip = venv / "bin" / "pip"
-    idx = "https://download.pytorch.org/whl/" + ("cu121" if gpu else "cpu")
+    idx = "https://download.pytorch.org/whl/" + ("cu124" if gpu else "cpu")
     passos = [f'"{py}" -m venv "{venv}"', f'"{pip}" install --upgrade pip',
               f'"{pip}" install torch --index-url {idx}', f'"{pip}" install TotalSegmentator rt_utils',
               f'"{venv}/bin/totalseg_download_weights" -t total_fast']
@@ -78,7 +78,8 @@ def instalar(gpu: bool = False) -> dict:
                 f.write(f"$ {' '.join(cmd)}\n")
                 f.flush()
                 kw = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)} if sys.platform == "win32" else {}
-                pr = subprocess.Popen(cmd, stdout=f, stderr=subprocess.STDOUT, env=os.environ.copy(), **kw)
+                pr = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT,
+                                      env=os.environ.copy(), **kw)
                 cod = pr.wait()
         except Exception as e:  # noqa: BLE001
             with open(_log(), "a", encoding="utf-8") as f:

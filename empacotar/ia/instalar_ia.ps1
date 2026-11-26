@@ -1,23 +1,65 @@
-﻿# Instala o módulo de contorno por IA do TPS (TotalSegmentator) em %ProgramData%\TPS\ia\venv.
-# Precisa do Python 3.10–3.12 (python.org) e de internet (pacotes ~2 GB; pesos da rede baixados no 1º uso).
+﻿# Instala o módulo de contorno automático de órgãos do TPS (TotalSegmentator) em <pasta de dados>\ia\venv.
+# Precisa de internet (pacotes ~2 GB). Se não houver Python 3.10–3.12, instala o 3.12 pelo winget (só para o usuário).
 # Uso:  powershell -ExecutionPolicy Bypass -File instalar_ia.ps1 [-GPU] [-Destino <pasta de dados>\ia]
-# Também é chamado pelo próprio TPS (menu Ferramentas > Instalar contorno por IA).
+# Também é chamado pelo próprio TPS (Ferramentas > Contorno automático de órgãos).
 param([switch]$GPU, [string]$Destino = "")
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $destino = if ($Destino) { $Destino } else { Join-Path $env:ProgramData "TPS\ia" }
 New-Item -ItemType Directory -Force -Path $destino | Out-Null
-$py = $null
-foreach ($v in @("3.12", "3.11", "3.10")) { try { & py "-$v" -c "print(1)" *> $null; if ($LASTEXITCODE -eq 0) { $py = @("py", "-$v"); break } } catch {} }
-if (-not $py) { throw "Python 3.10–3.12 não encontrado. Instale de https://www.python.org (marque 'Add to PATH') e rode de novo." }
-Write-Host "Criando o ambiente em $destino\venv ..."
-& $py[0] $py[1] -m venv (Join-Path $destino "venv")
-$pip = Join-Path $destino "venv\Scripts\pip.exe"
-& $pip install --upgrade pip
-if ($GPU) { & $pip install torch --index-url https://download.pytorch.org/whl/cu121 }
-else { & $pip install torch --index-url https://download.pytorch.org/whl/cpu }
-& $pip install TotalSegmentator rt_utils
-$exe = Join-Path $destino "venv\Scripts\TotalSegmentator.exe"
+
+function Rodar([string]$exe, [string[]]$argumentos, [string]$etapa) {
+    Write-Host ">> $etapa"
+    $ErrorActionPreference = "Continue"      # avisos do pip no stderr não são erro
+    & $exe @argumentos
+    $ErrorActionPreference = "Stop"
+    if ($LASTEXITCODE -ne 0) { throw "Falhou: $etapa (código $LASTEXITCODE)" }
+}
+
+function Achar-Python {
+    foreach ($v in @("3.12", "3.11", "3.10")) {
+        try { & py "-$v" -c "import sys" 2>$null; if ($LASTEXITCODE -eq 0) { return (& py "-$v" -c "import sys; print(sys.executable)").Trim() } } catch {}
+    }
+    $cands = @()
+    foreach ($n in @("python", "python3")) { try { $cands += (Get-Command $n -ErrorAction Stop).Source } catch {} }
+    foreach ($v in @("312", "311", "310")) {
+        $cands += (Join-Path $env:LOCALAPPDATA "Programs\Python\Python$v\python.exe")
+        $cands += (Join-Path $env:ProgramFiles "Python$v\python.exe")
+    }
+    foreach ($c in $cands) {
+        if ($c -and (Test-Path $c) -and ($c -notlike "*WindowsApps*")) {
+            try { $ver = (& $c -c "import sys; print('%d.%d' % sys.version_info[:2])").Trim()
+                  if (@("3.10", "3.11", "3.12") -contains $ver) { return $c } } catch {}
+        }
+    }
+    return $null
+}
+
+$py = Achar-Python
+if (-not $py) {
+    Write-Host "Python 3.10–3.12 não encontrado. Tentando instalar o Python 3.12 pelo winget..."
+    try {
+        & winget install -e --id Python.Python.3.12 --scope user --silent --accept-package-agreements --accept-source-agreements
+    } catch { Write-Host "winget indisponível: $_" }
+    $py = Achar-Python
+}
+if (-not $py) { throw "Python 3.10–3.12 não encontrado. Instale de https://www.python.org/downloads/ (versão 3.12, marque 'Add python.exe to PATH') e clique em Instalar de novo." }
+Write-Host "Python: $py"
+
+$venv = Join-Path $destino "venv"
+Rodar $py @("-m", "venv", $venv) "Criando o ambiente em $venv"
+$vpy = Join-Path $venv "Scripts\python.exe"
+Rodar $vpy @("-m", "pip", "install", "--upgrade", "pip") "Atualizando o pip"
+$indice = if ($GPU) { "https://download.pytorch.org/whl/cu124" } else { "https://download.pytorch.org/whl/cpu" }
+Rodar $vpy @("-m", "pip", "install", "torch", "--index-url", $indice) "Instalando o PyTorch ($(if ($GPU) {'GPU NVIDIA'} else {'CPU'}); demora)"
+Rodar $vpy @("-m", "pip", "install", "TotalSegmentator", "rt_utils") "Instalando o TotalSegmentator"
+$exe = Join-Path $venv "Scripts\TotalSegmentator.exe"
 if (-not (Test-Path $exe)) { throw "TotalSegmentator.exe não foi criado" }
-Write-Host "Baixando os pesos da rede (uma vez)..."
-& (Join-Path $destino "venv\Scripts\totalseg_download_weights.exe") -t total_fast
-Write-Host "Pronto. Reabra o TPS: 'Órgãos por IA' fica disponível em Estruturas > Contorno automático."
+$pesos = Join-Path $venv "Scripts\totalseg_download_weights.exe"
+if (Test-Path $pesos) {
+    Write-Host ">> Baixando os pesos da rede (uma vez)"
+    & $pesos -t total_fast
+    if ($LASTEXITCODE -ne 0) { Write-Host "Aviso: os pesos serão baixados no primeiro uso." }
+}
+Write-Host "Pronto. O contorno automático já pode ser usado (Estruturas > Contorno automático)."

@@ -120,7 +120,7 @@ def _rodar(exe: Path, ent: Path, saida: Path, tarefa: str, classes: list[str], r
         cmd += ["--device", dispositivo]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
     kw = {"creationflags": flags} if sys.platform == "win32" else {"start_new_session": True}
-    pr = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
+    pr = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
     try:
         out, err = pr.communicate(timeout=tempo_max_s)
     except subprocess.TimeoutExpired:
@@ -170,7 +170,7 @@ def segmentar(arquivos_ct: list[Path], orgaos: list[str], rapido: bool = True, t
 def _matar_arvore(pr):
     try:
         if sys.platform == "win32":
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pr.pid)], capture_output=True,
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pr.pid)], stdin=subprocess.DEVNULL, capture_output=True,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         else:
             import signal
