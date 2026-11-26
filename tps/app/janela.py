@@ -81,7 +81,7 @@ def rodar(preparar, iniciar_servidor, titulo: str = "TPS", teste: bool = False) 
     webview.settings["ALLOW_DOWNLOADS"] = True
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
     api = ApiJanela()
-    janela = webview.create_window(titulo, html=CARREGANDO, js_api=api, width=1600, height=960, min_size=(1100, 700),
+    janela = webview.create_window(titulo, html=CARREGANDO, js_api=api, width=1600, height=960, min_size=(1000, 640), maximized=True,
                                    background_color="#0b0e12", confirm_close=not teste, text_select=True)
     api._janela = janela
     estado = {"servidor": None, "codigo": 0}

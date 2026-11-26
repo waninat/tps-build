@@ -201,3 +201,15 @@ def test_assistente_com_claude_simulado(cli, monkeypatch):
     assert r["motor"] == "regras" and "Claude indisponível" in r["avisos"][0]
     _ok(c.post("/api/claude", json={"apagar_chave": True, "senha": SENHA}))
     assert not _ok(c.get("/api/claude"))["configurado"]
+
+
+def test_pagina_nao_usa_css_js_de_versao_antiga(cli):
+    """A janela (WebView2) guarda cache entre aberturas: o HTML aponta para o CSS/JS com a versão no endereço e os
+    arquivos são sempre revalidados (0.9.0 abriu com o CSS/JS da 0.8 e a tela quebrou)."""
+    c, _, _ = cli
+    r = c.get("/")
+    assert r.headers["cache-control"] == "no-store"
+    import re
+    v = re.findall(r'/estatico/(?:app\.js|estilo\.css)\?v=([0-9a-f]{12})"', r.text)
+    assert len(v) == 2 and v[0] == v[1]
+    assert c.get("/estatico/app.js").headers["cache-control"] == "no-cache"

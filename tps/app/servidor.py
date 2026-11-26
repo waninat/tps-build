@@ -79,9 +79,33 @@ def _s(sid: str) -> Sessao:
     return s
 
 
+def _versao_estaticos() -> str:
+    """Muda a cada versão e a cada mudança nos arquivos: a janela (WebView2, que guarda cache entre aberturas) nunca
+    mistura o HTML novo com o CSS/JS antigos."""
+    import hashlib
+    h = hashlib.sha1(__version__.encode())
+    for n in ("app.js", "estilo.css"):
+        f = ESTATICOS / n
+        if f.exists():
+            h.update(f.read_bytes())
+    return h.hexdigest()[:12]
+
+
 @app.get("/", response_class=HTMLResponse)
 def inicio():
-    return (ESTATICOS / "index.html").read_text(encoding="utf-8")
+    v = _versao_estaticos()
+    html = (ESTATICOS / "index.html").read_text(encoding="utf-8")
+    html = html.replace('/estatico/estilo.css"', f'/estatico/estilo.css?v={v}"').replace(
+        '/estatico/app.js"', f'/estatico/app.js?v={v}"')
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+
+@app.middleware("http")
+async def _sem_cache_estatico(request, call_next):
+    r = await call_next(request)
+    if request.url.path.startswith("/estatico/"):
+        r.headers["Cache-Control"] = "no-cache"          # revalida sempre (ETag); evita CSS/JS de versão antiga
+    return r
 
 
 app.mount("/estatico", StaticFiles(directory=ESTATICOS), name="estatico")

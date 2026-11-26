@@ -122,7 +122,9 @@ async function iniciar() {
   $("#versao").textContent = E.info.versao;
   $("#maquina").innerHTML = E.info.maquinas.map(m => `<option value="${m.id}">${m.nome}</option>`).join("");
   const pm = E.info.maquinas.find(m => m.id === "radioserra_precise"); if (pm) $("#maquina").value = pm.id;
-  ligar();
+  try { ligar(); } catch (e) {          // uma falha na tela não pode impedir o login
+    console.error(e); aviso("Erro ao montar a tela: " + e.message + " — feche e abra o TPS; se continuar, avise o suporte");
+  }
   if (!E.token) await entrar();
   else {
     try { E.usuario = await api("GET", "/api/eu"); } catch (e) { await entrar(); }
@@ -1485,6 +1487,7 @@ function abaDireita(id) { const b = $(`.aba-d[data-abad=${id}]`); if (b) b.click
 function ligarInterface() {
   // abas do painel esquerdo
   $$(".aba-e").forEach(b => b.onclick = () => abaEsquerda(b.dataset.abae));
+  $$(".aba-d").forEach(b => { if (!b.title) b.title = b.textContent.trim(); });
   abaEsquerda(lerGuardado("tps_aba_e") || "caso");
   $(".aba-d[data-abad=iso]").addEventListener("click", desenharPainelIso);
   // menus
@@ -1933,6 +1936,7 @@ function definirLayout(modo) {
   setTimeout(desenharTudo, 30);
 }
 
+window.addEventListener("error", (ev) => { try { aviso("Erro na tela: " + ev.message); } catch (x) { /* ok */ } });
 iniciar().catch(e => aviso(e.message));
 
 // ---- assistente com Claude: chave da API e modelo
