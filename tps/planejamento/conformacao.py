@@ -33,6 +33,7 @@ class Colimacao:
     interdigitacao: bool = True          # MLCi/MLCi2: False (lâmina A não passa a B dos pares vizinhos)
     extensao_banco_mm: float | None = None   # máx. diferença entre lâminas do mesmo banco (se houver)
     nome: str = ""
+    largura_min_segmento_mm: float = 0.0     # IMRT: abertura mínima de um par aberto (Monaco: "min. segment width")
 
     @property
     def n_pares(self) -> int:
@@ -50,7 +51,8 @@ class Colimacao:
                    gap_minimo_mm=float(mlc.get("min_gap_mm") or 0.0),
                    overtravel_mm=float(mlc.get("max_overtravel_mm") or 150.0), tipo_mlc=mlc.get("dicom_type", "MLCX"),
                    interdigitacao=bool(mlc.get("interdigitation", True)),
-                   extensao_banco_mm=mlc.get("max_bank_span_mm"), nome=str(raw.get("id", "")))
+                   extensao_banco_mm=mlc.get("max_bank_span_mm"), nome=str(raw.get("id", "")),
+                   largura_min_segmento_mm=float(mlc.get("min_segment_width_mm") or 0.0))
 
     @classmethod
     def agility(cls) -> "Colimacao":

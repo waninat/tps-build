@@ -801,9 +801,14 @@ async function exportar() {
   const r = await api("POST", `/api/${E.sid}/exportar`, corpo, "Exportando…");
   $("#exportados").innerHTML = r.arquivos.filter(a => !/imagens_/.test(a)).map(a => `<div><a href="/api/${E.sid}/arquivo?t=${encodeURIComponent(E.token)}&caminho=${encodeURIComponent(a)}">${a.split(/[\\/]/).pop()}</a></div>`).join("") +
     (r.envio ? `<div class="ok">Enviado: ${r.envio.enviados.length} arquivo(s)</div>` : "") + `<div class="pequeno-txt">${r.pasta}</div>` +
-    (E.janela ? `<button class="pequeno" id="b-abrir-exp">Abrir a pasta</button>` : "");
+    (E.janela ? `<button class="pequeno" id="b-abrir-exp">Abrir a pasta</button>` : "") +
+    ((r.entregabilidade || []).length ? `<h3>Entregabilidade (regras da máquina)</h3><ul class="assist-lista">` +
+      r.entregabilidade.map(i => `<li class="${i.gravidade === "erro" ? "falha" : "avisotxt"}">${esc(i.feixe)}: ${esc(i.msg)}${i.n > 1 ? ` (${i.n} pontos de controle)` : ""}</li>`).join("") + `</ul>`
+      : `<div class="ok pequeno-txt">Entregabilidade: sem problemas nas regras da máquina</div>`) +
+    (r.arquivos.some(a => /OBJ_Monaco_/.test(a)) ? `<div class="pequeno-txt">OBJ_Monaco_…csv: os objetivos traduzidos para as funções de custo do Monaco (o DICOM não leva objetivos)</div>` : "");
   if (E.janela) $("#b-abrir-exp").onclick = () => window.pywebview.api.abrir_pasta(r.pasta);
-  aviso("RTPLAN exportado e conferido", true);
+  const erros = (r.entregabilidade || []).filter(i => i.gravidade === "erro").length;
+  aviso(erros ? `RTPLAN exportado, mas com ${erros} problema(s) de entregabilidade: veja a lista` : "RTPLAN exportado e conferido", !erros);
 }
 
 function listarOars() {

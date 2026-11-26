@@ -20,6 +20,7 @@ collimation:
     widths: [[40, 10.0]]
     max_overtravel_mm: 125.0          # CONFIRMAR
     min_gap_mm: 5.0                   # CONFIRMAR (gap mínimo entre A e B, e entre vizinhos opostos)
+    min_segment_width_mm: 10.0         # IMRT: abertura mínima de um par aberto — CONFIRMAR com o "Minimum Segment Width" do Monaco
     interdigitation: false            # MLCi: a lâmina A não pode passar a B dos pares vizinhos
     max_bank_span_mm: null            # CONFIRMAR, se houver limite de extensão do banco
 dicom_exportacao:                     # como o Monaco 6.1 grava para o Mosaiq (RTPLAN de referência, 22/11/2026)
@@ -27,6 +28,9 @@ dicom_exportacao:                     # como o Monaco 6.1 grava para o Mosaiq (R
   tolerancia: "1 Fótons"              # ToleranceTableLabel
   departamento: "0~RadioSerra"        # InstitutionalDepartmentName nos feixes
   segmentos: step_and_shoot           # campo dentro do campo num único feixe STATIC (como o Monaco)
+imrt:                                 # padrões do sequenciamento step-and-shoot — CONFIRMAR com o Monaco desta máquina
+  um_min_segmento: 3.0                # Monaco: "Minimum Segment MU"
+  area_min_cm2: 4.0                   # Monaco: "Minimum Segment Area"
 vmat:                                 # limites usados na otimização e na estimativa do tempo de entrega — CONFIRMAR
   gantry_vel_max_graus_s: 6.0         # Elekta: 1 volta/min (Dobler 2011: 6,00 °/s; alguns modelos usam 5,5)
   lamina_vel_max_mm_s: 20.0           # MLCi (no isocentro): 2,0 cm/s (Kantz et al., Agility × MLCi)

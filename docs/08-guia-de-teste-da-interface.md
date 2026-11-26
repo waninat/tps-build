@@ -114,6 +114,15 @@ grau, velocidade das lâminas e taxa de dose.
 * **Contorno automático de órgãos**: Ferramentas › *Contorno automático de órgãos (TotalSegmentator)…* instala o TotalSegmentator pelo próprio TPS (CPU ou GPU;
   precisa de internet e, no Windows, do Python 3.10–3.12) ou aponta um já instalado.
 
+### G. Exportação de IMRT para o Monaco (0.9.4)
+* Na exportação, o TPS confere a entregabilidade nas regras da máquina (gap mínimo, interdigitação do MLCi,
+  excursão, diafragma X, UM e área mínimas do segmento, fendas estreitas) e lista o que achar por feixe.
+* O sequenciamento IMRT respeita uma **abertura mínima por par** (`min_segment_width_mm`: 10 mm no Precise, 5 mm
+  no Synergy) e os mínimos de UM/área da máquina (`imrt:` no maquina.yaml) — a CONFIRMAR com os valores do Monaco.
+* O DICOM não leva objetivos de otimização: junto com o RTPLAN sai `OBJ_Monaco_….csv`, com cada objetivo traduzido
+  para a função de custo do Monaco (Target Penalty, Quadratic Overdose, Maximum Dose, Serial, Parallel, Overdose
+  DVH) e os parâmetros, para montar a prescrição IMRT lá.
+
 ## Integração com o Mosaiq 2.83 (pendente de teste)
 - Em *Enviar ao Mosaiq*, informe IP, porta e AE Title do destino DICOM do Mosaiq (a TI ou a Elekta informam).
   O envio usa C-STORE; a importação no Mosaiq segue o fluxo normal de RTPLAN.

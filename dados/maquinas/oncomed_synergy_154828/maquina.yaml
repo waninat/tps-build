@@ -21,7 +21,11 @@ collimation:
     widths: [[80, 5.0]]
     max_overtravel_mm: 150.0
     min_gap_mm: 0.0                   # CONFIRMAR
+    min_segment_width_mm: 5.0         # IMRT: abertura mínima de um par aberto — CONFIRMAR com o "Minimum Segment Width" do Monaco
     interdigitation: true
+imrt:                                 # padrões do sequenciamento step-and-shoot — CONFIRMAR com o Monaco desta máquina
+  um_min_segmento: 3.0                # Monaco: "Minimum Segment MU"
+  area_min_cm2: 4.0                   # Monaco: "Minimum Segment Area"
 vmat:                                 # limites usados na otimização e na estimativa do tempo de entrega — CONFIRMAR
   gantry_vel_max_graus_s: 6.0
   lamina_vel_max_mm_s: 35.0           # Agility: 3,5 cm/s; até 6,5 cm/s com o guia dinâmico no mesmo sentido (Kantz et al.)

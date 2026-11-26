@@ -286,6 +286,13 @@ def sequenciar_sweep(c: Campo, colim: Colimacao, u: np.ndarray, Fq: np.ndarray, 
             je, jd = filas[i][0]
             ai = max(u[je] - res / 2, c.mlc_a[i])
             bi = min(u[jd - 1] + res / 2, c.mlc_b[i])
+            lmin = getattr(colim, "largura_min_segmento_mm", 0.0) or 0.0
+            if lmin > 0 and bi - ai < lmin:              # fenda estreita: abre até a largura mínima (Monaco)
+                ci = 0.5 * (ai + bi)
+                lo, hi = float(c.mlc_a[i]), float(c.mlc_b[i])
+                ai, bi = max(lo, ci - lmin / 2), min(hi, ci + lmin / 2)
+                if bi - ai < lmin:                       # encostou na abertura do campo: desloca para dentro
+                    ai, bi = (lo, min(hi, lo + lmin)) if ai <= lo + 1e-6 else (max(lo, hi - lmin), hi)
             if bi - ai < g:
                 ci = 0.5 * (ai + bi)
                 ai, bi = ci - g / 2, ci + g / 2

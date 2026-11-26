@@ -46,6 +46,17 @@ PALETA = [(230, 25, 75), (60, 180, 75), (255, 225, 25), (0, 130, 200), (245, 130
 NIVEIS_ISODOSE = [30, 50, 70, 80, 90, 95, 100, 105, 107, 110]
 
 
+def _resumir_entrega(itens: list[dict]) -> list[dict]:
+    """Agrupa os pontos da conferência de entregabilidade por feixe e mensagem (sem repetir cada ponto de controle)."""
+    import re as _re
+    grupos: dict = {}
+    for i in itens:
+        chave = (i["gravidade"], i["feixe"], _re.sub(r"[\d.]+", "#", i["msg"]))
+        g = grupos.setdefault(chave, {"gravidade": i["gravidade"], "feixe": i["feixe"], "msg": i["msg"], "n": 0})
+        g["n"] += 1
+    return sorted(grupos.values(), key=lambda g: (g["gravidade"] != "erro", g["feixe"]))
+
+
 def mover_para_lixeira(arq: Path) -> Path | None:
     """Move um plano salvo para <home>/planos/lixeira (com data/hora no nome): apagado, mas recuperável."""
     arq = Path(arq)
@@ -1852,8 +1863,8 @@ class Sessao:
         try:
             r = I.otimizar_imrt(p, g, self.doses_um, objs, corpo, m.colim, m.modelo,
                                 niveis=int(im.get("niveis", 7)), iteracoes=int(im.get("iteracoes", 2)),
-                                um_min_segmento=float(im.get("um_min", 3.0)),
-                                area_min_cm2=float(im.get("area_min_cm2", 4.0)),
+                                um_min_segmento=float(im.get("um_min") or (m.raw.get("imrt") or {}).get("um_min_segmento", 3.0)),
+                                area_min_cm2=float(im.get("area_min_cm2") or (m.raw.get("imrt") or {}).get("area_min_cm2", 4.0)),
                                 peso_nto=float(im.get("peso_nto", 1.0)), progresso=prog, evitar=evitar,
                                 flash_mm=float(im.get("flash_mm", 0) or 0),
                                 flash_pele_mm=float(im.get("flash_pele_mm", 5) or 5),
@@ -2311,6 +2322,12 @@ class Sessao:
         g = self.grade
         exportar_rtdose(self.dose_fx * p.prescricao.fracoes, g.x, g.y, g.z, rp, destino / f"RD_{base}.dcm")
         arquivos.append(destino / f"RD_{base}.dcm")
+        from tps.exportacao.entregabilidade import Regras, conferir as conferir_entrega
+        entrega = conferir_entrega(rp, Regras.da_maquina(self.maquina.colim, self.maquina.raw))
+        if p.objetivos_imrt and p.tecnica in ("IMRT", "VMAT"):
+            from tps.exportacao.objetivos_monaco import gravar as gravar_obj
+            arquivos.append(gravar_obj(p.objetivos_imrt, destino / f"OBJ_Monaco_{base}.csv",
+                                       f"{p.rotulo} — {p.prescricao.dose_total_gy:g} Gy / {p.prescricao.fracoes} fx"))
         if incluir_imagens is None:
             incluir_imagens = self.tipo == "fantoma"          # CT real: o Mosaiq normalmente já tem as imagens
         if incluir_imagens:
@@ -2320,8 +2337,9 @@ class Sessao:
                 if f.is_file() and (self._e_ct(f) or (f == self.arquivo_rs and not arq_rs)):
                     shutil.copy2(f, img / f.name)
                     arquivos.append(img / f.name)
-        self._registrar(f"Exportado para {destino} ({modo_segmentos})")
-        return {"arquivos": [str(a) for a in arquivos], "pasta": str(destino)}
+        self._registrar(f"Exportado para {destino} ({modo_segmentos})"
+                        + (f"; entregabilidade: {len(entrega)} ponto(s) de atenção" if entrega else ""))
+        return {"arquivos": [str(a) for a in arquivos], "pasta": str(destino), "entregabilidade": _resumir_entrega(entrega)}
 
     def enviar_dicom(self, arquivos: list[str], host: str, porta: int, ae_destino: str, ae_local: str = "TPS") -> dict:
         from pynetdicom import AE, StoragePresentationContexts
