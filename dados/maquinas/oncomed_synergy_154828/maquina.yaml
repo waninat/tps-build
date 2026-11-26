@@ -24,8 +24,10 @@ collimation:
     interdigitation: true
 vmat:                                 # limites usados na otimização e na estimativa do tempo de entrega — CONFIRMAR
   gantry_vel_max_graus_s: 6.0
-  lamina_vel_max_mm_s: 35.0           # Agility (sem contar o guia dinâmico)
+  lamina_vel_max_mm_s: 35.0           # Agility: 3,5 cm/s; até 6,5 cm/s com o guia dinâmico no mesmo sentido (Kantz et al.)
   taxa_dose_max_um_min: 500.0
+  taxa_dose_continua: true            # Agility/Integrity: taxa contínua (CVDR) — CONFIRMAR a licença; sem ela, faixas
+  taxas_dose_discretas_um_min: [500.0, 250.0, 125.0, 62.5, 31.25, 15.625, 7.8125]   # se não houver CVDR
   um_por_grau_min: 0.1
   um_por_grau_max: 20.0
   deslocamento_max_mm_grau: 6.0
