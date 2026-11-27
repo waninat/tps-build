@@ -112,7 +112,7 @@ grau, velocidade das lâminas e taxa de dose.
   nunca acima do alvo) antes de aparecer. Cada consulta fica em `<pasta de dados>/ia/claude/`. Sem internet ou
   com erro, cai nas regras com aviso.
 * **Contorno automático de órgãos**: Ferramentas › *Contorno automático de órgãos (TotalSegmentator)…* instala o TotalSegmentator pelo próprio TPS (CPU ou GPU;
-  precisa de internet e, no Windows, do Python 3.10–3.12) ou aponta um já instalado.
+  precisa de internet e, no Windows, do Python 3.11–3.14 (recomendado 3.12)) ou aponta um já instalado.
 
 ### G. Exportação de IMRT para o Monaco (0.9.4)
 * Na exportação, o TPS confere a entregabilidade nas regras da máquina (gap mínimo, interdigitação do MLCi,

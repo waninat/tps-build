@@ -1,5 +1,6 @@
 ﻿# Instala o módulo de contorno automático de órgãos do TPS (TotalSegmentator) em <pasta de dados>\ia\venv.
-# Precisa de internet (pacotes ~2 GB). Se não houver Python 3.10–3.12, instala o 3.12 pelo winget (só para o usuário).
+# Precisa de internet (pacotes ~2 GB). Se não houver Python 3.11–3.14, instala o 3.12 pelo winget (só para o usuário).
+# 3.15: ainda sem pacotes prontos para Windows de algumas dependências (scikit-image, dipy, blosc, fill-voids).
 # Uso:  powershell -ExecutionPolicy Bypass -File instalar_ia.ps1 [-GPU] [-Destino <pasta de dados>\ia]
 # Também é chamado pelo próprio TPS (Ferramentas > Contorno automático de órgãos).
 param([switch]$GPU, [string]$Destino = "")
@@ -18,19 +19,19 @@ function Rodar([string]$exe, [string[]]$argumentos, [string]$etapa) {
 }
 
 function Achar-Python {
-    foreach ($v in @("3.12", "3.11", "3.10")) {
+    foreach ($v in @("3.12", "3.13", "3.11", "3.14")) {
         try { & py "-$v" -c "import sys" 2>$null; if ($LASTEXITCODE -eq 0) { return (& py "-$v" -c "import sys; print(sys.executable)").Trim() } } catch {}
     }
     $cands = @()
     foreach ($n in @("python", "python3")) { try { $cands += (Get-Command $n -ErrorAction Stop).Source } catch {} }
-    foreach ($v in @("312", "311", "310")) {
+    foreach ($v in @("312", "313", "311", "314")) {
         $cands += (Join-Path $env:LOCALAPPDATA "Programs\Python\Python$v\python.exe")
         $cands += (Join-Path $env:ProgramFiles "Python$v\python.exe")
     }
     foreach ($c in $cands) {
         if ($c -and (Test-Path $c) -and ($c -notlike "*WindowsApps*")) {
             try { $ver = (& $c -c "import sys; print('%d.%d' % sys.version_info[:2])").Trim()
-                  if (@("3.10", "3.11", "3.12") -contains $ver) { return $c } } catch {}
+                  if (@("3.11", "3.12", "3.13", "3.14") -contains $ver) { return $c } } catch {}
         }
     }
     return $null
@@ -38,13 +39,13 @@ function Achar-Python {
 
 $py = Achar-Python
 if (-not $py) {
-    Write-Host "Python 3.10–3.12 não encontrado. Tentando instalar o Python 3.12 pelo winget..."
+    Write-Host "Python 3.11–3.14 não encontrado. Tentando instalar o Python 3.12 pelo winget..."
     try {
         & winget install -e --id Python.Python.3.12 --scope user --silent --accept-package-agreements --accept-source-agreements
     } catch { Write-Host "winget indisponível: $_" }
     $py = Achar-Python
 }
-if (-not $py) { throw "Python 3.10–3.12 não encontrado. Instale de https://www.python.org/downloads/ (versão 3.12, marque 'Add python.exe to PATH') e clique em Instalar de novo." }
+if (-not $py) { throw "Python 3.11–3.14 não encontrado (o 3.15 ainda não serve). Instale de https://www.python.org/downloads/ (versão 3.12, marque 'Add python.exe to PATH') e clique em Instalar de novo." }
 Write-Host "Python: $py"
 
 $venv = Join-Path $destino "venv"

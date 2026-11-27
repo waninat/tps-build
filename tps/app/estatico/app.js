@@ -1844,7 +1844,7 @@ async function janelaIA() {
     : `<span class="avisotxt">não instalado</span>`;
   const pr = modal("Contorno automático de órgãos (TotalSegmentator)", `<p>Estado: <span id="ia-st">${estadoTxt()}</span></p>
     <p class="pequeno-txt">A rede roda neste computador (servidor do TPS), num ambiente Python próprio em <code>${esc(e.destino)}</code>.
-    Precisa de internet uma vez (~2 GB)${e.plataforma === "win32" ? " e do Python 3.10–3.12 do python.org (marque “Add to PATH”)" : ""}.
+    Precisa de internet uma vez (~2 GB)${e.plataforma === "win32" ? " e do Python 3.11–3.14 (recomendado 3.12) do python.org (marque “Add to PATH”)" : ""}.
     Com placa NVIDIA, a versão GPU segmenta em segundos; na CPU, 1–5 min por grupo de órgãos.</p>
     <label>Sua senha (físico/administrador)<input id="ia-senha" type="password"></label>
     <div class="botoes"><button id="b-ia-cpu" class="primario">Instalar (CPU)</button><button id="b-ia-gpu">Instalar (GPU NVIDIA)</button></div>

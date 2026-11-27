@@ -1,6 +1,6 @@
 """Instalação do contorno por IA (TotalSegmentator) de dentro do TPS: roda em segundo plano e guarda o registro.
 
-Windows: chama o instalar_ia.ps1 que acompanha o programa (cria <pasta de dados>/ia/venv com o Python 3.10–3.12 do
+Windows: chama o instalar_ia.ps1 que acompanha o programa (cria <pasta de dados>/ia/venv com o Python 3.11–3.14 (recomendado 3.12) do
 python.org). Outros sistemas (desenvolvimento): cria o mesmo venv com o Python que estiver no PATH. Também dá para
 apontar um TotalSegmentator já instalado (config.yaml → executavel).
 """
@@ -43,10 +43,10 @@ def _comando(gpu: bool) -> list[str]:
         cmd = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(sc),
                "-Destino", str(destino)]
         return cmd + (["-GPU"] if gpu else [])
-    py = shutil.which("python3.12") or shutil.which("python3.11") or shutil.which("python3.10") or \
+    py = shutil.which("python3.12") or shutil.which("python3.11") or shutil.which("python3.13") or \
         (sys.executable if not getattr(sys, "frozen", False) else None)
     if py is None:
-        raise RuntimeError("Python 3.10–3.12 não encontrado")
+        raise RuntimeError("Python 3.11–3.14 (recomendado 3.12) não encontrado")
     venv = destino / "venv"
     pip = venv / "bin" / "pip"
     idx = "https://download.pytorch.org/whl/" + ("cu124" if gpu else "cpu")
