@@ -28,7 +28,9 @@ ORGAOS = {
     "reto": ("Reto", "total", ["colon"], (150, 90, 40), "reto"),
     "parede_retal": ("Parede_Retal", "total", ["colon"], (190, 110, 50), "parede_retal"),
     "canal_anal": ("Canal_Anal", "total", ["colon"], (120, 70, 30), "canal_anal"),
-    "bowel_bag": ("Bowel_Bag", "trunk_cavities", ["abdominal_cavity"], (255, 170, 110), "bowel_bag"),
+    # bowel bag pelo envelope das alças do modelo rápido (o modelo de cavidades é de alta resolução: 10–20 min e
+    # mais de 8 GB de memória na CPU — derrubava o TPS em computadores de 8 GB)
+    "bowel_bag": ("Bowel_Bag", "total", ["small_bowel", "duodenum", "colon"], (255, 170, 110), "bowel_bag"),
     "intestino_delgado": ("Intestino_Delgado", "total", ["small_bowel", "duodenum"], (255, 150, 80), None),
     "colon": ("Colon_Sigmoide", "total", ["colon"], (200, 120, 60), None),
     "femur_e": ("Cabeca_Femoral_E", "total", ["femur_left"], (150, 220, 150), "cabeca_femoral"),
@@ -109,16 +111,19 @@ def estado() -> dict:
 
 def _rodar(exe: Path, ent: Path, saida: Path, tarefa: str, classes: list[str], rapido: bool, tempo_max_s: int,
            dispositivo: str | None) -> Path:
-    cmd = [str(exe), "-i", str(ent), "-o", str(saida), "--output_type", "dicom"]
+    cmd = [str(exe), "-i", str(ent), "-o", str(saida), "--output_type", "dicom",
+           "--nr_thr_resamp", "1", "--nr_thr_saving", "1"]        # menos memória ao reamostrar e gravar
     if tarefa == "total":
         cmd += ["--roi_subset", *classes]
         if rapido:
             cmd.append("--fast")
     else:
-        cmd += ["--task", tarefa]
+        cmd += ["--task", tarefa, "--force_split"]                # alta resolução: em 3 partes (menos memória)
     if dispositivo:
         cmd += ["--device", dispositivo]
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+    # prioridade abaixo do normal: o TPS (e o Windows) continuam respondendo enquanto a rede roda
+    flags = (getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0)) \
+        if sys.platform == "win32" else 0
     kw = {"creationflags": flags} if sys.platform == "win32" else {"start_new_session": True}
     pr = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, **kw)
     try:

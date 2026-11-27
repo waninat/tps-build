@@ -325,9 +325,12 @@ function ligar() {
     const orgaos = Array.from($("#ia-orgaos").selectedOptions).map(o => o.value);
     if (!orgaos.length) throw new Error("Escolha os órgãos (Ctrl+clique para vários)");
     const zr = $("#ia-reto-z").value.trim();
-    const r = await api("POST", `/api/${E.sid}/contorno/ia`, { orgaos, reto_zmax_mm: zr === "" ? null : +zr.replace(",", "."),
-      suavizar_mm: +$("#ia-suave").value },
-      "Segmentando com IA (1–5 min por grupo na CPU)…");
+    const tp = acompanharProgresso();
+    let r;
+    try {
+      r = await api("POST", `/api/${E.sid}/contorno/ia`, { orgaos, reto_zmax_mm: zr === "" ? null : +zr.replace(",", "."),
+        suavizar_mm: +$("#ia-suave").value }, "Segmentando com IA (1–5 min por grupo na CPU)…");
+    } finally { clearInterval(tp); }
     atualizar(r);
     const c = r.contorno;
     aviso("Criado: " + c.criadas.join(", ") + (c.nao_encontrados.length ? ` · não encontrado: ${c.nao_encontrados.join(", ")}` : "") +

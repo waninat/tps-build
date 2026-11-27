@@ -1434,6 +1434,7 @@ class Sessao:
         if "bowel_bag" in pedidos:                      # a bolsa exclui bexiga e reto: segmenta junto
             pedidos += [o for o in ("bexiga", "reto") if o not in pedidos]
         arquivos = sorted(f for f in self.pasta_ct.iterdir() if f.is_file() and self._e_ct(f))
+        self.progresso = f"IA: TotalSegmentator rodando ({len(pedidos)} órgão(s); na CPU leva alguns minutos)…"
         try:
             classes = IA.segmentar(arquivos, pedidos)
         except (RuntimeError, ValueError, OSError) as e:
@@ -1481,6 +1482,10 @@ class Sessao:
                                                                   if n.upper().startswith("PTV")), None)
                 if alvo is not None and alvo.contornos:
                     ztopo = max(float(c[0, 2]) for c in alvo.contornos)
+                self.progresso = "IA: montando a bolsa intestinal (envelope das alças)…"
+                passo = (float(abs(cz[1] - cz[0])) if len(cz) > 1 else 3.0, float(abs(cy[1] - cy[0])),
+                         float(abs(cx[1] - cx[0])))
+                v = P.envelope_alcas(v, passo)
                 v = P.bowel_bag(v, cz, [vol_de(["urinary_bladder"]), reto, osso], ztopo,
                                 IA.BOWEL_BAG_ACIMA_DO_ALVO_MM)
             vols[o] = v
@@ -1491,7 +1496,12 @@ class Sessao:
             if v is None or not v.any():
                 faltam.append(nome)
                 continue
-            criadas.append(self._estrutura_de_volume(nome, "ORGAN", cor, v, True, float(suavizar_mm)))
+            self.progresso = f"IA: contornando {nome}…"
+            try:
+                criadas.append(self._estrutura_de_volume(nome, "ORGAN", cor, v, True, float(suavizar_mm)))
+            except MemoryError:                      # suavização 3D sem memória: contorno sem suavizar
+                criadas.append(self._estrutura_de_volume(nome, "ORGAN", cor, v, True, 0.0))
+        self.progresso = None
         if not criadas:
             raise ErroUsuario("A IA não encontrou nenhum dos órgãos pedidos neste CT")
         self._registrar("Contorno por IA (TotalSegmentator): " + ", ".join(criadas) + " — revise antes de usar")

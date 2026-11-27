@@ -94,9 +94,25 @@ def lado(m: np.ndarray, corpo: np.ndarray, x: np.ndarray, esquerdo: bool) -> np.
     return out
 
 
+def envelope_alcas(alcas: np.ndarray, passo_mm: tuple, fechar_mm: float = 12.0) -> np.ndarray:
+    """Envelope das alças (delgado + duodeno + cólon): fechamento morfológico por corte (preenche o espaço entre as
+    alças, como o contorno RTOG da bolsa intestinal) e buracos preenchidos. Feito corte a corte (pouca memória)."""
+    from scipy import ndimage
+    dy, dx = passo_mm[1], passo_mm[2]
+    ry, rx = max(1, int(round(fechar_mm / dy))), max(1, int(round(fechar_mm / dx)))
+    yy, xx = np.ogrid[-ry:ry + 1, -rx:rx + 1]
+    disco = (yy * dy) ** 2 + (xx * dx) ** 2 <= fechar_mm ** 2
+    out = np.zeros_like(alcas)
+    for k in np.nonzero(alcas.any(axis=(1, 2)))[0]:
+        f = np.pad(alcas[k], ((ry, ry), (rx, rx)))
+        f = ndimage.binary_closing(f, structure=disco)[ry:-ry, rx:-rx]
+        out[k] = ndimage.binary_fill_holes(f)
+    return out
+
+
 def bowel_bag(cavidade: np.ndarray, z: np.ndarray, excluir: list[np.ndarray], z_topo_alvo: float | None,
               acima_mm: float = 20.0) -> np.ndarray:
-    """Bowel bag (RTOG): cavidade abdominopélvica sem bexiga, reto e osso, até `acima_mm` acima do alvo."""
+    """Bowel bag (RTOG): envelope das alças (ou cavidade) sem bexiga, reto e osso, até `acima_mm` acima do alvo."""
     m = cavidade.copy()
     for e in excluir:
         if e is not None:

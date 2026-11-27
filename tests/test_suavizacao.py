@@ -50,3 +50,15 @@ def test_pos_processamento_na_sessao(tmp_path):
     assert s.estruturas[nome].mascara.sum() > 0.9 * v0
     s.desfazer_contorno()
     assert s.estruturas[nome].mascara.sum() == v0
+
+
+def test_envelope_das_alcas_preenche_entre_alcas():
+    import numpy as np
+    from tps.ia.posprocessamento import envelope_alcas
+    m = np.zeros((3, 80, 80), bool)
+    yy, xx = np.mgrid[:80, :80]
+    for cy, cx in ((30, 30), (30, 50), (50, 30), (50, 50)):          # quatro "alças" separadas por 8 mm
+        m[1] |= (yy - cy) ** 2 + (xx - cx) ** 2 <= 36
+    e = envelope_alcas(m, (3.0, 1.0, 1.0), fechar_mm=12.0)
+    assert e[1, 40, 40] and e[1, 30, 40] and not e[0].any()          # o espaço entre as alças entra na bolsa
+    assert e[1].sum() > 1.5 * m[1].sum() and not e[1, 5, 5]
