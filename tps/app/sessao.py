@@ -187,6 +187,7 @@ class Sessao:
         if rs is None:
             raise ErroUsuario("Nenhum RTSTRUCT na pasta: exporte o CT junto com os contornos")
         self.tipo, self.pasta_ct, self.arquivo_rs = "ct", pasta, rs
+        self.secundaria = None                         # fusão: TC secundária (outro caso não herda)
         self.curva = HUtoED.from_csv(curva)
         estruturas_rs = read_rtstruct(rs)
         # grade de dose só em volta do contorno externo (+3 cm para bolus e penumbra): o CT costuma ter 50 cm de
@@ -805,6 +806,9 @@ class Sessao:
             except ValueError as e:
                 raise ErroUsuario(f"{nome}: {e}") from e
             avisos += [f"{nome}: {a}" for a in ra.avisos]
+            if c.segmentos_blindagem:                 # cada parte recebe 1/K das UM: o peso ×K mantém a fluência
+                c.peso *= len(c.segmentos_blindagem)
+                avisos.append(f"{nome}: peso ×{len(c.segmentos_blindagem)} (UM repartidas entre os segmentos)")
         c.ssd_mm = calculo.ssd_no_eixo(g, c)
         if c.ssd_mm is None:
             raise ErroUsuario(f"{nome}: o eixo central não cruza o paciente")

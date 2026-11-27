@@ -565,6 +565,22 @@
     </div>
     <div class="pequeno-txt">Polígono: clique os pontos e dê duplo clique para fechar (Esc cancela). Pincel: arraste. Roda do mouse: muda o corte.</div>
   </details>
+  <details class="sub" id="sec-fusao"><summary>Fusão com outra TC (rígida / deformável)</summary>
+    <div class="pequeno-txt">TC do mesmo paciente em outra posição ou com outros acessórios. A TC do plano é a principal;
+      a outra é registrada nela. Confira sempre no xadrez/diferença.</div>
+    <div class="linha2"><label>Pasta da TC secundária<input id="fu-pasta" placeholder="C:\...\TC2"></label>
+      <button id="b-fu-carregar" class="pequeno">Carregar</button></div>
+    <div class="linha2"><label>Registro<select id="fu-modo"><option value="deformavel">Deformável (rígido + demons)</option>
+      <option value="rigido">Rígido (6 graus)</option><option value="identidade">Mesmo referencial (sem mover)</option></select></label>
+      <label title="regularização do campo: maior = mais suave">Suavidade (mm)<input id="fu-sigma" type="number" value="4" min="1" max="12" step="0.5"></label>
+      <button id="b-fu-reg" class="pequeno">Registrar</button></div>
+    <div id="fu-info" class="pequeno-txt"></div>
+    <div class="linha2"><label>Ver<select id="fu-ver"><option value="">Desligada</option><option value="mistura">Mistura</option>
+      <option value="xadrez">Xadrez</option><option value="diferenca">Diferença (HU)</option><option value="secundaria">Só a secundária</option></select></label>
+      <label>Mistura<input id="fu-alfa" type="range" min="0" max="1" step="0.05" value="0.5"></label></div>
+    <div class="linha2"><label>Estruturas da secundária<select id="fu-est" multiple size="4"></select></label>
+      <button id="b-fu-prop" class="pequeno" title="leva as estruturas da TC secundária para a principal (sufixo _def)">Propagar para a TC do plano</button></div>
+  </details>
   <details class="sub" id="sec-nova-est"><summary>Nova estrutura</summary>
     <div class="linha2">
       <label>Operação<select id="ne-op">

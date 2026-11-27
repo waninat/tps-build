@@ -982,11 +982,13 @@ function irPara(xyz) {
 function carregarCortes() { for (const v of Object.keys(VISTAS)) carregarCorte(v); }
 function carregarCorte(vista) {
   if (!E.sid) return;
-  const i = E.idx[vista], chave = `${vista}:${i}`;
+  const fu = E.fusaoVer || "", i = E.idx[vista], chave = `${vista}:${i}` + (fu ? `:${fu}:${E.fusaoAlfa}:${E.fusaoV || 0}` : "");
   if (!E.imgs[chave]) {
     const img = new Image();
     img.onload = () => desenharCorte(vista);
-    img.src = `/api/${E.sid}/corte/${vista}/${i}.png?janela=${E.wl.janela}&nivel=${E.wl.nivel}&t=${encodeURIComponent(E.token)}`;
+    img.src = fu
+      ? `/api/${E.sid}/fusao_corte/${vista}/${i}.png?modo=${fu}&alfa=${E.fusaoAlfa}&janela=${E.wl.janela}&nivel=${E.wl.nivel}&v=${E.fusaoV || 0}&t=${encodeURIComponent(E.token)}`
+      : `/api/${E.sid}/corte/${vista}/${i}.png?janela=${E.wl.janela}&nivel=${E.wl.nivel}&t=${encodeURIComponent(E.token)}`;
     E.imgs[chave] = img;
   }
   carregarSobreVista(vista);
@@ -2115,4 +2117,41 @@ document.addEventListener("DOMContentLoaded", () => {
     atualizar(r); if (typeof desenharTudo === "function") desenharTudo(); cpMsg("Plano de volta ao estado anterior ao último pedido.", "cp-ia"); });
   $$("#copiloto [data-cp]").forEach(b => b.onclick = () => enviarCopiloto(b.dataset.cp));
   document.addEventListener("keydown", (ev) => { if (ev.ctrlKey && (ev.key === "k" || ev.key === "K")) { ev.preventDefault(); abrirCopiloto(); } });
+});
+
+// ---- fusão com outra TC (rígida/deformável)
+function mostrarFusao(r) {
+  const q = r.qualidade, reg = r.registro;
+  $("#fu-info").innerHTML = !r.carregada ? "Sem TC secundária." :
+    `${esc(r.pasta.split(/[\\/]/).pop())}: ${r.cortes} cortes, ${r.voxel_mm.join(" × ")} mm` + (r.mesmo_referencial ? " · mesmo referencial" : "") +
+    (reg ? `<br>Registro ${reg.deformavel ? "deformável" : "rígido"}: rotação ${reg.rotacao_graus.join("/")}°, translação ${reg.translacao_mm.join("/")} mm` +
+      (reg.deformavel ? ` · deslocamento médio ${reg.metricas.desloc_medio_mm} mm (máx. ${reg.metricas.desloc_max_mm}) · jacobiano ${reg.metricas.jacobiano_min}–${reg.metricas.jacobiano_max}` : "") : "") +
+    (q ? `<br>Correlação ${q.antes.ncc} → <b>${q.depois.ncc}</b> · erro médio ${q.antes.mae_hu} → <b>${q.depois.mae_hu}</b> HU` : "") +
+    ((r.avisos || []).length ? `<br><span class="falha">${r.avisos.map(esc).join("<br>")}</span>` : "");
+  $("#fu-est").innerHTML = (r.estruturas || []).map(n => `<option>${esc(n)}</option>`).join("");
+}
+function recarregarFusao() { E.fusaoV = (E.fusaoV || 0) + 1; E.imgs = {}; carregarCortes(); }
+document.addEventListener("DOMContentLoaded", () => {
+  if (!$("#sec-fusao")) return;
+  E.fusaoAlfa = 0.5;
+  $("#b-fu-carregar").onclick = () => tentar(async () => {
+    mostrarFusao(await api("POST", `/api/${E.sid}/fusao/carregar`, { pasta: $("#fu-pasta").value.trim() }, "Lendo a TC secundária…"));
+    recarregarFusao();
+  });
+  $("#b-fu-reg").onclick = () => tentar(async () => {
+    const t = acompanharProgresso();
+    try { mostrarFusao(await api("POST", `/api/${E.sid}/fusao/registrar`, { modo: $("#fu-modo").value, sigma_campo_mm: +$("#fu-sigma").value },
+      "Registrando as TCs (pode levar 1–3 min)…")); } finally { clearInterval(t); }
+    if (!$("#fu-ver").value) $("#fu-ver").value = "xadrez";
+    E.fusaoVer = $("#fu-ver").value; recarregarFusao();
+  });
+  $("#fu-ver").onchange = () => { E.fusaoVer = $("#fu-ver").value; recarregarFusao(); };
+  $("#fu-alfa").onchange = () => { E.fusaoAlfa = +$("#fu-alfa").value; if (E.fusaoVer === "mistura") recarregarFusao(); };
+  $("#b-fu-prop").onclick = () => tentar(async () => {
+    const nomes = Array.from($("#fu-est").selectedOptions).map(o => o.value);
+    const r = await api("POST", `/api/${E.sid}/fusao/propagar`, { nomes }, "Propagando estruturas…");
+    atualizar(r.resumo); if (typeof desenharTudo === "function") desenharTudo();
+    aviso(`${r.propagadas.length} estrutura(s) propagada(s): ` + r.propagadas.map(p => `${p.nome} (${p.volume_secundaria_cc} → ${p.volume_principal_cc} cm³)`).join(", ") +
+      ((r.avisos || []).length ? " · " + r.avisos.join("; ") : "") + " — revise os contornos.", true);
+  });
 });

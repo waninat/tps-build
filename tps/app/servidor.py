@@ -448,6 +448,57 @@ def imrt_objetivos(sid: str, refazer: bool = False, sitio: str = "", u: dict = D
         return _s(sid).objetivos_imrt_sugeridos(refazer, sitio or None)
 
 
+@app.get("/api/{sid}/fusao")
+def fusao_estado(sid: str, u: dict = Depends(usuario)):
+    from tps.app import fusao as FU
+    return FU.estado(_s(sid))
+
+
+@app.post("/api/{sid}/fusao/{acao}")
+def fusao_acao(sid: str, acao: str, d: dict = Body(default={}), u: dict = Depends(usuario)):
+    """TC secundária: carregar, registrar (rígido/deformável), propagar estruturas, remover. SRS-IMG-040."""
+    from tps.app import fusao as FU
+    s = _s(sid)
+
+    def prog(msg):
+        s.progresso = msg
+    with TRAVA:
+        try:
+            if acao == "carregar":
+                return FU.carregar(s, str(d.get("pasta", "")))
+            if acao == "registrar":
+                try:
+                    r = FU.registrar(s, d.get("modo", "deformavel"), bool(d.get("rigido_inicial", True)),
+                                     d.get("niveis_mm"), d.get("iteracoes"), float(d.get("sigma_campo_mm", 4.0)), prog)
+                finally:
+                    s.progresso = None
+                auditar(u, "fusao_registro", s, modo=d.get("modo", "deformavel"))
+                return r
+            if acao == "propagar":
+                r = FU.propagar(s, d.get("nomes") or None, str(d.get("sufixo", "_def"))[:8] or "_def",
+                                float(d.get("suavizar_mm", 1.5)))
+                return {**r, "resumo": s.resumo()}
+            if acao == "remover":
+                s.secundaria = None
+                return FU.estado(s)
+        except FU.ErroFusao as e:
+            raise ErroUsuario(str(e)) from e
+    raise ErroUsuario(f"Ação de fusão desconhecida: {acao}")
+
+
+@app.get("/api/{sid}/fusao_corte/{vista}/{idx}.png")
+def fusao_corte(sid: str, vista: str, idx: int, modo: str = "mistura", alfa: float = 0.5, janela: float = 400,
+                nivel: float = 40, u: dict = Depends(usuario)):
+    from tps.app import fusao as FU
+    if vista not in ("axial", "coronal", "sagital") or modo not in ("mistura", "xadrez", "diferenca", "secundaria"):
+        raise ErroUsuario("vista ou modo inválido")
+    try:
+        png = FU.imagem(_s(sid), vista, idx, modo, alfa, janela, nivel)
+    except FU.ErroFusao as e:
+        raise ErroUsuario(str(e)) from e
+    return Response(png, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/{sid}/copiloto")
 def copiloto(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     """Copiloto com o Claude: conversa sobre o plano e usa as ferramentas do TPS (só no rascunho)."""

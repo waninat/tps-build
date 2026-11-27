@@ -341,6 +341,19 @@ def segmentos_por_trechos(campo: Campo, colim: Colimacao, trechos: dict, jy, op:
                      "jaw_y": list(s.jaw_y), "peso": 1.0, "origem": "blindagem"})
     for sg in segs:
         sg["peso"] = (peso if peso is not None else 1.0) / (1.0 if peso is not None else len(segs))
+    # sobreposição entre segmentos (MLCi: lâminas recuadas pela não-interdigitação) recebe a fluência duas vezes
+    larg = np.diff(colim.limites_laminas)
+    sob = 0.0
+    for p_ in range(len(segs)):
+        for q_ in range(p_ + 1, len(segs)):
+            a1, b1 = np.asarray(segs[p_]["mlc_a"]), np.asarray(segs[p_]["mlc_b"])
+            a2, b2 = np.asarray(segs[q_]["mlc_a"]), np.asarray(segs[q_]["mlc_b"])
+            dentro = (np.asarray(colim.limites_laminas[1:]) > jy[0]) & (np.asarray(colim.limites_laminas[:-1]) < jy[1])
+            ov = np.clip(np.minimum(b1, b2) - np.maximum(a1, a2) - colim.gap_minimo_mm, 0, None) * dentro
+            sob += float((ov * larg).sum()) / 100.0
+    if sob > 0.5:
+        avisos.append(f"{sob:.1f} cm² abertos em dois segmentos (dose dobrada ali): confira o ponto quente ou "
+                      "gire o colimador")
     return segs, avisos
 
 

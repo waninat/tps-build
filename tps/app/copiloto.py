@@ -441,7 +441,8 @@ class Ferramentas:
         spec.setdefault("alvo", c.alvo_conformado or self.s.plano.prescricao.estrutura_alvo)
         bl = [b for b in spec.get("blindagens") or [] if b.get("nome") != e["estrutura"]]
         bl.append({"nome": e["estrutura"], "margem": float(e.get("margem_mm") or 0)})
-        spec.update({"nome": c.nome, "nome_antigo": c.nome, "blindagens": bl, "peso": c.peso,
+        spec.setdefault("peso", c.peso / max(1, len(c.segmentos_blindagem or [])))
+        spec.update({"nome": c.nome, "nome_antigo": c.nome, "blindagens": bl,
                      "prioridade_alvo": bool(e.get("prioridade_alvo", True))})
         r = self.s.salvar_campo(spec)
         return {"campo": c.nome, "avisos": r["avisos"], "segmentos": r["campo"]["n_segmentos"]}
