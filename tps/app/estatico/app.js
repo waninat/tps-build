@@ -979,10 +979,14 @@ function irPara(xyz) {
   E.idx.axial = idxDaPos("axial", xyz[2]); E.idx.coronal = idxDaPos("coronal", xyz[1]); E.idx.sagital = idxDaPos("sagital", xyz[0]);
   carregarCortes();
 }
+function chaveCorte(vista, i) {               // a fusão (TC secundária) tem a sua própria imagem em cache
+  const fu = E.fusaoVer || "";
+  return `${vista}:${i}` + (fu ? `:${fu}:${E.fusaoAlfa}:${E.fusaoV || 0}` : "");
+}
 function carregarCortes() { for (const v of Object.keys(VISTAS)) carregarCorte(v); }
 function carregarCorte(vista) {
   if (!E.sid) return;
-  const fu = E.fusaoVer || "", i = E.idx[vista], chave = `${vista}:${i}` + (fu ? `:${fu}:${E.fusaoAlfa}:${E.fusaoV || 0}` : "");
+  const fu = E.fusaoVer || "", i = E.idx[vista], chave = chaveCorte(vista, i);
   if (!E.imgs[chave]) {
     const img = new Image();
     img.onload = () => desenharCorte(vista);
@@ -1036,7 +1040,7 @@ function desenharCorte(vista) {
   g.fillStyle = "#000"; g.fillRect(0, 0, w, h);
   if (!E.resumo || !E.resumo.ct) return;
   const T = transf(vista, w, h), i = E.idx[vista];
-  let img = E.imgs[`${vista}:${i}`];
+  let img = E.imgs[chaveCorte(vista, i)];
   if (img && img.complete && img.naturalWidth) E.ultImg = { ...(E.ultImg || {}), [vista]: { i, img } };
   else if (E.ultImg && E.ultImg[vista] && E.ultImg[vista].i === i) img = E.ultImg[vista].img;
   if (img && img.complete && img.naturalWidth) {
@@ -2130,7 +2134,7 @@ function mostrarFusao(r) {
     ((r.avisos || []).length ? `<br><span class="falha">${r.avisos.map(esc).join("<br>")}</span>` : "");
   $("#fu-est").innerHTML = (r.estruturas || []).map(n => `<option>${esc(n)}</option>`).join("");
 }
-function recarregarFusao() { E.fusaoV = (E.fusaoV || 0) + 1; E.imgs = {}; carregarCortes(); }
+function recarregarFusao() { E.fusaoV = (E.fusaoV || 0) + 1; E.ultImg = {}; carregarCortes(); }
 document.addEventListener("DOMContentLoaded", () => {
   if (!$("#sec-fusao")) return;
   E.fusaoAlfa = 0.5;
