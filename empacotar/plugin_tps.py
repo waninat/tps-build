@@ -8,7 +8,7 @@ import sys
 from nuitka.plugins.PluginBase import NuitkaPluginBase
 
 NOSSOS = {"tps", "tps_app"}
-NUMBA = {"tps.engine.ccc", "tps.compare.gamma"}
+NUMBA = {"tps.engine.ccc", "tps.compare.gamma", "tps.mc.transporte"}
 
 
 class TPSPlugin(NuitkaPluginBase):
