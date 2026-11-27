@@ -526,6 +526,17 @@ def _anonimo(texto: str, sessao) -> str:
     return C.anonimizar(texto, getattr(sessao, "paciente", None))
 
 
+def _sem_raciocinio_antigo(msgs: list) -> None:
+    """Tira os blocos de raciocínio (thinking) dos pedidos anteriores. A API só exige esses blocos, intactos, dentro
+    do pedido em andamento (entre as chamadas de ferramenta); reenviados em pedidos seguintes — e depois de a conversa
+    ser encurtada — a assinatura deles não confere ("Invalid signature in thinking block … different conversation")."""
+    for m in msgs:
+        if m.get("role") != "assistant" or not isinstance(m.get("content"), list):
+            continue
+        cont = [b for b in m["content"] if not (isinstance(b, dict) and b.get("type") in ("thinking", "redacted_thinking"))]
+        m["content"] = cont or [{"type": "text", "text": "(sem texto)"}]
+
+
 def conversar(sessao, texto: str, progresso=None, novo: bool = False, somente_leitura: bool = False) -> dict:
     """Um pedido do usuário ao copiloto: o Claude lê, age e responde. A conversa fica na sessão."""
     cfg = C.config()
@@ -534,6 +545,8 @@ def conversar(sessao, texto: str, progresso=None, novo: bool = False, somente_le
     if novo or "_copiloto_msgs" not in sessao.__dict__:
         sessao.__dict__["_copiloto_msgs"] = []
     msgs = sessao.__dict__["_copiloto_msgs"]
+    _sem_raciocinio_antigo(msgs)
+    n0 = len(msgs)
     msgs.append({"role": "user", "content": _anonimo(texto, sessao)})
     cli = C._cliente(cfg["chave"])
     fer = Ferramentas(sessao)
@@ -544,8 +557,12 @@ def conversar(sessao, texto: str, progresso=None, novo: bool = False, somente_le
     for volta in range(MAX_VOLTAS):
         if progresso:
             progresso(f"Copiloto trabalhando… ({volta + 1})")
-        r = cli.messages.create(model=cfg["modelo"], max_tokens=6000, system=SISTEMA, tools=ferramentas,
-                                messages=msgs)
+        try:
+            r = cli.messages.create(model=cfg["modelo"], max_tokens=6000, system=SISTEMA, tools=ferramentas,
+                                    messages=msgs)
+        except Exception:
+            del msgs[n0:]                     # o pedido que falhou não fica pela metade na conversa
+            raise
         u = getattr(r, "usage", None)
         if u is not None:
             uso["entrada"] += int(getattr(u, "input_tokens", 0) or 0)

@@ -133,3 +133,29 @@ def test_aplicar_a_todos_os_campos(cli):
     pesos = {cp["nome"]: cp["spec"]["peso"] for cp in r["plano"]["campos"]}
     assert pesos["G090"] == pytest.approx(1.1) and pesos["G000"] == pytest.approx(1.0)   # cada um mantém o peso
     assert {cp["nome"]: cp["gantry"] for cp in r["plano"]["campos"]}["G270"] == 270
+
+
+def test_raciocinio_de_pedidos_anteriores_nao_volta(cli, monkeypatch):
+    """Os blocos thinking de pedidos anteriores saem do histórico (a assinatura deles não vale fora do pedido)."""
+    from tps.planejamento import assistente_claude as C
+    c, sid, _ = cli
+    _ok(c.post("/api/claude", json={"chave": "sk-ant-teste-9999", "senha": SENHA}))
+    pensar = {"type": "thinking", "thinking": "hmm", "signature": "abc"}
+    falso = _Falso([[pensar, _tu("t1", "ler_plano", {})], [pensar, {"type": "text", "text": "um"}],
+                    [{"type": "text", "text": "dois"}]])
+    monkeypatch.setattr(C, "_cliente", lambda chave: falso)
+    _ok(c.post(f"/api/{sid}/copiloto", json={"texto": "primeiro", "novo": True}))
+    # dentro do pedido, o thinking vai intacto junto do tool_use
+    assert any(b.get("type") == "thinking" for m in falso.chamadas[1]["messages"] if m["role"] == "assistant"
+               for b in m["content"])
+    _ok(c.post(f"/api/{sid}/copiloto", json={"texto": "segundo"}))
+    hist = falso.chamadas[-1]["messages"]
+    assert not any(isinstance(m["content"], list) and any(b.get("type") == "thinking" for b in m["content"])
+                   for m in hist if m["role"] == "assistant")
+    # um pedido que falha não deixa a conversa pela metade
+    falso.roteiro = []
+    assert c.post(f"/api/{sid}/copiloto", json={"texto": "terceiro"}).status_code == 400
+    falso.roteiro = [[{"type": "text", "text": "ok"}]]
+    _ok(c.post(f"/api/{sid}/copiloto", json={"texto": "quarto"}))
+    assert [m["content"] for m in falso.chamadas[-1]["messages"] if m["role"] == "user"
+            and isinstance(m["content"], str)][-2:] == ["segundo", "quarto"]
