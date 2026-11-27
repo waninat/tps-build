@@ -393,6 +393,7 @@ function ligar() {
     const r = $("#c-modo").value === "retangular";
     $("#c-conformado").classList.toggle("oculto", r); $("#c-retangular").classList.toggle("oculto", !r);
   };
+  $("#b-campo-todos").onclick = () => tentar(aplicarATodos);
   $("#b-campo").onclick = () => tentar(salvarCampo);
   $("#b-campo-novo").onclick = () => { E.campoSel = null; preencherForm(null); listarCampos(); };
   $("#b-campo-rem").onclick = () => tentar(async () => {
@@ -762,6 +763,22 @@ async function salvarCampo() {
   E.campoSel = r.campo_salvo.campo.nome;
   atualizar(r);
   (r.campo_salvo.avisos || []).forEach(a => aviso(a, true));
+}
+
+async function aplicarATodos() {
+  const p = E.resumo && E.resumo.plano;
+  const estaticos = p ? p.campos.filter(c => !c.campo_pai && c.arco_fim == null) : [];
+  if (!estaticos.length) throw new Error("Crie os campos primeiro (ex.: arranjo Caixa 4)");
+  const sp = specDoForm();
+  delete sp.nome; delete sp.nome_antigo; delete sp.gantry; delete sp.colimador; delete sp.mesa; delete sp.peso;
+  const bl = (sp.blindagens || []).map(b => `${b.nome} (${b.margem} mm)`).join(", ");
+  if (!confirm(`Aplicar a ${estaticos.length} campo(s): alvo ${sp.alvo}, margens ${sp.margem.x1}/${sp.margem.x2}/${sp.margem.y1}/${sp.margem.y2} mm, ` +
+    `ponto de encontro ${sp.ponto_encontro}` + (bl ? `, blindagens ${bl}` : "") + (sp.otimizar_colimador ? ", colimador otimizado" : "") + "?")) return;
+  const r = await api("POST", `/api/${E.sid}/campos/todos`, { spec: sp }, `Ajustando ${estaticos.length} campos…`);
+  atualizar(r);
+  const a = r.ajuste_todos;
+  aviso(`Ajustados: ${a.campos.join(", ")}` + (a.erros.length ? ` · falhou: ${a.erros.join("; ")}` : ""), !a.erros.length);
+  (a.avisos || []).slice(0, 6).forEach(x => aviso(x, true));
 }
 
 async function arranjo(tipo) {

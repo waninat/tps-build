@@ -116,3 +116,20 @@ def test_rascunho_de_maquina(cli):
     assert "rascunho" in r["pasta"]
     with pytest.raises(ValueError):
         CP.criar_rascunho_maquina({})
+
+
+def test_aplicar_a_todos_os_campos(cli):
+    c, sid, _ = cli
+    _ok(c.post(f"/api/{sid}/plano", json={"rotulo": "TODOS", "dose_total": 50, "fracoes": 25, "alvo": "PTV_fantoma"}))
+    for g in (0, 90, 180, 270):
+        _ok(c.post(f"/api/{sid}/campo", json={"gantry": g, "peso": 1.0 + g / 900}))
+    r = _ok(c.post(f"/api/{sid}/campos/todos", json={"spec": {
+        "alvo": "PTV_fantoma", "margem": {"x1": 7, "x2": 7, "y1": 7, "y2": 7}, "ponto_encontro": "meio",
+        "blindagens": [{"nome": "Osso_inserto", "margem": 3}], "otimizar_colimador": True}}))
+    assert r["ajuste_todos"]["campos"] == ["G000", "G090", "G180", "G270"] and not r["ajuste_todos"]["erros"]
+    for cp in r["plano"]["campos"]:
+        assert cp["spec"]["ponto_encontro"] == "meio" and cp["spec"]["blindagens"][0]["nome"] == "Osso_inserto"
+        assert cp["spec"]["otimizar_colimador"] and cp["spec"]["margem"]["x1"] == 7
+    pesos = {cp["nome"]: cp["spec"]["peso"] for cp in r["plano"]["campos"]}
+    assert pesos["G090"] == pytest.approx(1.1) and pesos["G000"] == pytest.approx(1.0)   # cada um mantém o peso
+    assert {cp["nome"]: cp["gantry"] for cp in r["plano"]["campos"]}["G270"] == 270

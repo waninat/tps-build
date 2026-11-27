@@ -356,3 +356,13 @@ def abertura_analitica(us, du, vs, valid, a, b, t_row, jy0, jy1, usa_jy, jx0, jx
                 fx = _cobertura(jx0, jx1, us[j], du)
                 T *= fx + (1.0 - fx) * t_jaw
             out[i, j] = T * fy
+
+
+# uma chamada paralela do numba por vez no processo (tps.engine.paralelo)
+from tps.engine.paralelo import serializado  # noqa: E402
+
+terma_volume = serializado(terma_volume)
+radiological_depth = serializado(radiological_depth)
+terma_hybrid = serializado(terma_hybrid)
+_transport_direction = serializado(_transport_direction)
+_accumulate = serializado(_accumulate)

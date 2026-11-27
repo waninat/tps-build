@@ -438,6 +438,16 @@ def isocentro(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     return s.resumo()
 
 
+@app.post("/api/{sid}/campos/todos")
+def campos_todos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    """Mesmo ajuste (margem, blindagens, colimador…) em todos os campos 3D."""
+    s = _s(sid)
+    with TRAVA:
+        r = s.aplicar_a_todos(d.get("spec") or {}, d.get("campos") or None)
+    auditar(u, "campos_ajustados", s, campos=r["campos"])
+    return {**s.resumo(), "ajuste_todos": r}
+
+
 @app.post("/api/{sid}/campo")
 def campo(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     s = _s(sid)

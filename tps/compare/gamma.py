@@ -207,3 +207,9 @@ def gamma_3d(axes_ref, dose_ref, axes_eval, dose_eval, dose_pct: float = 3.0, dt
     crit = f"{dose_pct:g}%/{dta_mm:g} mm {'local' if local else 'global'}, limiar {cutoff_pct:g}%"
     return GammaResult(crit, rate, int(g.size), out, float(np.mean(g)) if g.size else np.nan,
                        float(np.percentile(g, 95)) if g.size else np.nan)
+
+
+# uma chamada paralela do numba por vez no processo (tps.engine.paralelo)
+from tps.engine.paralelo import serializado  # noqa: E402
+
+_gamma_pontos = serializado(_gamma_pontos)

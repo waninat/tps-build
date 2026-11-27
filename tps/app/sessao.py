@@ -856,6 +856,38 @@ class Sessao:
         self.avisos = avisos
         return {"campo": self._campo_json(c), "avisos": avisos}
 
+    def aplicar_a_todos(self, spec: dict, campos: list[str] | None = None) -> dict:
+        """O mesmo ajuste (alvo, margem, ponto de encontro, blindagens, otimização do colimador, modo) em todos os
+        campos estáticos principais (ou nos `campos` dados); cada campo mantém gantry, mesa, peso e nome (e o
+        colimador, se não for otimizar)."""
+        self._exigir_plano()
+        self.plano._exigir_rascunho()
+        chaves = ("modo", "alvo", "margem", "ponto_encontro", "blindagens", "otimizar_colimador", "prioridade_alvo",
+                  "folga_jaw", "blindagem_meio", "x1", "x2", "y1", "y2")
+        alvos = [c for c in self.plano.campos if c.campo_pai is None and not c.e_arco
+                 and (not campos or c.nome in campos)]
+        if not alvos:
+            raise ErroUsuario("Nenhum campo estático para ajustar")
+        feitos, avisos, erros = [], [], []
+        for c in list(alvos):
+            base = dict(c.__dict__.get("_spec") or {})
+            base.update({"gantry": c.gantry, "colimador": c.colimador, "mesa": c.mesa,
+                         "peso": base.get("peso", c.peso / max(1, len(c.segmentos_blindagem or [])))})
+            base.update({k: spec[k] for k in chaves if k in spec})
+            base.update({"nome": c.nome, "nome_antigo": c.nome})
+            try:
+                r = self.salvar_campo(base)
+                feitos.append(c.nome)
+                avisos += r["avisos"]
+            except ErroUsuario as e:
+                erros.append(f"{c.nome}: {e}")
+        self.avisos = avisos + erros
+        self._registrar(f"Ajuste aplicado a {len(feitos)} campo(s): {', '.join(feitos)}"
+                        + (f"; falhou em {len(erros)}" if erros else ""))
+        if not feitos:
+            raise ErroUsuario("; ".join(erros))
+        return {"campos": feitos, "avisos": avisos, "erros": erros}
+
     # ---------------------------------------------------------------- campos de localização (setup)
     def adicionar_setup(self, nome: str, gantry: float, x_cm: float = 20.0, y_cm: float = 20.0,
                         colimador: float = 0.0, mesa: float = 0.0) -> dict:
@@ -1250,13 +1282,18 @@ class Sessao:
         e = self._editavel(nome)
         cx, cy, cz = self.ct.axes()
         self._guardar_desfazer(e)
-        polys = []
+        corpo = K.corpo_3d(self.ct.hu, float(limiar_hu), (float(self.ct.spacing[2]), float(self.ct.spacing[1]),
+                                                          float(self.ct.spacing[0])))
+        polys, vazios = [], 0
         for k, z in enumerate(cz):
-            polys += K.poligonos_de_mascara(K.corpo_automatico(self.ct.hu[k], float(limiar_hu)), cx, cy, float(z),
-                                            suavizar=0.7, min_pontos=8)
+            if not corpo[k].any():
+                vazios += 1
+                continue
+            polys += K.sem_aninhados(K.poligonos_de_mascara(corpo[k], cx, cy, float(z), suavizar=0.7, min_pontos=8))
         e.contornos = polys
         self._depois_de_editar(e)
-        return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1)}
+        return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1),
+                "cortes_sem_corpo": vazios}
 
     def operar_contorno(self, nome: str, operacao: str, outra: str, margem_mm: float = 0.0) -> dict:
         """Booleana no lugar, na resolução do CT: nome = nome − outra (subtrair), ∪ (unir) ou ∩ (intersecao), com
@@ -1306,7 +1343,8 @@ class Sessao:
         self._depois_de_editar(e)
         txt = {"subtrair": "−", "unir": "∪", "intersecao": "∩"}[operacao]
         self._registrar(f"{nome} = {nome} {txt} {outra}{f' (+{mg:g} mm)' if mg else ''}")
-        return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1)}
+        return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1),
+                "cortes_sem_corpo": vazios}
 
     def pos_processar_contorno(self, nome: str, suavizar_mm: float = 2.0, fechar_mm: float = 0.0, abrir_mm: float = 0.0,
                                preencher: bool = True, ilhas_cc: float = 0.5, so_maior: bool = False) -> dict:

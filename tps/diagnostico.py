@@ -74,5 +74,45 @@ def ativar_registro_de_falhas(pasta) -> None:
         _falhas.write(f"\n===== {dt.datetime.now():%Y-%m-%d %H:%M:%S}  TPS {__version__} iniciado  "
                       f"(Python {sys.version.split()[0]}, {os.cpu_count()} núcleos, memória {total:.1f} GB)\n")
         faulthandler.enable(file=_falhas, all_threads=True)
+        _ganchos()
     except Exception:  # noqa: BLE001
         pass
+
+
+def _escrever(txt: str) -> None:
+    try:
+        if _falhas is not None:
+            _falhas.write(f"[{dt.datetime.now():%Y-%m-%d %H:%M:%S}] {txt}\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _ganchos() -> None:
+    """Exceções não tratadas (inclusive em linhas paralelas), memória quase no fim e o fim normal do programa vão para
+    falhas.log — assim dá para distinguir "fechou por falha" de "fechou por memória" de "foi fechado"."""
+    import atexit
+    import threading
+    import traceback
+
+    def exc(tipo, valor, tb):
+        _escrever("EXCEÇÃO NÃO TRATADA:\n" + "".join(traceback.format_exception(tipo, valor, tb)))
+
+    def exc_thread(a):
+        _escrever(f"EXCEÇÃO NÃO TRATADA na linha {getattr(a.thread, 'name', '?')}:\n"
+                  + "".join(traceback.format_exception(a.exc_type, a.exc_value, a.exc_traceback)))
+    sys.excepthook = exc
+    threading.excepthook = exc_thread
+    atexit.register(lambda: _escrever("encerrado normalmente"))
+
+    def vigia():
+        alerta = False
+        while True:
+            time.sleep(5)
+            livre, total, proc = memoria()
+            if 0 <= livre < 0.6 and not alerta:
+                _escrever(f"MEMÓRIA QUASE NO FIM: livre {livre:.2f}/{total:.1f} GB, TPS {proc:.1f} GB")
+                registrar("memória quase no fim")
+                alerta = True
+            elif livre > 1.0:
+                alerta = False
+    threading.Thread(target=vigia, daemon=True, name="vigia-memoria").start()

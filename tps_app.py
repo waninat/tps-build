@@ -68,6 +68,11 @@ def autoteste() -> int:
             r = MC.transportar(g, [seg], mq.modelo, incerteza_pct=10, historias_max=300_000, historias_min=300_000)
             bom = bool(np.isfinite(r.dose).all() and r.dose.max() > 0)
             print("MC", "ok" if bom else "FALHOU", f"{r.historias} histórias")
+            try:
+                import numba
+                print("numba threading layer:", numba.threading_layer())
+            except Exception as e:  # noqa: BLE001
+                print("numba threading layer: ?", e)
             ok = ok and bom
         except Exception as e:  # noqa: BLE001
             print("AUTOTESTE MC FALHOU:", e)

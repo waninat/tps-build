@@ -316,3 +316,9 @@ def lote(edep, n_hist, semente, eta, fpar, fcol, frad, x0cm, mu_max_eta, origem,
                 continue
             _historia(edep[b], x + u * d, y + v * d, z + w * d, u, v, w, e, eta, fpar, fcol, frad, x0cm,
                       mu_max_eta, origem, passo, n3, tabs, lne0, dlne, cortes, f_passo)
+
+
+# uma chamada paralela do numba por vez no processo (tps.engine.paralelo)
+from tps.engine.paralelo import serializado  # noqa: E402
+
+lote = serializado(lote)

@@ -131,9 +131,55 @@ def corpo_automatico(hu2d: np.ndarray, limiar_hu: float = -350.0) -> np.ndarray:
     return ndimage.binary_fill_holes(m)
 
 
-def corpo_3d(hu: np.ndarray, limiar_hu: float = -350.0) -> np.ndarray:
-    """BODY em todos os cortes [nz, ny, nx]."""
-    return np.stack([corpo_automatico(hu[k], limiar_hu) for k in range(hu.shape[0])])
+def corpo_3d(hu: np.ndarray, limiar_hu: float = -350.0, passo_mm: tuple | None = None) -> np.ndarray:
+    """BODY em todos os cortes [nz, ny, nx], conexo em 3D.
+
+    Corte a corte, o maior componente perdia uma das pernas (e, nos pés, podia pegar a mesa). Aqui: limiar + abertura
+    leve por corte; componentes 3D; fica o maior (o paciente — as pernas se ligam na pelve) e os outros grandes
+    (≥ 5% dele: pernas/braços que saem do campo de visão), menos os finos e largos (mesa, colchão: espessura < 2,5
+    cm); buracos preenchidos por corte (ar intestinal e pulmão ficam dentro)."""
+    nz = hu.shape[0]
+    m = np.empty(hu.shape, bool)
+    for k in range(nz):
+        m[k] = ndimage.binary_opening(hu[k] > limiar_hu, iterations=2)
+    lab, n = ndimage.label(m, structure=ndimage.generate_binary_structure(3, 1))
+    if n == 0:
+        return m
+    tam = np.bincount(lab.ravel(), minlength=n + 1)
+    tam[0] = 0
+    maior = int(np.argmax(tam))
+    dy = float(passo_mm[1]) if passo_mm else 1.0
+    manter = [maior]
+    objs = ndimage.find_objects(lab)
+    for i in np.argsort(tam)[::-1][1:20]:
+        if i == 0 or tam[i] < 0.05 * tam[maior]:
+            break
+        sl = objs[i - 1]
+        espessura_mm = (sl[1].stop - sl[1].start) * dy
+        if espessura_mm >= 25.0:                          # mesa/colchão: placas finas — fora
+            manter.append(int(i))
+    m = np.isin(lab, manter)
+    del lab
+    for k in range(nz):
+        if m[k].any():
+            m[k] = ndimage.binary_fill_holes(m[k])
+    return m
+
+
+def sem_aninhados(polys: list) -> list:
+    """Tira os polígonos que estão dentro de outro do mesmo corte (contorno externo não tem furo: evita contorno
+    duplicado/encaixado no mesmo corte)."""
+    from matplotlib.path import Path as _P
+    if len(polys) < 2:
+        return polys
+    caminhos = [_P(p[:, :2]) for p in polys]
+    out = []
+    for i, p in enumerate(polys):
+        dentro = any(j != i and caminhos[j].contains_point(p[0, :2]) and len(polys[j]) >= len(p)
+                     for j in range(len(polys)))
+        if not dentro:
+            out.append(p)
+    return out
 
 
 def pulmoes_automaticos(hu: np.ndarray, corpo: np.ndarray, x: np.ndarray, y: np.ndarray, dz_mm: float,
