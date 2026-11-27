@@ -1343,8 +1343,7 @@ class Sessao:
         self._depois_de_editar(e)
         txt = {"subtrair": "−", "unir": "∪", "intersecao": "∩"}[operacao]
         self._registrar(f"{nome} = {nome} {txt} {outra}{f' (+{mg:g} mm)' if mg else ''}")
-        return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1),
-                "cortes_sem_corpo": vazios}
+        return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1)}
 
     def pos_processar_contorno(self, nome: str, suavizar_mm: float = 2.0, fechar_mm: float = 0.0, abrir_mm: float = 0.0,
                                preencher: bool = True, ilhas_cc: float = 0.5, so_maior: bool = False) -> dict:
