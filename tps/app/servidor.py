@@ -258,7 +258,8 @@ def planos(u: dict = Depends(usuario)):
 def caso_ct(d: dict = Body(...), u: dict = Depends(usuario)):
     s = Sessao()
     with TRAVA:
-        s.carregar_ct(d["pasta"], d.get("curva", "siemens_spirit_oncomed"), float(d.get("voxel_mm", 3.0)))
+        s.carregar_ct(d["pasta"], d.get("curva", "siemens_spirit_oncomed"), float(d.get("voxel_mm", 3.0)),
+                      sem_rtstruct=True)
     SESSOES[s.id] = s
     auditar(u, "caso_aberto", s, pasta=d["pasta"])
     return s.resumo()
@@ -288,6 +289,98 @@ def caso_fantoma(d: dict = Body(...), u: dict = Depends(usuario)):
     SESSOES[s.id] = s
     auditar(u, "fantoma_criado", s, tipo=d.get("tipo"))
     return s.resumo()
+
+
+# ------------------------------------------------------------------------------------------ automação (SRS-AUT)
+@app.on_event("startup")
+def _iniciar_automacao():
+    try:
+        from tps.app import automacao
+        automacao.iniciar()
+    except Exception as e:  # noqa: BLE001
+        print(f"Automação não iniciou: {e}", flush=True)
+
+
+@app.get("/api/automacao")
+def automacao_estado(u: dict = Depends(usuario)):
+    from tps.app import automacao
+    return automacao.estado()
+
+
+@app.post("/api/automacao")
+def automacao_config(d: dict = Body(...), u: dict = Depends(usuario)):
+    from tps.app import automacao
+    banco().assinar(u, d.pop("senha", ""), {"admin", "fisico"}, "configurar a automação")
+    try:
+        r = automacao.salvar_config(d)
+    except ValueError as e:
+        raise ErroUsuario(str(e)) from e
+    auditar(u, "automacao_configurada", None, ativo=r["config"]["ativo"], plano=r["config"]["plano"]["ativo"])
+    return r
+
+
+@app.get("/api/casos")
+def casos_lista(u: dict = Depends(usuario)):
+    from tps.app import automacao
+    return automacao.casos()
+
+
+@app.get("/api/casos/{cid}")
+def caso_detalhe(cid: str, u: dict = Depends(usuario)):
+    from tps.app import automacao
+    try:
+        return automacao.caso(cid)
+    except ValueError as e:
+        raise ErroUsuario(str(e)) from e
+
+
+@app.post("/api/casos/{cid}/abrir")
+def caso_abrir_recebido(cid: str, d: dict = Body(default={}), u: dict = Depends(usuario)):
+    """Abre o caso recebido: o plano automático indicado (ou só a TC com as estruturas mais recentes)."""
+    from tps.app import automacao
+    try:
+        c = automacao.caso(cid)
+    except ValueError as e:
+        raise ErroUsuario(str(e)) from e
+    s = Sessao()
+    arq = next((p.get("arquivo") for p in c.get("planos") or [] if p.get("rotulo") == d.get("plano") and p.get("arquivo")),
+               None)
+    with TRAVA:
+        if arq:
+            s.abrir(arq)
+        else:
+            s.carregar_ct(c["pasta"], sem_rtstruct=True)
+    SESSOES[s.id] = s
+    auditar(u, "caso_recebido_aberto", s, caso=cid, plano=d.get("plano"))
+    return s.resumo()
+
+
+@app.post("/api/casos/{cid}/{etapa}")
+def caso_etapa(cid: str, etapa: str, u: dict = Depends(usuario)):
+    from tps.app import automacao
+    try:
+        automacao.enfileirar(etapa, cid)
+    except ValueError as e:
+        raise ErroUsuario(str(e)) from e
+    auditar(u, "caso_etapa", None, caso=cid, etapa=etapa)
+    return automacao.estado()
+
+
+@app.post("/api/{sid}/estruturas/aprovar")
+def estruturas_aprovar(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    """Aprovação das estruturas (médico/físico, com senha): grava o RTSTRUCT aprovado no caso e dispara o plano
+    automático, se ligado."""
+    from tps.app import automacao
+    s = _s(sid)
+    a = banco().assinar(u, d.get("senha", ""), PODE_APROVAR, "aprovar estruturas")
+    with TRAVA:
+        try:
+            r = automacao.aprovar_estruturas(s, a["login"], PAPEIS[a["papel"]])
+        except ValueError as e:
+            raise ErroUsuario(str(e)) from e
+        s._registrar(f"Estruturas aprovadas por {a['login']}" + (" — plano automático na fila" if r["plano_na_fila"] else ""))
+    auditar(u, "estruturas_aprovadas", s, caso=r["caso"], ptvs=[p["nome"] for p in r["ptvs"]])
+    return {**r, "resumo": s.resumo()}
 
 
 @app.post("/api/caso/abrir")
@@ -870,6 +963,15 @@ def comparar_planos(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
 def bev(sid: str, nome: str, u: dict = Depends(usuario)):
     with TRAVA:
         return _s(sid).bev(nome)
+
+
+@app.get("/api/{sid}/bev_dose/{nome}.png")
+def bev_dose(sid: str, nome: str, modo: str = "max", minimo: float = 95.0, maximo: float = 0.0, estrutura: str = "",
+             u: dict = Depends(usuario)):
+    """Dose em colorwash no BEV (máxima no raio ou no plano do isocentro)."""
+    with TRAVA:
+        return Response(_s(sid).bev_dose(nome, modo, minimo, maximo, estrutura or None), media_type="image/png",
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/{sid}/drr/{nome}.png")

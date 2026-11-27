@@ -483,6 +483,8 @@ class Ferramentas:
         return {"registrado": True}
 
     def executar(self, nome: str, entrada: dict) -> dict:
+        if getattr(self, "somente_leitura", False) and nome in ACOES:
+            return {"erro": "nesta consulta o copiloto só avalia (sem alterar o plano)"}
         f = getattr(self, nome, None)
         if f is None or nome.startswith("_") or nome not in {t["name"] for t in FERRAMENTAS}:
             return {"erro": f"ferramenta desconhecida {nome}"}
@@ -524,7 +526,7 @@ def _anonimo(texto: str, sessao) -> str:
     return C.anonimizar(texto, getattr(sessao, "paciente", None))
 
 
-def conversar(sessao, texto: str, progresso=None, novo: bool = False) -> dict:
+def conversar(sessao, texto: str, progresso=None, novo: bool = False, somente_leitura: bool = False) -> dict:
     """Um pedido do usuário ao copiloto: o Claude lê, age e responde. A conversa fica na sessão."""
     cfg = C.config()
     if not cfg["chave"]:
@@ -535,12 +537,14 @@ def conversar(sessao, texto: str, progresso=None, novo: bool = False) -> dict:
     msgs.append({"role": "user", "content": _anonimo(texto, sessao)})
     cli = C._cliente(cfg["chave"])
     fer = Ferramentas(sessao)
+    fer.somente_leitura = somente_leitura
+    ferramentas = [t for t in FERRAMENTAS if not (somente_leitura and t["name"] in ACOES)]
     t0, uso = time.time(), {"entrada": 0, "saida": 0}
     resposta = ""
     for volta in range(MAX_VOLTAS):
         if progresso:
             progresso(f"Copiloto trabalhando… ({volta + 1})")
-        r = cli.messages.create(model=cfg["modelo"], max_tokens=6000, system=SISTEMA, tools=FERRAMENTAS,
+        r = cli.messages.create(model=cfg["modelo"], max_tokens=6000, system=SISTEMA, tools=ferramentas,
                                 messages=msgs)
         u = getattr(r, "usage", None)
         if u is not None:

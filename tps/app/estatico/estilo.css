@@ -310,3 +310,6 @@ pre.log { background: #0a0d10; border: 1px solid var(--borda); border-radius: 4p
 #copiloto .cp-rapidos { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 8px; }
 #copiloto .cp-entrada { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--borda, #30363d); }
 #cp-txt { flex: 1; resize: vertical; }
+.linha-aprov-est { display: flex; align-items: center; gap: 6px; justify-content: space-between; margin: 2px 0 6px; }
+.tabela-casos { width: 100%; border-collapse: collapse; font-size: 12px; }
+.tabela-casos td, .tabela-casos th { border-bottom: 1px solid var(--borda, #30363d); padding: 4px 6px; vertical-align: top; text-align: left; }

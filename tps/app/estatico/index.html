@@ -12,6 +12,7 @@
     <div class="menu"><button class="menu-b">Arquivo</button><div class="menu-l">
       <button data-acao="aba:caso">Abrir caso (CT/RTSTRUCT)…</button>
       <button data-acao="abrir-plano">Abrir plano salvo…</button>
+      <button data-acao="casos">Casos recebidos (automação)…</button>
       <button data-acao="salvar" data-precisa="plano">Salvar <kbd>Ctrl+S</kbd></button>
       <hr><button data-acao="apagar-plano" data-precisa="plano">Apagar o plano atual…</button>
       <button data-acao="apagar-salvos">Apagar planos salvos…</button>
@@ -33,6 +34,7 @@
       <button data-acao="ia">Contorno automático de órgãos (TotalSegmentator)…</button>
       <button data-acao="assistente" data-precisa="plano">Assistente de objetivos (IMRT/VMAT)…</button>
       <button data-acao="claude">Assistente com Claude (configurar)…</button>
+      <button data-acao="automacao">Automação: pasta, contorno e plano automáticos…</button>
       <button data-acao="copiloto">Copiloto do plano (Claude)… <kbd>Ctrl+K</kbd></button>
       <button data-acao="aba-d:est">Estruturas e contorno</button>
       <button data-acao="aba-d:pl">Comparar / somar planos</button>
@@ -463,6 +465,10 @@
   <div class="vista" id="v-bev" data-slot="B">
     <div class="vista-topo"><b>BEV</b><select id="bev-campo"></select>
       <label class="check"><input type="checkbox" id="t-drr"> DRR</label>
+      <select id="bev-dose" title="dose em colorwash no BEV: a máxima ao longo de cada raio mostra atrás de qual lâmina está o ponto quente">
+        <option value="">sem dose</option><option value="max">dose: máx. no raio</option><option value="iso">dose: plano do iso</option></select>
+      <input id="bev-dose-min" type="number" value="100" min="0" max="150" step="1" title="mostrar a partir de (% da prescrição)" style="width:4.2em" class="oculto">
+      <select id="bev-dose-est" title="só dentro desta estrutura (vazio = corpo todo)" class="oculto"></select>
       <span id="bev-seg" class="oculto">segmento <input type="range" id="bev-seg-r" min="0" max="0" value="0"> <span id="bev-seg-t"></span></span>
       <select id="bev-ferr" title="ferramenta no BEV">
         <option value="editar">arrastar lâminas/jaws</option>
@@ -501,6 +507,8 @@
     <button class="aba-d" data-abad="reg">Registro <span id="n-avisos"></span></button>
   </div>
   <div class="painel-d" id="pd-est">
+    <div class="linha-aprov-est"><span id="est-aprov-txt" class="pequeno-txt"></span>
+      <button id="b-est-aprovar" class="pequeno" title="médico/físico: aprova as estruturas (alvos com a prescrição no nome, ex.: PTVPelve45@25); com o plano automático ligado, o plano é feito em seguida">Aprovar estruturas…</button></div>
     <ul id="lista-estruturas"></ul>
     <details class="sub" id="sec-auto"><summary>Contorno automático</summary>
       <div class="botoes">

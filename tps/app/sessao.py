@@ -161,7 +161,8 @@ class Sessao:
         self.log: list[str] = []
 
     # ================================================================== carregamento
-    def carregar_ct(self, pasta: str | Path, curva: str = "siemens_spirit_oncomed", voxel_mm: float = 3.0):
+    def carregar_ct(self, pasta: str | Path, curva: str = "siemens_spirit_oncomed", voxel_mm: float = 3.0,
+                    sem_rtstruct: bool = False):
         pasta = Path(pasta)
         if not pasta.is_dir():
             raise ErroUsuario(f"Pasta não encontrada: {pasta}")
@@ -171,25 +172,41 @@ class Sessao:
             raise ErroUsuario(str(e)) from e
         if (self.ct.patient_position or "HFS") != "HFS":
             raise ErroUsuario(f"Posição do paciente {self.ct.patient_position}: esta versão só aceita HFS")
-        rs = None
+        rs, cands = None, []
         for f in sorted(p for p in pasta.iterdir() if p.is_file()):
             try:
                 ds = pydicom.dcmread(str(f), stop_before_pixels=True, force=True)
             except Exception:
                 continue
             if getattr(ds, "Modality", "") == "RTSTRUCT":
-                rs = f
-                if str(getattr(ds, "ReferencedFrameOfReferenceSequence", [{}])[0].get("FrameOfReferenceUID", "")) \
-                        not in ("", self.ct.frame_of_reference):
-                    raise ErroUsuario("RTSTRUCT de outro referencial (FrameOfReferenceUID diferente do CT)")
-                self.paciente = {"id": str(getattr(ds, "PatientID", "")), "nome": str(getattr(ds, "PatientName", ""))}
-                break
-        if rs is None:
+                ref = getattr(ds, "ReferencedFrameOfReferenceSequence", None)
+                fr = str(ref[0].get("FrameOfReferenceUID", "")) if ref else ""
+                if fr not in ("", self.ct.frame_of_reference):
+                    continue                              # de outro referencial (ex.: outra TC na pasta)
+                aprovado = str(getattr(ds, "ApprovalStatus", "") or "").upper() == "APPROVED"
+                cands.append((aprovado, f.stat().st_mtime, f, ds))
+        if cands:                     # vários RTSTRUCT (automático, do médico…): o aprovado mais recente, senão o último
+            _, _, rs, ds = max(cands, key=lambda t: (t[0], t[1]))
+            self.paciente = {"id": str(getattr(ds, "PatientID", "")), "nome": str(getattr(ds, "PatientName", ""))}
+        elif sem_rtstruct:
+            ds0 = pydicom.dcmread(str(next(f for f in sorted(pasta.iterdir()) if f.is_file() and self._e_ct(f))),
+                                  stop_before_pixels=True, force=True)
+            self.paciente = {"id": str(getattr(ds0, "PatientID", "")), "nome": str(getattr(ds0, "PatientName", ""))}
+        else:
             raise ErroUsuario("Nenhum RTSTRUCT na pasta: exporte o CT junto com os contornos")
         self.tipo, self.pasta_ct, self.arquivo_rs = "ct", pasta, rs
         self.secundaria = None                         # fusão: TC secundária (outro caso não herda)
         self.curva = HUtoED.from_csv(curva)
-        estruturas_rs = read_rtstruct(rs)
+        estruturas_rs = read_rtstruct(rs) if rs is not None else []
+        if rs is None:                                    # TC sem contornos: BODY automático define a grade
+            from tps.planejamento import contorno as K
+            corpo = K.corpo_3d(self.ct.hu)
+            if corpo.any():
+                cx, cy, cz = self.ct.axes()
+                jj, ii = np.nonzero(corpo.any(axis=0))
+                m = 30.0
+                self._caixa_sem_rs = ((max(cx[0], cx[ii.min()] - m), min(cx[-1], cx[ii.max()] + m)),
+                                      (max(cy[0], cy[jj.min()] - m), min(cy[-1], cy[jj.max()] + m)), (cz[0], cz[-1]))
         # grade de dose só em volta do contorno externo (+3 cm para bolus e penumbra): o CT costuma ter 50 cm de
         # campo de visão e a mesa; recortar deixa o cálculo 2–3× mais rápido sem mudar a dose no paciente
         caixa = None
@@ -201,6 +218,8 @@ class Sessao:
             caixa = ((max(cx[0], pts[:, 0].min() - m), min(cx[-1], pts[:, 0].max() + m)),
                      (max(cy[0], pts[:, 1].min() - m), min(cy[-1], pts[:, 1].max() + m)),
                      (cz[0], cz[-1]))
+        if rs is None:
+            caixa = getattr(self, "_caixa_sem_rs", None)
         self.grade = calculo.grade_de_dose(self.ct, self.curva, voxel_mm, caixa)
         g = self.grade
         self.estruturas = {}
@@ -218,7 +237,10 @@ class Sessao:
                                  if q["frame_of_reference"] in ("", self.ct.frame_of_reference)]
         except Exception:  # noqa: BLE001
             self.planos_dicom = []
-        self._registrar(f"CT carregado: {pasta} ({self.ct.hu.shape[0]} cortes), RTSTRUCT {rs.name}"
+        if rs is None:
+            self.corpo_automatico("BODY")
+        self._registrar(f"CT carregado: {pasta} ({self.ct.hu.shape[0]} cortes), "
+                        f"{'RTSTRUCT ' + rs.name if rs else 'sem RTSTRUCT (BODY automático)'}"
                         + (f"; {len(self.planos_dicom)} plano(s) DICOM na pasta" if self.planos_dicom else ""))
 
     def criar_fantoma(self, tipo: str, largura: float, espessura: float, comprimento: float,
@@ -2717,6 +2739,18 @@ class Sessao:
                "isocentro": self.isocentro, "dose_atualizada": self.dose_atualizada, "avisos": self.avisos,
                "log": self.log[-30:], "planos_dicom": self.planos_dicom, "planos_sessao": self.lista_planos(),
                "dose_ref": {"fonte": self.dose_ref["fonte"], "arquivo": self.dose_ref["arquivo"]} if self.dose_ref else None}
+        if self.tipo == "ct" and self.pasta_ct is not None:          # caso recebido pela automação
+            try:
+                from tps.app import automacao
+                cid = automacao.caso_da_pasta(self.pasta_ct)
+                if cid:
+                    c = automacao.caso(cid)
+                    out["caso_auto"] = {"id": cid, "estado": c.get("estado"), "sitio": c.get("sitio"),
+                                        "estruturas_aprovadas": c.get("estruturas_aprovadas"),
+                                        "planos": [{k: p_.get(k) for k in ("rotulo", "estado", "tecnica", "hi")}
+                                                   for p_ in c.get("planos") or []]}
+            except Exception:  # noqa: BLE001
+                pass
         if self.grade is not None:
             g = self.grade
             out["grade"] = {"x": [float(g.x[0]), float(g.x[-1]), len(g.x)], "y": [float(g.y[0]), float(g.y[-1]), len(g.y)],
@@ -2953,6 +2987,54 @@ class Sessao:
                 "projecoes": proj, "segmentos": segs, "ext": ext, "tem_jaw_x": colim.tem_jaw_x,
                 "gap": colim.gap_minimo_mm, "interdigitacao": colim.interdigitacao,
                 "lamina_max": colim.lamina_max_mm, "overtravel": colim.overtravel_mm}
+
+    def bev_dose(self, nome: str, modo: str = "max", minimo_pct: float = 95.0, maximo_pct: float = 0.0,
+                 estrutura: str | None = None, n: int = 200, ext_mm: float = 200.0) -> bytes:
+        """Colorwash da dose no BEV (mesma geometria do DRR, ±ext_mm no plano do isocentro). modo "max": dose máxima
+        ao longo de cada raio dentro do corpo (ou só dentro de `estrutura`) — mostra atrás de qual lâmina está o
+        ponto quente; "iso": dose no plano perpendicular ao feixe que passa pelo isocentro. % da prescrição;
+        transparente abaixo do mínimo."""
+        import matplotlib
+        from scipy.ndimage import map_coordinates
+        if modo not in ("max", "iso"):
+            raise ErroUsuario("Modo da dose no BEV: max ou iso")
+        c = self._campo(nome)
+        total, rx, _ = self._fonte("plano")
+        rel = (total / rx * 100.0).astype(np.float32)
+        g = self.grade
+        if estrutura:
+            e = self.estruturas.get(estrutura)
+            if e is None or not e.mascara.any():
+                raise ErroUsuario(f"Estrutura {estrutura} vazia ou inexistente")
+            rel = np.where(e.mascara, rel, 0.0).astype(np.float32)
+        else:
+            rel = np.where(self._corpo(), rel, 0.0).astype(np.float32)
+        fr = beam_frame(c.gantry, c.colimador, c.mesa, c.isocentro_mm, 1000.0, self.plano.posicao_paciente)
+        uu = np.linspace(-ext_mm, ext_mm, n)
+        U, V = np.meshgrid(uu, uu[::-1])
+        P = fr.source + 1000.0 * fr.w + U[..., None] * fr.u + V[..., None] * fr.v
+
+        def amostra(q):
+            return map_coordinates(rel, [(q[..., 2] - g.z[0]) / (g.z[1] - g.z[0]), (q[..., 1] - g.y[0]) / (g.y[1] - g.y[0]),
+                                         (q[..., 0] - g.x[0]) / (g.x[1] - g.x[0])], order=1, mode="constant")
+        if modo == "iso":
+            img = amostra(P)
+        else:
+            d = P - fr.source
+            d /= np.linalg.norm(d, axis=-1, keepdims=True)
+            cantos = np.array([[x, y, z] for x in (g.x[0], g.x[-1]) for y in (g.y[0], g.y[-1]) for z in (g.z[0], g.z[-1])])
+            dist = np.linalg.norm(cantos - fr.source, axis=1)
+            passo = float(min(abs(g.x[1] - g.x[0]), abs(g.z[1] - g.z[0]) if len(g.z) > 1 else 3.0))
+            img = np.zeros((n, n), np.float32)
+            for t in np.arange(max(0.0, dist.min() - 5), dist.max() + 5, passo):
+                np.maximum(img, amostra(fr.source + t * d), out=img)
+        topo = float(maximo_pct) if maximo_pct and maximo_pct > 0 else max(float(img.max()), minimo_pct + 1.0)
+        t = np.clip((img - minimo_pct) / max(topo - minimo_pct, 1e-6), 0, 1)
+        rgba = (matplotlib.colormaps["jet"](0.35 + 0.65 * t) * 255).astype(np.uint8)
+        rgba[..., 3] = np.where(img >= minimo_pct, 150, 0).astype(np.uint8)
+        buf = io.BytesIO()
+        Image.fromarray(rgba, "RGBA").save(buf, "PNG", optimize=False, compress_level=1)
+        return buf.getvalue()
 
     def drr(self, nome: str, n: int = 256, ext_mm: float = 200.0) -> bytes:
         """Radiografia reconstruída (soma de η ao longo do raio), para conferência do campo."""

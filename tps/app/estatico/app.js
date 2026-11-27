@@ -468,6 +468,13 @@ function ligar() {
   ligarInterface();
   $("#bev-campo").onchange = () => tentar(() => carregarBev($("#bev-campo").value));
   $("#t-drr").onchange = () => tentar(() => carregarBev(E.bev && E.bev.campo.nome));
+  $("#bev-dose").onchange = () => {
+    $("#bev-dose-est").innerHTML = `<option value="">corpo</option>` + ((E.resumo && E.resumo.estruturas) || [])
+      .filter(e => e.tipo !== "EXTERNAL").map(e => `<option>${esc(e.nome)}</option>`).join("");
+    if ($("#bev-dose").value && E.resumo && !E.resumo.dose_atualizada) aviso("Calcule a dose para ver o colorwash no BEV");
+    carregarBevDose(E.bev && E.bev.campo.nome); desenharBev();
+  };
+  $("#bev-dose-min").onchange = $("#bev-dose-est").onchange = () => { carregarBevDose(E.bev && E.bev.campo.nome); desenharBev(); };
   $("#bev-seg-r").oninput = (e) => { E.bevSeg = +e.target.value; desenharBev(); };
   for (const v of ["axial", "coronal", "sagital"]) {
     const cv = $(`#v-${v} canvas`);
@@ -560,6 +567,7 @@ async function criarPlano() {
 
 function atualizar(r) {
   E.resumo = r;
+  mostrarAprovEst(r);
   const p = r.plano;
   $("#caso-nome").textContent = r.nome ? `${r.nome} ${r.paciente && r.paciente.id ? "(" + r.paciente.id + ")" : ""}` : "Caso";
   $("#estado").textContent = p ? `${p.rotulo} · ${p.estado}${r.dose_atualizada ? "" : " · dose desatualizada"}` : "sem plano";
@@ -1174,7 +1182,19 @@ async function carregarBev(nome) {
   if ($("#t-drr").checked) {
     const img = new Image(); img.onload = () => desenharBev(); img.src = `/api/${E.sid}/drr/${encodeURIComponent(nome)}.png?t=${encodeURIComponent(E.token)}&r=${Date.now()}`; E.drrImg = img;
   } else E.drrImg = null;
+  carregarBevDose(nome);
   desenharBev();
+}
+function carregarBevDose(nome) {
+  const modo = $("#bev-dose").value;
+  $("#bev-dose-min").classList.toggle("oculto", !modo); $("#bev-dose-est").classList.toggle("oculto", !modo);
+  E.bevDoseImg = null;
+  if (!modo || !nome || !E.resumo || !E.resumo.dose_atualizada) return;
+  const est = $("#bev-dose-est").value;
+  const img = new Image(); img.onload = () => desenharBev(); img.onerror = () => { E.bevDoseImg = null; };
+  img.src = `/api/${E.sid}/bev_dose/${encodeURIComponent(nome)}.png?modo=${modo}&minimo=${+$("#bev-dose-min").value || 0}` +
+    `&estrutura=${encodeURIComponent(est)}&t=${encodeURIComponent(E.token)}&r=${Date.now()}`;
+  E.bevDoseImg = img;
 }
 
 function bevT(w, h) {
@@ -1199,6 +1219,10 @@ function desenharBev() {
   if (E.drrImg && E.drrImg.complete && E.drrImg.naturalWidth) {
     const [x0, y0] = T.px(-200, 200), [x1, y1] = T.px(200, -200);
     g.globalAlpha = 0.85; g.drawImage(E.drrImg, x0, y0, x1 - x0, y1 - y0); g.globalAlpha = 1;
+  }
+  if (E.bevDoseImg && E.bevDoseImg.complete && E.bevDoseImg.naturalWidth) {   // dose (máx. no raio / plano do iso)
+    const [x0, y0] = T.px(-200, 200), [x1, y1] = T.px(200, -200);
+    g.imageSmoothingEnabled = true; g.drawImage(E.bevDoseImg, x0, y0, x1 - x0, y1 - y0);
   }
   // lâminas
   const L = T.r * 1.1;
@@ -1628,6 +1652,8 @@ async function acao(a) {
     case "ia": await janelaIA(); break;
     case "claude": await janelaClaude(); break;
     case "copiloto": abrirCopiloto(); break;
+    case "casos": await janelaCasos(); break;
+    case "automacao": await janelaAutomacao(); break;
     case "assistente": abaEsquerda("otim"); await assistente(); break;
     case "qa": abaEsquerda("aprov"); $("#sec-qa").open = true; break;
     case "auditoria": clicar("#b-auditoria"); break;
@@ -2158,4 +2184,95 @@ document.addEventListener("DOMContentLoaded", () => {
     aviso(`${r.propagadas.length} estrutura(s) propagada(s): ` + r.propagadas.map(p => `${p.nome} (${p.volume_secundaria_cc} → ${p.volume_principal_cc} cm³)`).join(", ") +
       ((r.avisos || []).length ? " · " + r.avisos.join("; ") : "") + " — revise os contornos.", true);
   });
+});
+
+// ---- automação: casos recebidos, configuração e aprovação das estruturas
+function mostrarAprovEst(r) {
+  if (!$("#est-aprov-txt")) return;
+  const ca = r && r.caso_auto, ap = ca && ca.estruturas_aprovadas;
+  $("#est-aprov-txt").innerHTML = ap ? `<span class="ok">Estruturas aprovadas</span> por ${esc(ap.por)} em ${esc((ap.quando || "").replace("T", " ").slice(0, 16))}`
+    : (ca ? `Caso ${esc(ca.id)} · ${esc(ca.estado || "")}` : "");
+  $("#b-est-aprovar").disabled = !(r && r.tipo === "ct");
+}
+async function aprovarEstruturas() {
+  const ptvs = ((E.resumo && E.resumo.estruturas) || []).map(e => e.nome).filter(n => /^PTV.*@\s*\d+/i.test(n));
+  const v = await modal("Aprovar estruturas", `<p>${ptvs.length ? `Alvos com prescrição: <b>${ptvs.map(esc).join(", ")}</b>`
+    : `<span class="avisotxt">Nenhum PTV com a prescrição no nome</span> (ex.: <code>PTVPelve45@25</code> = 45 Gy em 25 frações): o plano automático não será disparado.`}</p>
+    <p class="pequeno-txt">Grava o RTSTRUCT aprovado no caso. Com o plano automático ligado (Ferramentas › Automação), um plano por grupo de PTVs
+    é feito em segundo plano, com o nome do PTV, e fica aguardando o físico em Arquivo › Casos recebidos.</p>
+    <label>Sua senha (médico/físico)<input name="senha" type="password"></label>`, { ok: "Aprovar" });
+  const r = await api("POST", `/api/${E.sid}/estruturas/aprovar`, { senha: v.senha }, "Aprovando as estruturas…");
+  atualizar(r.resumo);
+  aviso(r.plano_na_fila ? `Estruturas aprovadas. Plano automático na fila (${r.ptvs.map(p => p.nome).join(", ")}).` : (r.aviso || "Estruturas aprovadas."), !r.aviso);
+}
+async function janelaCasos() {
+  const lista = await api("GET", "/api/casos");
+  const linhas = lista.map(c => `<tr><td>${esc(c.paciente || "")}<div class="pequeno-txt">${esc(c.paciente_id || "")} · ${esc(c.id)}</div></td>
+    <td>${esc(c.estado || "")}${c.sitio ? `<div class="pequeno-txt">sítio: ${esc(c.sitio)}</div>` : ""}</td>
+    <td>${(c.ptvs || []).map(esc).join("<br>")}</td>
+    <td>${(c.planos || []).map(p => `<div><button class="pequeno" data-abrir-plano="${esc(c.id)}" data-plano="${esc(p.rotulo)}" ${p.arquivo ? "" : "disabled"}>${esc(p.rotulo)}</button>
+      <span class="pequeno-txt">${esc(p.tecnica || "")} · ${esc(p.estado || "")}${p.hi != null ? ` · HI ${p.hi}` : ""}${p.parecer && p.parecer.aval ? ` · Claude: ${esc(AVAL[p.parecer.aval] || p.parecer.aval)}` : ""}</span>
+      ${p.parecer && p.parecer.resumo ? `<div class="pequeno-txt">${esc(p.parecer.resumo)}</div>` : ""}</div>`).join("")}</td>
+    <td><button class="pequeno" data-abrir-caso="${esc(c.id)}">Abrir TC</button>
+      <button class="pequeno" data-etapa="contornar" data-caso="${esc(c.id)}" title="refaz o contorno automático">Recontornar</button>
+      <button class="pequeno" data-etapa="planejar" data-caso="${esc(c.id)}" title="faz os planos que faltam">Planejar</button></td></tr>`).join("");
+  const pr = modal("Casos recebidos", lista.length ? `<table class="tabela-casos"><thead><tr><th>Paciente</th><th>Estado</th><th>PTVs</th><th>Planos</th><th></th></tr></thead>
+    <tbody>${linhas}</tbody></table>` : `<p>Nenhum caso ainda. Ligue a automação em Ferramentas › Automação (pasta de entrada ou receptor DICOM).</p>`,
+    { ok: "Fechar", cancelar: false });
+  $("#modal .caixa").classList.add("larga");
+  const fechar = () => { $("#modal-ok").click(); };
+  $$("[data-abrir-caso]").forEach(b => b.onclick = () => tentar(async () => {
+    const r = await api("POST", `/api/casos/${encodeURIComponent(b.dataset.abrirCaso)}/abrir`, {}, "Abrindo o caso…"); fechar(); await abrirCaso(r); }));
+  $$("[data-abrir-plano]").forEach(b => b.onclick = () => tentar(async () => {
+    const r = await api("POST", `/api/casos/${encodeURIComponent(b.dataset.abrirPlano)}/abrir`, { plano: b.dataset.plano }, "Abrindo o plano…"); fechar(); await abrirCaso(r); }));
+  $$("[data-etapa]").forEach(b => b.onclick = () => tentar(async () => {
+    await api("POST", `/api/casos/${encodeURIComponent(b.dataset.caso)}/${b.dataset.etapa}`); aviso("Na fila da automação", true); }));
+  try { await pr; } finally { $("#modal .caixa").classList.remove("larga"); }
+}
+async function janelaAutomacao() {
+  const e = await api("GET", "/api/automacao"), c = e.config, pl = c.plano, ts = pl.tecnica_por_sitio || {};
+  const opT = (v) => ["3D", "IMRT", "VMAT"].map(t => `<option ${t === v ? "selected" : ""}>${t}</option>`).join("");
+  const sitios = ["mama", "encefalo", "prostata", "reto", "pelve_ginecologica", "pulmao", "esofago", "cabeca_pescoco"];
+  const maqs = ((E.info && E.info.maquinas) || []).map(m => `<option value="${esc(m.id)}" ${m.id === pl.maquina ? "selected" : ""}>${esc(m.nome)}</option>`).join("");
+  const pr = modal("Automação", `<p class="pequeno-txt">TC chega → BODY e órgãos automáticos → o médico desenha os PTVs com a prescrição no nome
+    (<code>PTVPelve45@25</code>) e aprova → plano pronto para o físico (nada é aprovado nem exportado sozinho).
+    Estado: ${e.rodando ? '<span class="ok">ligada</span>' : "desligada"}${e.atual ? ` · trabalhando: ${esc(e.atual)}` : ""}${e.fila ? ` · fila ${e.fila}` : ""}</p>
+    <label class="check"><input type="checkbox" id="au-ativo" ${c.ativo ? "checked" : ""}> Ligar a automação</label>
+    <label>Pasta de entrada (onde as TCs chegam)<input id="au-pasta" value="${esc(c.pasta_entrada || "")}" placeholder="C:\\TPS\\entrada"></label>
+    <div class="linha2"><label>Esperar sem arquivos novos (s)<input id="au-estab" type="number" value="${c.estabilizar_s}"></label>
+      <label>Olhar a pasta a cada (s)<input id="au-int" type="number" value="${c.intervalo_s}"></label></div>
+    <div class="linha2"><label class="check"><input type="checkbox" id="au-rec" ${c.receptor_dicom.ativo ? "checked" : ""}> Receptor DICOM do TPS</label>
+      <label>Porta<input id="au-porta" type="number" value="${c.receptor_dicom.porta}"></label><label>AE<input id="au-ae" value="${esc(c.receptor_dicom.ae)}"></label></div>
+    <h3>Contorno automático</h3>
+    <div class="linha2"><label class="check"><input type="checkbox" id="au-cont" ${c.contorno.ativo ? "checked" : ""}> Contornar ao receber</label>
+      <label class="check"><input type="checkbox" id="au-ia" ${c.contorno.ia ? "checked" : ""}> Órgãos por IA (TotalSegmentator)</label>
+      <label>Suavizar (mm)<input id="au-suave" type="number" step="0.5" value="${c.contorno.suavizar_mm}"></label></div>
+    <h3>Plano automático</h3>
+    <div class="linha2"><label class="check"><input type="checkbox" id="au-plano" ${pl.ativo ? "checked" : ""}> Fazer o plano</label>
+      <label>Gatilho<select id="au-gat"><option value="aprovacao" ${pl.gatilho === "aprovacao" ? "selected" : ""}>aprovação das estruturas</option>
+        <option value="ptv" ${pl.gatilho === "ptv" ? "selected" : ""}>PTV com prescrição no nome</option></select></label></div>
+    <div class="linha2"><label>Máquina<select id="au-maq">${maqs}</select></label><label>Técnica padrão<select id="au-tec">${opT(pl.tecnica_padrao)}</select></label>
+      <label>Objetivos<select id="au-motor"><option value="auto" ${pl.motor === "auto" ? "selected" : ""}>Claude (cai nas regras)</option>
+        <option value="regras" ${pl.motor === "regras" ? "selected" : ""}>Regras</option><option value="claude" ${pl.motor === "claude" ? "selected" : ""}>Só Claude</option></select></label>
+      <label>Planejar como<select id="au-perfil">${["tps", "monaco", "eclipse"].map(x => `<option ${x === pl.perfil ? "selected" : ""}>${x}</option>`).join("")}</select></label></div>
+    <div class="linha2">${sitios.map(st => `<label>${st.replace("_", " ")}<select data-sit="${st}"><option value="">padrão</option>${opT(ts[st] || "")}</select></label>`).join("")}</div>
+    <label class="check"><input type="checkbox" id="au-parecer" ${pl.parecer_claude ? "checked" : ""}> Parecer do Claude no plano pronto (só avalia)</label>
+    <label>Sua senha (físico/administrador)<input id="au-senha" type="password"></label>
+    <pre class="log">${esc((e.log || []).join("\n")) || "—"}</pre>`, { ok: "Salvar" });
+  $("#modal .caixa").classList.add("larga");
+  $$("#modal [data-sit] option[value='']").forEach(o => { if (!ts[o.parentElement.dataset.sit]) o.selected = true; });
+  try { await pr; } catch (x) { $("#modal .caixa").classList.remove("larga"); return; }
+  $("#modal .caixa").classList.remove("larga");
+  const por = {}; $$("#modal [data-sit]").forEach(sel => { if (sel.value) por[sel.dataset.sit] = sel.value; });
+  const corpo = { senha: $("#au-senha").value, ativo: $("#au-ativo").checked, pasta_entrada: $("#au-pasta").value.trim(),
+    estabilizar_s: +$("#au-estab").value, intervalo_s: +$("#au-int").value,
+    receptor_dicom: { ativo: $("#au-rec").checked, porta: +$("#au-porta").value, ae: $("#au-ae").value },
+    contorno: { ativo: $("#au-cont").checked, ia: $("#au-ia").checked, suavizar_mm: +$("#au-suave").value },
+    plano: { ativo: $("#au-plano").checked, gatilho: $("#au-gat").value, maquina: $("#au-maq").value, tecnica_padrao: $("#au-tec").value,
+      motor: $("#au-motor").value, perfil: $("#au-perfil").value, parecer_claude: $("#au-parecer").checked, tecnica_por_sitio: por } };
+  await api("POST", "/api/automacao", corpo, "Salvando…");
+  aviso(corpo.ativo ? "Automação ligada" : "Configuração salva", true);
+}
+document.addEventListener("DOMContentLoaded", () => {
+  if ($("#b-est-aprovar")) $("#b-est-aprovar").onclick = () => tentar(aprovarEstruturas);
 });
