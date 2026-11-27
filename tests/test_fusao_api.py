@@ -40,7 +40,10 @@ def cli(tmp_path_factory):
                     c.ContourData = [round(float(v), 3) for v in p.ravel()]
             ds.save_as(str(sec / f.name))
     c = TestClient(app, raise_server_exceptions=False)
-    r = c.post("/api/configurar", json={"login": "fisico.teste", "nome": "Físico Teste", "senha": SENHA})
+    if c.get("/api/info").json()["configurar"]:
+        r = c.post("/api/configurar", json={"login": "fisico.teste", "nome": "Físico Teste", "senha": SENHA})
+    else:
+        r = c.post("/api/login", json={"login": "fisico.teste", "senha": SENHA})
     c.headers["X-Token"] = r.json()["token"]
     s = c.post("/api/caso/ct", json={"pasta": str(caso)}).json()
     return c, s["id"], sec
