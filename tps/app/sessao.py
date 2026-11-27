@@ -1273,7 +1273,52 @@ class Sessao:
         self._registrar(f"{nome} = {nome} {txt} {outra}{f' (+{mg:g} mm)' if mg else ''}")
         return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1)}
 
-    def _estrutura_de_volume(self, nome: str, tipo: str, cor, vol: np.ndarray, sobrescrever: bool = False) -> str:
+    def pos_processar_contorno(self, nome: str, suavizar_mm: float = 2.0, fechar_mm: float = 0.0, abrir_mm: float = 0.0,
+                               preencher: bool = True, ilhas_cc: float = 0.5, so_maior: bool = False) -> dict:
+        """Suavizar (3D, preservando o volume), fechar/abrir, preencher buracos, remover ilhas e manter só a maior
+        parte — na resolução do CT. Desfazível. SRS-CNT-020."""
+        from tps.planejamento import contorno as K
+        from tps.planejamento import suavizacao as S
+        e = self._editavel(nome)
+        if not e.contornos:
+            raise ErroUsuario(f"{nome} está vazia")
+        for v, n in ((suavizar_mm, "suavização"), (fechar_mm, "fechamento"), (abrir_mm, "abertura")):
+            if not 0 <= float(v) <= 15:
+                raise ErroUsuario(f"{n}: use de 0 a 15 mm")
+        cx, cy, cz = self.ct.axes()
+        tol = float(self.ct.spacing[2]) / 2 + 0.01
+        dz = float(abs(cz[1] - cz[0])) if len(cz) > 1 else 3.0
+        dy, dx = float(abs(cy[1] - cy[0])), float(abs(cx[1] - cx[0]))
+        pts = np.vstack([c[:, :3] for c in e.contornos])
+        folga = 3 * max(suavizar_mm, fechar_mm, 1.0) + 3 * max(dx, dy)
+        ix = np.nonzero((cx >= pts[:, 0].min() - folga) & (cx <= pts[:, 0].max() + folga))[0]
+        iy = np.nonzero((cy >= pts[:, 1].min() - folga) & (cy <= pts[:, 1].max() + folga))[0]
+        xs, ys = cx[ix], cy[iy]
+        A = np.stack([K.mascara_de_poligonos(K.poligonos_do_corte(e.contornos, float(z), tol), xs, ys) for z in cz])
+        vol0 = float(A.sum()) * dx * dy * dz / 1000.0
+        try:
+            campo, nivel = S.processar(A, (dz, dy, dx), dx * dy * dz / 1000.0, float(suavizar_mm), float(fechar_mm),
+                                       float(abrir_mm), bool(preencher), float(ilhas_cc), bool(so_maior))
+        except ValueError as ex:
+            raise ErroUsuario(str(ex)) from ex
+        novos = []
+        for k, z in enumerate(cz):
+            novos += S.poligonos(campo[k], nivel, xs, ys, float(z))
+        if not novos:
+            raise ErroUsuario("A estrutura ficou vazia com essas opções")
+        self._guardar_desfazer(e)
+        e.contornos = novos
+        self._depois_de_editar(e)
+        vol1 = float(e.mascara.sum()) * self.grade.voxel_cc
+        ops = [f"suavizar {suavizar_mm:g} mm" if suavizar_mm else "", f"fechar {fechar_mm:g} mm" if fechar_mm else "",
+               f"abrir {abrir_mm:g} mm" if abrir_mm else "", "preencher" if preencher else "",
+               f"ilhas < {ilhas_cc:g} cm³" if ilhas_cc else "", "só a maior parte" if so_maior else ""]
+        self._registrar(f"{nome}: pós-processamento ({', '.join(o for o in ops if o)})")
+        return {"nome": nome, "volume_antes_cc": round(vol0, 1), "volume_cc": round(vol1, 1),
+                "cortes": len({round(float(c[0, 2]), 2) for c in novos})}
+
+    def _estrutura_de_volume(self, nome: str, tipo: str, cor, vol: np.ndarray, sobrescrever: bool = False,
+                             suavizar_mm: float = 0.0) -> str:
         """Cria (ou substitui, se foi criada no TPS) uma estrutura a partir de uma máscara na grade do CT."""
         from tps.planejamento import contorno as K
         cx, cy, cz = self.ct.axes()
@@ -1287,9 +1332,19 @@ class Sessao:
         e = self.estruturas[nome]
         self._guardar_desfazer(e)
         polys = []
-        for k, z in enumerate(cz):
-            if vol[k].any():
-                polys += K.poligonos_de_mascara(vol[k], cx, cy, float(z), suavizar=0.4, min_pontos=6)
+        if suavizar_mm > 0:                              # contorno automático: suaviza em 3D (sem "degraus")
+            from tps.planejamento import suavizacao as S
+            dz = float(abs(cz[1] - cz[0])) if len(cz) > 1 else 3.0
+            passo = (dz, float(abs(cy[1] - cy[0])), float(abs(cx[1] - cx[0])))
+            m = S.preencher(vol)
+            m = S.remover_ilhas(m, 0.3, passo[0] * passo[1] * passo[2] / 1000.0)
+            campo, nivel = S.campo_suave(m, passo, suavizar_mm)
+            for k, z in enumerate(cz):
+                polys += S.poligonos(campo[k], nivel, cx, cy, float(z))
+        else:
+            for k, z in enumerate(cz):
+                if vol[k].any():
+                    polys += K.poligonos_de_mascara(vol[k], cx, cy, float(z), suavizar=0.4, min_pontos=6)
         e.contornos = polys
         self._depois_de_editar(e)
         return nome
@@ -1331,7 +1386,7 @@ class Sessao:
                 "volumes_cc": {n: round(float(self.estruturas[n].mascara.sum()) * self.grade.voxel_cc, 1)
                                for n in criadas.values()}}
 
-    def segmentar_ia(self, orgaos: list[str], reto_zmax_mm: float | None = None) -> dict:
+    def segmentar_ia(self, orgaos: list[str], reto_zmax_mm: float | None = None, suavizar_mm: float = 2.0) -> dict:
         """Órgãos por IA (TotalSegmentator local) e os derivados dela (reto, parede retal, canal anal, bowel bag,
         mama de cada lado, cabeças femorais). Cria/substitui só estruturas do TPS; o RTSTRUCT original não muda."""
         from tps.ia import posprocessamento as P
@@ -1401,7 +1456,7 @@ class Sessao:
             if v is None or not v.any():
                 faltam.append(nome)
                 continue
-            criadas.append(self._estrutura_de_volume(nome, "ORGAN", cor, v, True))
+            criadas.append(self._estrutura_de_volume(nome, "ORGAN", cor, v, True, float(suavizar_mm)))
         if not criadas:
             raise ErroUsuario("A IA não encontrou nenhum dos órgãos pedidos neste CT")
         self._registrar("Contorno por IA (TotalSegmentator): " + ", ".join(criadas) + " — revise antes de usar")

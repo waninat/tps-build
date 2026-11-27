@@ -595,7 +595,13 @@ def contorno(sid: str, acao: str, d: dict = Body(...), u: dict = Depends(usuario
             r = s.orgaos_automaticos(list(d.get("orgaos") or []))
         elif acao == "ia":
             z = d.get("reto_zmax_mm")
-            r = s.segmentar_ia(list(d.get("orgaos") or []), float(z) if z not in (None, "") else None)
+            r = s.segmentar_ia(list(d.get("orgaos") or []), float(z) if z not in (None, "") else None,
+                               float(d.get("suavizar_mm", 2.0) or 0.0))
+        elif acao == "pos":
+            r = s.pos_processar_contorno(d.get("nome", ""), float(d.get("suavizar_mm", 0) or 0),
+                                         float(d.get("fechar_mm", 0) or 0), float(d.get("abrir_mm", 0) or 0),
+                                         bool(d.get("preencher", False)), float(d.get("ilhas_cc", 0) or 0),
+                                         bool(d.get("so_maior", False)))
         else:
             raise ErroUsuario(f"Ação de contorno desconhecida: {acao}")
     if acao != "editar":

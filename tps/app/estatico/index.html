@@ -508,6 +508,7 @@
         <select id="ia-orgaos" multiple size="10"></select>
         <label title="o reto sai do cólon da IA, do corte mais inferior até a junção retossigmoide detectada; para mudar, informe o z (mm) do último corte e segmente de novo">
           Limite superior do reto (z, mm)<input id="ia-reto-z" placeholder="automático"></label>
+        <label title="suavização 3D dos contornos da IA, preservando o volume (0 = como a rede entrega, em degraus)">Suavizar (mm)<select id="ia-suave"><option>0</option><option>1</option><option>1.5</option><option selected>2</option><option>3</option></select></label>
         <div class="botoes"><button id="b-ia" class="pequeno" disabled>Segmentar</button>
           <button id="b-ia-instalar" class="pequeno" title="instalar ou configurar o TotalSegmentator">Instalar / configurar…</button></div>
       </div>
@@ -542,6 +543,20 @@
         <label>Margem (mm)<input id="k-mg" type="number" value="0" min="0" max="50" step="0.5"></label>
       </div>
       <button id="b-k-op" class="pequeno">Aplicar à estrutura</button>
+    </div>
+    <div class="caixa-import">
+      <div class="pequeno-txt"><b>Pós-processamento</b> da estrutura escolhida acima (no lugar, desfazível) — como no Eclipse</div>
+      <div class="linha3">
+        <label title="suavização 3D que preserva o volume (tira os degraus/pontas)">Suavizar (mm)<input id="pp-suave" type="number" value="2" min="0" max="15" step="0.5"></label>
+        <label title="fecha reentrâncias e pequenas falhas (dilata e contrai)">Fechar (mm)<input id="pp-fechar" type="number" value="0" min="0" max="15" step="0.5"></label>
+        <label title="tira pontas e pontes finas (contrai e dilata)">Abrir (mm)<input id="pp-abrir" type="number" value="0" min="0" max="15" step="0.5"></label>
+      </div>
+      <div class="linha3">
+        <label class="check"><input type="checkbox" id="pp-encher" checked> preencher buracos</label>
+        <label title="remove pedaços soltos menores que isto">Ilhas &lt; (cm³)<input id="pp-ilhas" type="number" value="0.5" min="0" step="0.1"></label>
+        <label class="check"><input type="checkbox" id="pp-maior"> só a maior parte</label>
+      </div>
+      <button id="b-pp" class="pequeno">Aplicar pós-processamento</button>
     </div>
     <div class="pequeno-txt">Polígono: clique os pontos e dê duplo clique para fechar (Esc cancela). Pincel: arraste. Roda do mouse: muda o corte.</div>
   </details>

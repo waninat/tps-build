@@ -325,13 +325,24 @@ function ligar() {
     const orgaos = Array.from($("#ia-orgaos").selectedOptions).map(o => o.value);
     if (!orgaos.length) throw new Error("Escolha os órgãos (Ctrl+clique para vários)");
     const zr = $("#ia-reto-z").value.trim();
-    const r = await api("POST", `/api/${E.sid}/contorno/ia`, { orgaos, reto_zmax_mm: zr === "" ? null : +zr.replace(",", ".") },
+    const r = await api("POST", `/api/${E.sid}/contorno/ia`, { orgaos, reto_zmax_mm: zr === "" ? null : +zr.replace(",", "."),
+      suavizar_mm: +$("#ia-suave").value },
       "Segmentando com IA (1–5 min por grupo na CPU)…");
     atualizar(r);
     const c = r.contorno;
     aviso("Criado: " + c.criadas.join(", ") + (c.nao_encontrados.length ? ` · não encontrado: ${c.nao_encontrados.join(", ")}` : "") +
       (c.reto_limite_superior_mm != null ? ` · reto até z = ${c.reto_limite_superior_mm} mm (junção retossigmoide)` : "") + " — revise", true);
     if (c.reto_limite_superior_mm != null) $("#ia-reto-z").placeholder = `auto (${c.reto_limite_superior_mm})`;
+  });
+  $("#b-pp").onclick = () => tentar(async () => {
+    const nome = $("#k-est").value;
+    if (!nome) throw new Error("Escolha a estrutura em Contorno (desenhar/editar)");
+    const r = await api("POST", `/api/${E.sid}/contorno/pos`, { nome, suavizar_mm: +$("#pp-suave").value, fechar_mm: +$("#pp-fechar").value,
+      abrir_mm: +$("#pp-abrir").value, preencher: $("#pp-encher").checked, ilhas_cc: +$("#pp-ilhas").value, so_maior: $("#pp-maior").checked },
+      "Pós-processando o contorno…");
+    atualizar(r);
+    const c = r.contorno;
+    aviso(`${c.nome}: ${c.volume_antes_cc} → ${c.volume_cc} cm³ (desfazer: botão desfazer)`, true);
   });
   $("#b-rest").onclick = () => tentar(async () => {
     const corpo = { estrutura: $("#r-est").value, metrica: $("#r-met").value.trim(), op: $("#r-op").value,
