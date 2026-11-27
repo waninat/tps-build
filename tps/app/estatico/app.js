@@ -1621,6 +1621,7 @@ async function acao(a) {
     case "aprovar": clicar("#b-aprovar"); break;
     case "ia": await janelaIA(); break;
     case "claude": await janelaClaude(); break;
+    case "copiloto": abrirCopiloto(); break;
     case "assistente": abaEsquerda("otim"); await assistente(); break;
     case "qa": abaEsquerda("aprov"); $("#sec-qa").open = true; break;
     case "auditoria": clicar("#b-auditoria"); break;
@@ -2071,3 +2072,47 @@ async function janelaCQ() {
       { ok: "Fechar", cancelar: false });
   } finally { $("#modal .caixa").classList.remove("larga"); }
 }
+
+// ---- copiloto do plano (Claude com as ferramentas do TPS)
+function abrirCopiloto() {
+  $("#copiloto").classList.remove("oculto");
+  setTimeout(() => $("#cp-txt").focus(), 30);
+}
+function cpMsg(html, cls) {
+  const d = document.createElement("div"); d.className = "cp-msg " + cls; d.innerHTML = html;
+  $("#cp-msgs").appendChild(d); $("#cp-msgs").scrollTop = $("#cp-msgs").scrollHeight; return d;
+}
+const AVAL = { aceitavel: "Aceitável", melhorar: "Pode melhorar", refazer: "Refazer" };
+async function enviarCopiloto(texto, novo = false) {
+  texto = (texto || "").trim();
+  if (!texto) return;
+  if (!E.sid) { aviso("Abra um caso primeiro"); return; }
+  cpMsg(esc(texto), "cp-eu");
+  $("#cp-txt").value = "";
+  const t = acompanharProgresso();
+  let r;
+  novo = novo || !!E.cpNovo; E.cpNovo = false;
+  try { r = await api("POST", `/api/${E.sid}/copiloto`, { texto, novo }, "Copiloto trabalhando…"); }
+  catch (e) { cpMsg(`<span class="falha">${esc(e.message)}</span>`, "cp-ia"); return; }
+  finally { clearInterval(t); }
+  let h = esc(r.resposta || "(sem texto)");
+  const pa = r.parecer;
+  if (pa) h += `<div class="cp-parecer ${esc(pa.aval || "")}"><b>Parecer: ${esc(AVAL[pa.aval] || pa.aval || "")}</b> — ${esc(pa.resumo || "")}` +
+    (pa.pontos && pa.pontos.length ? `<ul>${pa.pontos.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "") +
+    (pa.sugestoes && pa.sugestoes.length ? `<b>Sugestões</b><ol>${pa.sugestoes.map(x => `<li>${esc(x)}</li>`).join("")}</ol>` : "") + `</div>`;
+  if (r.acoes && r.acoes.length) h += `<div class="cp-acoes">Alterações feitas: ${r.acoes.length} (no histórico do plano) — use Desfazer para voltar.</div>`;
+  cpMsg(h, "cp-ia");
+  if (r.resumo) { atualizar(r.resumo); if (typeof desenharTudo === "function") desenharTudo(); }
+  if (r.acoes && r.acoes.length && E.resumo && E.resumo.plano && E.resumo.plano.objetivos_imrt) { /* objetivos novos vêm no próximo listar */ }
+}
+document.addEventListener("DOMContentLoaded", () => {
+  if (!$("#copiloto")) return;
+  $("#cp-fechar").onclick = () => $("#copiloto").classList.add("oculto");
+  $("#cp-enviar").onclick = () => enviarCopiloto($("#cp-txt").value);
+  $("#cp-txt").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); enviarCopiloto($("#cp-txt").value); } };
+  $("#cp-novo").onclick = () => { $("#cp-msgs").innerHTML = ""; E.cpNovo = true; cpMsg("Conversa nova.", "cp-ia"); };
+  $("#cp-desf").onclick = () => tentar(async () => { const r = await api("POST", `/api/${E.sid}/copiloto/desfazer`, undefined, "Desfazendo…");
+    atualizar(r); if (typeof desenharTudo === "function") desenharTudo(); cpMsg("Plano de volta ao estado anterior ao último pedido.", "cp-ia"); });
+  $$("#copiloto [data-cp]").forEach(b => b.onclick = () => enviarCopiloto(b.dataset.cp));
+  document.addEventListener("keydown", (ev) => { if (ev.ctrlKey && (ev.key === "k" || ev.key === "K")) { ev.preventDefault(); abrirCopiloto(); } });
+});

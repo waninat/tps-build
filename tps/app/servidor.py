@@ -448,6 +448,47 @@ def imrt_objetivos(sid: str, refazer: bool = False, sitio: str = "", u: dict = D
         return _s(sid).objetivos_imrt_sugeridos(refazer, sitio or None)
 
 
+@app.post("/api/{sid}/copiloto")
+def copiloto(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    """Copiloto com o Claude: conversa sobre o plano e usa as ferramentas do TPS (só no rascunho)."""
+    from tps.app import copiloto as CP
+    from tps.planejamento import assistente_claude as C
+    s = _s(sid)
+    texto = str(d.get("texto", "")).strip()[:4000]
+    if not texto:
+        raise ErroUsuario("Escreva o pedido para o copiloto")
+    if not C.estado()["ativo"]:
+        raise ErroUsuario("Copiloto com Claude não configurado (Ferramentas › Assistente com Claude)")
+
+    def prog(msg):
+        s.progresso = msg
+    with TRAVA:
+        try:
+            r = CP.conversar(s, texto, prog, novo=bool(d.get("novo")))
+        except ErroUsuario:
+            raise
+        except Exception as e:  # noqa: BLE001
+            raise ErroUsuario(f"Copiloto indisponível: {C.mensagem_erro(e)}") from e
+        finally:
+            s.progresso = None
+        resumo = s.resumo()
+    auditar(u, "copiloto_claude", s, modelo=r.get("modelo"), tokens=r.get("uso_tokens"), acoes=len(r["acoes"]))
+    return {**r, "resumo": resumo}
+
+
+@app.post("/api/{sid}/copiloto/desfazer")
+def copiloto_desfazer(sid: str, u: dict = Depends(usuario)):
+    from tps.app import copiloto as CP
+    s = _s(sid)
+    with TRAVA:
+        try:
+            CP.desfazer(s)
+        except ValueError as e:
+            raise ErroUsuario(str(e)) from e
+        s._registrar("Alterações do copiloto desfeitas")
+        return s.resumo()
+
+
 @app.post("/api/{sid}/imrt/assistente")
 def imrt_assistente(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     """Lê a descrição do caso + TC/estruturas e propõe os objetivos pelo protocolo do sítio (com a explicação)."""

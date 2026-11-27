@@ -1,0 +1,118 @@
+"""Copiloto do plano com o Claude (API simulada): lê, age no rascunho, dá parecer, desfaz. SRS-PLN-130."""
+from types import SimpleNamespace
+
+import pytest
+import yaml
+from fastapi.testclient import TestClient
+
+from tps import fantoma, paths
+
+SENHA = "senha-forte-1"
+
+
+@pytest.fixture(scope="module")
+def cli(tmp_path_factory):
+    home = tmp_path_factory.mktemp("home_copiloto")
+    paths.set_home(home)
+    paths.ensure_home()
+    from tps.app.servidor import app
+    caso = home / "fantoma"
+    fantoma.gerar_exportacao(caso, calcular_dose=False)
+    for f in ("RP.dcm", "RD.dcm"):
+        (caso / f).unlink(missing_ok=True)
+    c = TestClient(app, raise_server_exceptions=False)
+    if c.get("/api/info").json()["configurar"]:
+        r = c.post("/api/configurar", json={"login": "fisico.teste", "nome": "Físico Teste", "senha": SENHA})
+    else:
+        r = c.post("/api/login", json={"login": "fisico.teste", "senha": SENHA})
+    c.headers["X-Token"] = r.json()["token"]
+    s = c.post("/api/caso/ct", json={"pasta": str(caso)}).json()
+    c.post(f"/api/{s['id']}/maquina", json={"id": "radioserra_precise"})
+    return c, s["id"], home
+
+
+def _ok(r):
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+class _Resp:
+    def __init__(self, blocos):
+        self.content = blocos
+        self.usage = SimpleNamespace(input_tokens=500, output_tokens=100)
+
+
+class _Falso:
+    def __init__(self, roteiro):
+        self.roteiro = list(roteiro)
+        self.chamadas = []
+        self.messages = self
+
+    def create(self, **kw):
+        self.chamadas.append(kw)
+        return _Resp(self.roteiro.pop(0))
+
+
+def _tu(i, nome, entrada):
+    return {"type": "tool_use", "id": i, "name": nome, "input": entrada}
+
+
+def test_copiloto_le_age_e_desfaz(cli, monkeypatch):
+    from tps.planejamento import assistente_claude as C
+    c, sid, home = cli
+    _ok(c.post(f"/api/{sid}/plano", json={"rotulo": "COPI", "dose_total": 50, "fracoes": 25, "alvo": "PTV_fantoma"}))
+    for g in (0, 90, 180, 270):
+        _ok(c.post(f"/api/{sid}/campo", json={"gantry": g}))
+    _ok(c.post(f"/api/{sid}/calcular", json={}))
+    assert c.post(f"/api/{sid}/copiloto", json={"texto": "avalie"}).status_code == 400     # sem chave
+    _ok(c.post("/api/claude", json={"chave": "sk-ant-teste-9999", "senha": SENHA}))
+    falso = _Falso([
+        [{"type": "text", "text": "Vou ler o plano."}, _tu("a", "ler_plano", {}), _tu("b", "ler_dose", {})],
+        [_tu("c", "bloquear_orgao", {"campo": "G090", "estrutura": "Osso_inserto", "margem_mm": 2}),
+         _tu("d", "aprovar", {})],
+        [_tu("e", "calcular", {"otimizar_pesos": True})],
+        [_tu("f", "dar_parecer", {"aval": "melhorar", "resumo": "Cobertura boa; osso protegido no lateral.",
+                                  "pontos": ["HI ok"], "sugestoes": ["Conferir o campo G090"]})],
+        [{"type": "text", "text": "Pronto: bloqueei o osso no G090 e recalculei."}],
+    ])
+    monkeypatch.setattr(C, "_cliente", lambda chave: falso)
+    r = _ok(c.post(f"/api/{sid}/copiloto", json={"texto": "Avalie e proteja o osso"}))
+    assert r["resposta"].startswith("Pronto") and r["parecer"]["aval"] == "melhorar"
+    assert [a.split()[0] for a in r["acoes"]] == ["bloquear_orgao", "calcular"]
+    # o que voltou para o Claude: o plano lido, e a ferramenta proibida não existe
+    res = {b["tool_use_id"]: b["content"] for m in falso.chamadas[-1]["messages"] if m["role"] == "user"
+           and isinstance(m["content"], list) for b in m["content"]}
+    assert '"rotulo": "COPI"' in res["a"] and '"estruturas"' in res["b"]
+    assert "ferramenta desconhecida" in res["d"]
+    assert "aprovar" not in {t["name"] for t in falso.chamadas[0]["tools"]}
+    g090 = next(x for x in r["resumo"]["plano"]["campos"] if x["nome"] == "G090")
+    assert any(b["nome"] == "Osso_inserto" for b in (g090["spec"] or {}).get("blindagens", []))
+    assert any("Copiloto (Claude): bloquear_orgao" in h for h in r["resumo"]["log"])
+    assert any(h.get("evento") == "copiloto" and h["acao"] == "bloquear_orgao" for h in r["resumo"]["plano"]["historico"])
+    # desfazer volta ao plano de antes do pedido
+    d = _ok(c.post(f"/api/{sid}/copiloto/desfazer"))
+    g090 = next(x for x in d["plano"]["campos"] if x["nome"] == "G090")
+    assert not (g090["spec"] or {}).get("blindagens")
+    assert c.post(f"/api/{sid}/copiloto/desfazer").status_code == 400
+    # a conversa continua (histórico enviado de novo) e "nova" começa do zero
+    falso.roteiro = [[{"type": "text", "text": "ok"}]]
+    _ok(c.post(f"/api/{sid}/copiloto", json={"texto": "obrigado"}))
+    assert len(falso.chamadas[-1]["messages"]) > 3
+    falso.roteiro = [[{"type": "text", "text": "ok"}]]
+    _ok(c.post(f"/api/{sid}/copiloto", json={"texto": "outra", "novo": True}))
+    assert falso.chamadas[-1]["messages"][0]["content"] == "outra"
+
+
+def test_rascunho_de_maquina(cli):
+    from tps.app import copiloto as CP
+    ck = CP.checklist()
+    assert any(b["bloco"].startswith("Dados de feixe") for b in ck["blocos"])
+    r = CP.criar_rascunho_maquina({"id": "Clinica Versa", "model": "Versa HD", "mlc": "Agility",
+                                   "energias_mv": [6, 10], "dicom_machine_names": ["VERSA1"]})
+    raw = yaml.safe_load(open(r["pasta"] + "/maquina.yaml", encoding="utf-8"))
+    assert raw["id"] == "clinica_versa" and raw["collimation"]["mlc"]["leaf_pairs"] == 80
+    assert raw["collimation"]["jaw_x"]["present"] is False and not raw["rascunho"]["comissionado"]
+    assert "serial" in r["pendencias"] and "collimation.mlc.min_gap_mm" in r["pendencias"]
+    assert "rascunho" in r["pasta"]
+    with pytest.raises(ValueError):
+        CP.criar_rascunho_maquina({})
