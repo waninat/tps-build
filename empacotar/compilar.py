@@ -17,7 +17,7 @@ RAIZ = Path(__file__).resolve().parents[1]
 AQUI = RAIZ / "empacotar"
 SAIDA = AQUI / "saida"
 WINDOWS = sys.platform.startswith("win")
-NUMBA = ["tps.engine.ccc", "tps.compare.gamma"]
+NUMBA = ["tps.engine.ccc", "tps.compare.gamma", "tps.mc.transporte"]
 
 
 def versao() -> str:

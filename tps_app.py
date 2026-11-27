@@ -55,6 +55,23 @@ def autoteste() -> int:
         r = c.post(f"/api/{sid}/calcular", json={}).json()
         conf = r["resultado"]["conferencia_um"]
         ok = all(k["ok"] for k in conf) and r["resultado"]["estatisticas"]["PTV_fantoma"]["D95"] > 47
+        # Monte Carlo compilado (núcleo numba paralelo): um campo 10×10 em água, poucas histórias
+        try:
+            import numpy as np
+
+            from tps.app.sessao import Maquina
+            from tps.engine.phantom import square_field, water_box
+            from tps.mc import calculo as MC
+            mq = Maquina.carregar("radioserra_precise", "6MV")
+            g = water_box(200.0, 200.0, 5.0)
+            seg = square_field(10.0, 10.0, 1000.0, 1000.0, 1.0, np.asarray(mq.colim.limites_laminas))
+            r = MC.transportar(g, [seg], mq.modelo, incerteza_pct=10, historias_max=300_000, historias_min=300_000)
+            bom = bool(np.isfinite(r.dose).all() and r.dose.max() > 0)
+            print("MC", "ok" if bom else "FALHOU", f"{r.historias} histórias")
+            ok = ok and bom
+        except Exception as e:  # noqa: BLE001
+            print("AUTOTESTE MC FALHOU:", e)
+            ok = False
         # assistente com Claude: o cliente da API monta sem rede (pega falta de metadados no programa compilado)
         try:
             from tps.planejamento import assistente_claude as C
@@ -167,7 +184,13 @@ def _console_se_preciso(saida_em_arquivo: bool = False):
         try:
             from tps import paths
             paths.ensure_home()
-            f = open(paths.home() / "tps_saida.log", "w", encoding="utf-8", buffering=1)
+            saida = paths.home() / "tps_saida.log"
+            if saida.exists():                         # guarda a saída da vez anterior (se o TPS caiu, está lá)
+                try:
+                    os.replace(saida, paths.home() / "tps_saida.anterior.log")
+                except OSError:
+                    pass
+            f = open(saida, "w", encoding="utf-8", buffering=1)
             sys.stdout = sys.stdout or f
             sys.stderr = sys.stderr or f
             return
@@ -199,6 +222,13 @@ def main() -> int:
         from tps.version import __version__
         print(__version__)
         return 0
+    try:
+        from tps import paths
+        from tps.diagnostico import ativar_registro_de_falhas
+        paths.ensure_home()
+        ativar_registro_de_falhas(paths.home())
+    except Exception:  # noqa: BLE001
+        pass
     if not any(f in sys.argv for f in ("--navegador", "--sem-navegador")):
         _console_se_preciso(saida_em_arquivo=True)
         r = _janela_propria()

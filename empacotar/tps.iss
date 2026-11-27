@@ -1,11 +1,11 @@
 ; Instalador do TPS (Inno Setup 6). Gerado no GitHub Actions; à mão no Windows:
-;   python empacotar\compilar.py   e depois   iscc /DVersao=0.9.5 empacotar\tps.iss
+;   python empacotar\compilar.py   e depois   iscc /DVersao=0.9.6 empacotar\tps.iss
 ;
 ; Programa → C:\Program Files\TPS (substituído a cada atualização)
 ; Dados    → C:\ProgramData\TPS (usuários, auditoria, planos, exportações). Nunca é apagada pelo instalador.
 
 #ifndef Versao
-  #define Versao "0.9.5"
+  #define Versao "0.9.6"
 #endif
 
 [Setup]

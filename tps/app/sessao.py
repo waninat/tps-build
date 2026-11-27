@@ -120,6 +120,17 @@ class Estrutura:
 
 
 class Sessao:
+    @property
+    def progresso(self) -> str | None:
+        return self._progresso
+
+    @progresso.setter
+    def progresso(self, msg: str | None) -> None:
+        if msg and msg != self._progresso:                # cada etapa vai para tps_saida.log, com a memória
+            from tps.diagnostico import registrar
+            registrar(f"[{self.nome or self.id}] {msg}")
+        self._progresso = msg
+
     def __init__(self):
         self.id = uuid.uuid4().hex[:12]
         self.nome = ""
@@ -142,7 +153,7 @@ class Sessao:
         self.doses_um: dict = {}
         self.dose_fx: np.ndarray | None = None
         self.dose_vista: dict = {}                       # "soma" / "dif": doses só para ver (não são planos)
-        self.progresso: str | None = None                 # etapa de um cálculo longo (IMRT), lida sem trava
+        self._progresso: str | None = None                # etapa de um cálculo longo (IMRT), lida sem trava
         self.resultado: dict = {}
         self.dose_atualizada = False
         self.avisos: list[str] = []
@@ -1499,6 +1510,19 @@ class Sessao:
 
     # ================================================================== cálculo
     def calcular(self, opcoes: dict) -> dict:
+        from tps.diagnostico import registrar
+        registrar(f"[{self.nome or self.id}] cálculo: plano {getattr(self.plano, 'rotulo', '?')} "
+                  f"({getattr(self.plano, 'tecnica', '?')}), opções {sorted((opcoes or {}).keys())}")
+        try:
+            r = self._calcular(opcoes)
+        except MemoryError as e:
+            registrar(f"[{self.nome or self.id}] cálculo: memória insuficiente")
+            raise ErroUsuario("Memória insuficiente para este cálculo: feche outros programas ou use uma grade de "
+                              "dose maior (3–4 mm)") from e
+        registrar(f"[{self.nome or self.id}] cálculo concluído")
+        return r
+
+    def _calcular(self, opcoes: dict) -> dict:
         self._exigir_plano()
         p, m, g = self.plano, self.maquina, self.grade
         self._exigir(bool(p.campos), "Plano sem campos")
