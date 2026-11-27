@@ -47,9 +47,13 @@ def _grade_u(c: Campo, colim: Colimacao, res: float):
     lim = colim.limites_laminas
     v = 0.5 * (lim[1:] + lim[:-1])
     aberto = np.zeros((colim.n_pares, len(u)), bool)
+    formas = c.segmentos_blindagem or [{"mlc_a": c.mlc_a, "mlc_b": c.mlc_b}]   # blindagem no meio do par: união
     for i in range(colim.n_pares):
-        if lim[i + 1] > c.jaw_y[0] and lim[i] < c.jaw_y[1] and c.mlc_b[i] - c.mlc_a[i] > colim.gap_minimo_mm + 0.5:
-            aberto[i] = (u > c.mlc_a[i]) & (u < c.mlc_b[i])
+        if not (lim[i + 1] > c.jaw_y[0] and lim[i] < c.jaw_y[1]):
+            continue
+        for f in formas:
+            if f["mlc_b"][i] - f["mlc_a"][i] > colim.gap_minimo_mm + 0.5:
+                aberto[i] |= (u > f["mlc_a"][i]) & (u < f["mlc_b"][i])
     return u, v, aberto
 
 
@@ -94,35 +98,61 @@ def sequenciar(c: Campo, colim: Colimacao, u: np.ndarray, F: np.ndarray, aberto:
     camadas += [(resid, (j - 0.5) * delta, delta) for j in range(1, niveis + 1)] if delta > 0 else []
     segs = []
     op = OpcoesAjuste()
-    for mapa, lim_j, peso in camadas:
+    for n_camada, (mapa, lim_j, peso) in enumerate(camadas):
         if peso <= 0:
             continue
-        a = np.full(colim.n_pares, np.nan)
-        b = np.full(colim.n_pares, np.nan)
+        base_camada = n_camada == 0
+        # cada nível: os trechos de cada par; com mais de um trecho num par (pico da fluência no meio, ou blindagem
+        # no meio do par) o nível vira mais de um segmento (k-ésimo trecho de cada par), cada um com o peso inteiro
+        # do nível — antes só o maior trecho era entregue e o outro lado ficava sem a compensação
+        trechos = {}
         for i in range(colim.n_pares):
             cols = np.nonzero(mapa[i] >= lim_j)[0]
             if len(cols) == 0:
                 continue
             quebras = np.nonzero(np.diff(cols) > 1)[0]
-            if len(quebras):
-                cols = max(np.split(cols, quebras + 1), key=lambda t: float(mapa[i, t].sum()))
-            a[i] = max(u[cols[0]] - res / 2, c.mlc_a[i])
-            b[i] = min(u[cols[-1]] + res / 2, c.mlc_b[i])
-        if np.all(np.isnan(a)):
+            tr = sorted(np.split(cols, quebras + 1), key=lambda t: -float(mapa[i, t].sum()))
+            if base_camada:                       # abertura (com blindagem no meio do par): todos os trechos
+                tr = tr[:4]
+            else:                                 # níveis: o 2º trecho só se for relevante (≥ 1,5 cm e ≥ 50% do 1º)
+                m0 = float(mapa[i, tr[0]].sum())
+                tr = [tr[0]] + [t for t in tr[1:3] if len(t) * res >= 15.0 and float(mapa[i, t].sum()) >= 0.5 * m0]
+            tr = sorted(tr, key=lambda t: t[0])
+            trechos[i] = [(max(u[t[0]] - res / 2, min(c.mlc_a[i], c.mlc_b[i])),
+                           min(u[t[-1]] + res / 2, max(c.mlc_b[i], c.mlc_a[i]))) for t in tr]
+        if not trechos:
             continue
         jy = c.jaw_y
         jx = c.jaw_x
-        _posicionar_fechados(a, b, colim, jx, op)
-        s = Campo(c.nome, c.gantry, c.colimador, c.mesa, c.isocentro_mm, jaw_x=jx, jaw_y=jy,
-                  mlc_a=[round(float(x), 1) for x in a], mlc_b=[round(float(x), 1) for x in b])
-        erros = verificar_mecanica(s, colim)
-        if erros:
-            raise ValueError("; ".join(erros))
-        segs.append({"mlc_a": s.mlc_a, "mlc_b": s.mlc_b, "jaw_x": jx, "jaw_y": jy, "peso": peso})
+        for k in range(max(len(t) for t in trechos.values())):
+            a = np.full(colim.n_pares, np.nan)
+            b = np.full(colim.n_pares, np.nan)
+            for i, tr in trechos.items():
+                if k < len(tr):
+                    a[i], b[i] = tr[k]
+            if np.all(np.isnan(a)):
+                continue
+            _posicionar_fechados(a, b, colim, jx, op)
+            s = Campo(c.nome, c.gantry, c.colimador, c.mesa, c.isocentro_mm, jaw_x=jx, jaw_y=jy,
+                      mlc_a=[round(float(x), 1) for x in a], mlc_b=[round(float(x), 1) for x in b])
+            erros = verificar_mecanica(s, colim)
+            if erros:
+                raise ValueError("; ".join(erros))
+            segs.append({"mlc_a": s.mlc_a, "mlc_b": s.mlc_b, "jaw_x": jx, "jaw_y": jy, "peso": peso})
     tot = sum(s["peso"] for s in segs)
     for s in segs:
         s["peso"] /= tot
     return segs
+
+
+def _fluencia_segmentos(segs, u, forma) -> np.ndarray:
+    fq = np.zeros(forma)
+    for sg in segs:
+        for i_ in range(forma[0]):
+            if np.isnan(sg["mlc_a"][i_]):
+                continue
+            fq[i_] += sg["peso"] * ((u > sg["mlc_a"][i_]) & (u < sg["mlc_b"][i_]))
+    return fq
 
 
 def _fundir_pequenos(segs: list[dict], mu_campo: float, um_min: float) -> list[dict]:
@@ -133,8 +163,16 @@ def _fundir_pequenos(segs: list[dict], mu_campo: float, um_min: float) -> list[d
         mudou = False
         for k, s in enumerate(segs):
             if s["peso"] * mu_campo < um_min:
-                viz = k + 1 if k + 1 < len(segs) else k - 1
-                segs[viz]["peso"] += s["peso"]
+                # vai para o segmento que mais se sobrepõe (com trechos de um mesmo nível divididos, o vizinho na
+                # lista pode abrir o outro lado do par); sem sobreposição, as poucas UM saem
+                def sobre(o):
+                    a1, b1 = np.asarray(s["mlc_a"], float), np.asarray(s["mlc_b"], float)
+                    a2, b2 = np.asarray(o["mlc_a"], float), np.asarray(o["mlc_b"], float)
+                    return float(np.clip(np.minimum(b1, b2) - np.maximum(a1, a2), 0, None).sum())
+                outros = [j for j in range(len(segs)) if j != k]
+                viz = max(outros, key=lambda j: sobre(segs[j]))
+                if sobre(segs[viz]) > 0:
+                    segs[viz]["peso"] += s["peso"]
                 segs.pop(k)
                 mudou = True
                 break
@@ -192,9 +230,11 @@ def compensar(plano: Plano, grade: calculo.GradeDose, doses_um: dict, alvo: np.n
         corpo = grade.eta > 0.3
     fora = corpo & ~alvo
     mapas = {}
+    f_aberto = {}
     for c in alvos:
         u, v, ab = _grade_u(c, colim, res_u_mm)
         mapas[c.nome] = (u, v, ab)
+        f_aberto[c.nome] = _fluencia_segmentos(c.segmentos_blindagem, u, ab.shape) if c.segmentos_blindagem else 1.0
     abertos = {c.nome: {"mu": float(c.mu), "d": doses_um[c.nome].copy(), "jaw": (c.jaw_x, c.jaw_y),
                         "a": list(c.mlc_a), "b": list(c.mlc_b)} for c in alvos}
     fixos = [c for c in plano.campos if c not in alvos]
@@ -279,12 +319,9 @@ def compensar(plano: Plano, grade: calculo.GradeDose, doses_um: dict, alvo: np.n
         hist.append(_hi(dose, alvo))
         for (ofs_c, k0, t, d0, nu, ab), c in zip(termos, alvos):
             u = mapas[c.nome][0]
-            fq = np.zeros(ab.shape)
-            for sg in c.segmentos:
-                for i_ in range(ab.shape[0]):
-                    if np.isnan(sg["mlc_a"][i_]):
-                        continue
-                    fq[i_] += sg["peso"] * ((u > sg["mlc_a"][i_]) & (u < sg["mlc_b"][i_]))
+            fq = _fluencia_segmentos(c.segmentos, u, ab.shape)
+            fa = f_aberto[c.nome]
+            fq = np.where(np.asarray(fa) > 0, fq / np.maximum(fa, 1e-9), 0.0) if np.ndim(fa) else fq
             Fq[ofs_c:ofs_c + ab.size] = (fq * float(c.mu) / max(abertos[c.nome]["mu"], 1e-9)).ravel()
         modelo_alvo = modelo_dose(Fq)[:n_a] / np.maximum(fator[:n_a], 1e-9)
         if hist[-1] < melhor[0]:
@@ -297,7 +334,7 @@ def compensar(plano: Plano, grade: calculo.GradeDose, doses_um: dict, alvo: np.n
         corr = np.clip(razao / np.median(razao), 0.8, 1.2)
     if melhor[1] is None:                              # nada a compensar: volta aos campos abertos
         for c in alvos:
-            c.segmentos = None
+            c.segmentos = [dict(x) for x in c.segmentos_blindagem] if c.segmentos_blindagem else None
         doses_um.update(calculo.dose_por_um(grade, alvos, colim, modelo, kernels, posicao, permitir_demonstracao))
         calculo.normalizar(plano, doses_um, grade, alvo)
         return ResultadoCompensador({}, {c.nome: 0 for c in alvos}, hi0, hi0, hist,

@@ -141,7 +141,16 @@ def dilatar(r: RasterBEV, mg: Margem) -> RasterBEV:
 
 
 def raster_da_abertura(c: Campo, colim: Colimacao, u: np.ndarray, v: np.ndarray) -> RasterBEV:
-    """Área aberta de um campo (MLC ∩ jaws) no raster BEV."""
+    """Área aberta de um campo (MLC ∩ jaws) no raster BEV. Campo com blindagem no meio dos pares: união dos
+    segmentos de blindagem (o envelope das lâminas atravessaria a blindagem)."""
+    segs = getattr(c, "segmentos_blindagem", None)
+    if segs:
+        m = np.zeros((len(v), len(u)), bool)
+        for sg in segs:
+            s = Campo(c.nome, c.gantry, c.colimador, c.mesa, c.isocentro_mm, jaw_x=sg.get("jaw_x") and tuple(sg["jaw_x"]),
+                      jaw_y=tuple(sg["jaw_y"]), mlc_a=sg["mlc_a"], mlc_b=sg["mlc_b"])
+            m |= raster_da_abertura(s, colim, u, v).m
+        return RasterBEV(u, v, m)
     U, V = np.meshgrid(u, v)
     lim = colim.limites_laminas
     jy0, jy1 = c.jaw_y
@@ -160,6 +169,7 @@ class OpcoesAjuste:
     jaw_x_segue_mlc: bool = True              # colimador X (MLCi) no envelope das lâminas abertas
     fechados: str = "sob_jaw"                 # sob_jaw | centro
     segmentos: str = "envelope"               # envelope (do 1º ao último trecho) | maior (só o maior trecho; FiF)
+                                              # | dividir (blindagem no meio do par → segmentos step-and-shoot)
     resolucao_mm: float = 0.5
 
 
@@ -183,8 +193,10 @@ def _limiar(p) -> float:
     return PONTOS_DE_ENCONTRO[p]
 
 
-def ajustar_laminas(ab: RasterBEV, colim: Colimacao, op: OpcoesAjuste) -> tuple[list, list, tuple, tuple | None, list]:
-    """Lâminas e jaws para uma abertura BEV. Devolve (A, B, jaw_y, jaw_x, avisos)."""
+def ajustar_laminas(ab: RasterBEV, colim: Colimacao, op: OpcoesAjuste,
+                    trechos: dict | None = None) -> tuple[list, list, tuple, tuple | None, list]:
+    """Lâminas e jaws para uma abertura BEV. Devolve (A, B, jaw_y, jaw_x, avisos). `trechos` (opcional) recebe, por
+    par, a lista de trechos abertos [(a, b), ...] (mais de um quando há blindagem no meio do par)."""
     if not ab.m.any():
         raise ValueError("Abertura vazia: nada a conformar")
     t = _limiar(op.ponto_encontro)
@@ -218,9 +230,13 @@ def ajustar_laminas(ab: RasterBEV, colim: Colimacao, op: OpcoesAjuste) -> tuple[
             continue
         cols = np.nonzero(ok)[0]
         quebras = np.nonzero(np.diff(cols) > 1)[0]
-        if len(quebras) and op.segmentos == "maior":
-            trechos = np.split(cols, quebras + 1)
-            cols = max(trechos, key=lambda tr: float(cob[tr].sum()))
+        if trechos is not None:
+            trechos[i] = [(ab.u[tr[0]] - h / 2, ab.u[tr[-1]] + h / 2) for tr in np.split(cols, quebras + 1)]
+        if len(quebras) and op.segmentos == "dividir":
+            pass                                              # tratado em ajustar(): segmentos por trecho
+        elif len(quebras) and op.segmentos == "maior":
+            pedacos = np.split(cols, quebras + 1)
+            cols = max(pedacos, key=lambda tr: float(cob[tr].sum()))
         elif len(quebras):                                    # o MLC não blinda o meio de um par
             avisos.append(f"Par {i + 1}: abertura com interrupção — o MLC não consegue blindar o meio do par")
         a[i], b[i] = ab.u[cols[0]] - h / 2, ab.u[cols[-1]] + h / 2
@@ -289,6 +305,45 @@ def _posicionar_fechados(a: np.ndarray, b: np.ndarray, colim: Colimacao, jx, op:
     return corr, avisos
 
 
+def segmentos_por_trechos(campo: Campo, colim: Colimacao, trechos: dict, jy, op: OpcoesAjuste, r1=None,
+                          lo=np.floor, hi=np.ceil, peso: float | None = None) -> tuple[list[dict], list[str]]:
+    """Divide uma abertura com interrupções em segmentos: o segmento k abre o k-ésimo trecho de cada par (os pares
+    com um só trecho abrem só no 1º segmento), de modo que cada ponto da abertura fica aberto em exatamente um
+    segmento. Pesos iguais (1/K) dão a mesma fluência em toda a abertura. Cada segmento passa pela mecânica."""
+    r1 = r1 or (lambda f, x: round(float(f(x * 10) / 10), 1))   # noqa: E731
+    k_max = max(len(t) for t in trechos.values())
+    segs, avisos = [], []
+    for k in range(k_max):
+        a = np.full(colim.n_pares, np.nan)
+        b = np.full(colim.n_pares, np.nan)
+        for i, tr in trechos.items():
+            if k < len(tr):
+                a[i], b[i] = tr[k]
+        if np.all(np.isnan(a)):
+            continue
+        jx = None
+        if colim.tem_jaw_x:
+            jx = (float(np.nanmin(a)) - op.folga_jaw_mm, float(np.nanmax(b)) + op.folga_jaw_mm) if op.jaw_x_segue_mlc \
+                else (-colim.jaw_x_max_mm, colim.jaw_x_max_mm)
+        corr, av = _posicionar_fechados(a, b, colim, jx, op)
+        if corr:
+            avisos.append(f"segmento {k + 1}: " + "; ".join(av))
+        s = Campo(campo.nome, campo.gantry, campo.colimador, campo.mesa, campo.isocentro_mm,
+                  jaw_y=(r1(lo, jy[0]), r1(hi, jy[1])), jaw_x=None if jx is None else (r1(lo, jx[0]), r1(hi, jx[1])),
+                  mlc_a=[r1(lo, x) for x in a], mlc_b=[r1(hi, x) for x in b])
+        for i in range(colim.n_pares):
+            if s.mlc_b[i] - s.mlc_a[i] < colim.gap_minimo_mm:
+                s.mlc_a[i], s.mlc_b[i] = r1(np.floor, a[i]), r1(np.ceil, b[i])
+        erros = verificar_mecanica(s, colim)
+        if erros:
+            raise ValueError("; ".join(erros))
+        segs.append({"mlc_a": s.mlc_a, "mlc_b": s.mlc_b, "jaw_x": None if s.jaw_x is None else list(s.jaw_x),
+                     "jaw_y": list(s.jaw_y), "peso": 1.0, "origem": "blindagem"})
+    for sg in segs:
+        sg["peso"] = (peso if peso is not None else 1.0) / (1.0 if peso is not None else len(segs))
+    return segs, avisos
+
+
 def verificar_mecanica(c: Campo, colim: Colimacao) -> list[str]:
     """Limites mecânicos: gap mínimo, overtravel, extensão, jaws e (MLCi) não-interdigitação."""
     a, b = np.asarray(c.mlc_a, float), np.asarray(c.mlc_b, float)
@@ -346,13 +401,24 @@ def ajustar(campo: Campo, colim: Colimacao, alvos: list[tuple], blindagens: list
     if abertura_base is not None:
         ab &= abertura_base.m
     abertura = RasterBEV(u, v, ab)
-    a, b, jy, jx, avisos = ajustar_laminas(abertura, colim, op)
+    trechos: dict = {}
+    a, b, jy, jx, avisos = ajustar_laminas(abertura, colim, op, trechos)
     a, b = np.array(a), np.array(b)
     corr, av2 = _posicionar_fechados(a, b, colim, jx, op)
     # arredondamento a 0,1 mm: para fora (cobre o alvo), exceto no ponto de encontro "dentro" (para dentro)
     para_dentro = op.ponto_encontro == "dentro" or op.ponto_encontro == 1.0
     lo, hi = (np.ceil, np.floor) if para_dentro else (np.floor, np.ceil)
     r1 = lambda f, x: round(float(f(x * 10 - 1e-6 * (1 if f is np.ceil else -1)) / 10), 1)   # noqa: E731
+    campo.segmentos = None
+    campo.segmentos_blindagem = None
+    if op.segmentos == "dividir" and any(len(t) > 1 for t in trechos.values()):
+        segs, av3 = segmentos_por_trechos(campo, colim, trechos, jy, op, r1, lo, hi)
+        campo.segmentos_blindagem = segs
+        campo.segmentos = [dict(sg) for sg in segs]
+        n_par = sum(len(t) > 1 for t in trechos.values())
+        avisos.append(f"Blindagem no meio de {n_par} par(es): campo entregue em {len(segs)} segmentos "
+                      f"step-and-shoot (cada parte da abertura recebe a fluência inteira)")
+        avisos += av3
     campo.jaw_y = (r1(lo, jy[0]), r1(hi, jy[1]))
     campo.jaw_x = None if jx is None else (r1(lo, jx[0]), r1(hi, jx[1]))
     campo.mlc_a = [r1(lo, x) for x in a]

@@ -90,6 +90,9 @@ class Campo:
     arco_fim: float | None = None
     sentido: str = ""
     pontos_controle: list | None = None
+    # blindagem no meio dos pares (o MLC não fecha o meio de um par): o campo conformado é entregue em segmentos
+    # step-and-shoot que juntos cobrem a abertura sem a blindagem. Faz parte da conformação (não é derivado).
+    segmentos_blindagem: list | None = None
 
     @property
     def e_arco(self) -> bool:
@@ -124,6 +127,7 @@ class Plano:
     # algoritmo da dose final: {"algoritmo": "CCC" | "MC", "incerteza_pct", "dose_na_agua"} (vazio = CCC)
     calculo_dose: dict = field(default_factory=dict)
     campos_setup: list = field(default_factory=list)        # campos de localização (sem dose; SETUP no DICOM)
+    perfil: str = "tps"                                     # planejado como: tps | monaco | eclipse (objetivos/exportação)
 
     # ------------------------------------------------------------------ edição controlada
     def _exigir_rascunho(self):
@@ -151,11 +155,14 @@ class Plano:
             d.pop(k)
         d.pop("restricoes", None)                # avaliação, não tratamento
         d.pop("objetivos_imrt", None)
+        d.pop("perfil", None)                    # vocabulário/exportação, não tratamento
         if not d.get("calculo_dose"):            # planos sem MC: mesmo hash das versões anteriores
             d.pop("calculo_dose", None)
         for c in d.get("campos", []):           # campo sem descrição: mesmo hash das versões anteriores
             if not c.get("descricao"):
                 c.pop("descricao", None)
+            if not c.get("segmentos_blindagem"):
+                c.pop("segmentos_blindagem", None)
             _sem_arco(c)
         for k in ("cobertura_volume_pct", "cobertura_dose_pct"):    # idem para campos novos vazios
             if d["prescricao"].get(k) is None:
@@ -166,6 +173,7 @@ class Plano:
             for c in d["campos_setup"]:
                 if not c.get("descricao"):
                     c.pop("descricao", None)
+                c.pop("segmentos_blindagem", None)
                 _sem_arco(c)
         return _normalizar(d)
 

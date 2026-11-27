@@ -155,29 +155,37 @@ def proteger_oars(plano: Plano, grade: calculo.GradeDose, doses_um: dict, alvo: 
                 if not o.mascara.any():
                     continue
                 po = dilatar(bev_da_estrutura(o.mascara, eixos, c, u, v, posicao=posicao), Margem.uniforme(margem_mm))
-                bloqueio = po.m & pai.m & ~pt.m
-                if bloqueio.sum() * 1.0 / 100.0 < 1.0:          # < 1 cm² do órgão no campo
-                    continue
-                sub = copy.deepcopy(c)
-                sub.nome = f"{c.nome[:11]}o{k}"
-                sub.mu, sub.campo_pai, sub.peso = None, c.nome, 0.0
-                try:
-                    ajustar(sub, colim, alvos=[], blindagens=[], eixos=eixos, op=OpcoesAjuste("area", segmentos="maior"),
-                            posicao=posicao, abertura_base=RasterBEV(u, v, pai.m & ~bloqueio))
-                except ValueError as e:
-                    avisos.append(f"{sub.nome}: sem sub-campo ({e})")
-                    continue
-                ab = raster_da_abertura(sub, colim, u, v)
-                if ab.area_cm2() < area_min_cm2 or ab.m.sum() >= pai.m.sum() * 0.97:
-                    continue
-                sub.descricao = f"protege {o.nome}"[:64]
-                novos.append(sub)
+                # dois sub-campos candidatos: (a) bloqueia o órgão só fora da projeção do alvo (não custa cobertura);
+                # (b) bloqueia o órgão inteiro no BEV, inclusive onde o raio também cruza o alvo — os outros campos
+                # repõem o alvo e a otimização dos pesos decide quanto usar (a cobertura tem prioridade no custo).
+                # Na pelve o reto/bexiga ficam quase todos atrás/na frente do PTV no BEV: sem (b) não há o que bloquear.
+                for sufixo, bloqueio in (("o", po.m & pai.m & ~pt.m), ("b", po.m & pai.m)):
+                    if bloqueio.sum() * 1.0 / 100.0 < 1.0:          # < 1 cm² do órgão no campo
+                        continue
+                    if sufixo == "b" and (po.m & pai.m & pt.m).sum() < 0.3 * bloqueio.sum():
+                        continue                                    # quase igual ao (a)
+                    sub = copy.deepcopy(c)
+                    sub.nome = f"{c.nome[:10]}{sufixo}{k}"
+                    sub.mu, sub.campo_pai, sub.peso = None, c.nome, 0.0
+                    try:
+                        ajustar(sub, colim, alvos=[], blindagens=[], eixos=eixos,
+                                op=OpcoesAjuste("area", segmentos="maior"), posicao=posicao,
+                                abertura_base=RasterBEV(u, v, pai.m & ~bloqueio))
+                    except ValueError as e:
+                        avisos.append(f"{sub.nome}: sem sub-campo ({e})")
+                        continue
+                    ab = raster_da_abertura(sub, colim, u, v)
+                    if ab.area_cm2() < area_min_cm2 or ab.m.sum() >= pai.m.sum() * 0.97:
+                        continue
+                    sub.descricao = (f"protege {o.nome}" + (" (inclui sobre o alvo)" if sufixo == "b" else ""))[:64]
+                    novos.append(sub)
         if novos:
             doses_um.update(calculo.dose_por_um(grade, novos, colim, modelo, kernels, posicao, permitir_demonstracao))
             for s in novos:
                 plano.adicionar_campo(s)
     rng = np.random.default_rng(0)
     interior = binary_erosion(corpo, iterations=2)
+    mu_inicial = {c.nome: float(c.mu or 0.0) for c in principais}   # o piso do campo principal não encolhe a cada volta
     for _ in range(4):
         nomes = [c.nome for c in plano.campos]
         principal = np.array([c.campo_pai is None for c in plano.campos])
@@ -188,8 +196,9 @@ def proteger_oars(plano: Plano, grade: calculo.GradeDose, doses_um: dict, alvo: 
         oa = [(o, _matriz(doses_um, nomes, _amostra(o.mascara & ~alvo, 5000, rng))) for o in objetivos
               if (o.mascara & ~alvo).any()]
         w0 = np.array([c.mu if c.campo_pai is None else 0.0 for c in plano.campos], float)
-        lb = np.where(principal, frac_principal * w0, 0.0)
-        w0 = np.where(principal, w0, 0.05 * w0.max())
+        lb = np.array([frac_principal * mu_inicial.get(c.nome, 0.0) if c.campo_pai is None else 0.0
+                       for c in plano.campos])
+        w0 = np.where(principal, np.maximum(w0, lb), 0.05 * w0.max())
         w = _otimizar(A_alvo, oa, A_q, None, w0, lb, rx, frac)
         for c, x in zip(plano.campos, w):
             c.peso = float(max(x, 1e-4))

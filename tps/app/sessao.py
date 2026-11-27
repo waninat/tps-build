@@ -791,7 +791,10 @@ class Sessao:
                 pe = float(pe)
             except (TypeError, ValueError):
                 pass
-            op = OpcoesAjuste(pe, float(spec.get("folga_jaw", 0)))
+            # blindagem no meio de um par: o campo é dividido em segmentos (padrão) — com o envelope o MLC não blinda
+            op = OpcoesAjuste(pe, float(spec.get("folga_jaw", 0)),
+                              segmentos="dividir" if blind and spec.get("blindagem_meio", "dividir") == "dividir"
+                              else "envelope")
             try:
                 if spec.get("otimizar_colimador"):
                     c.colimador, _ = otimizar_colimador(c, m.colim, alvos, eixos, angulos=range(0, 180, 5),
@@ -872,8 +875,12 @@ class Sessao:
             if "_peso_antes_fif" in c.__dict__:
                 c.peso = c.__dict__.pop("_peso_antes_fif")
         for c in p.campos:
-            if c.segmentos:
-                c.segmentos = None
+            base = [dict(x) for x in c.segmentos_blindagem] if c.segmentos_blindagem else None
+            if c.segmentos and c.segmentos != base:          # a divisão da blindagem faz parte da conformação
+                c.segmentos = base
+                self.doses_um.pop(c.nome, None)
+            elif base and not c.segmentos:
+                c.segmentos = base
                 self.doses_um.pop(c.nome, None)
             if c.pontos_controle:                # arco VMAT: os pontos de controle saem, o arco fica
                 c.pontos_controle = None
@@ -901,6 +908,8 @@ class Sessao:
             raise ErroUsuario("; ".join(erros))
         c.mlc_a, c.mlc_b, c.jaw_x, c.jaw_y = novo.mlc_a, novo.mlc_b, novo.jaw_x, novo.jaw_y
         c.alvo_conformado = None                      # editado à mão
+        c.segmentos_blindagem = None
+        c.segmentos = None
         self.doses_um.pop(nome, None)
         self.dose_atualizada = False
         return {"campo": self._campo_json(c)}
@@ -1730,7 +1739,7 @@ class Sessao:
                               ponto_mm=pr.ponto_mm if pr.metodo == "ponto" else None) if m.tabelas else []
         for k in conf:
             c = self._campo(k["campo"])
-            k["compensado"] = bool(c.segmentos or c.pontos_controle)
+            k["compensado"] = bool((c.segmentos and c.segmentos != c.segmentos_blindagem) or c.pontos_controle)
         if p.tecnica in ("IMRT", "VMAT", "DCA") and m.tabelas and alvo is not None:
             conf.append(self._conferencia_composta(alvo))
         hi = indice_homogeneidade(total, alvo) if alvo is not None and alvo.any() else None
@@ -1826,7 +1835,24 @@ class Sessao:
     def _objetivos_otimizacao(self, im: dict) -> tuple[list, list, list]:
         """Objetivos (imrt.Objetivo), o que fica gravado no plano e a avoidance, a partir do pedido da tela."""
         from tps.planejamento import imrt as I
+        from tps.planejamento import perfil_sistema as PS
         objs, guardar = [], []
+        perfil = im.get("perfil") or getattr(self.plano, "perfil", "tps") or "tps"
+        try:
+            linhas = [PS.para_interno(perfil, o) for o in im.get("objetivos") or []]
+        except ValueError as ex:
+            raise ErroUsuario(str(ex)) from ex
+        if linhas and not any(o.get("tipo") == "alvo" for o in linhas):
+            # Eclipse/Monaco sem um "alvo" explícito: o alvo é a estrutura da prescrição (ou a de maior Lower)
+            pr = self.plano.prescricao
+            lower = [o for o in linhas if o.get("tipo") in ("min", "dvh_min") and o.get("dose_gy")]
+            nome = pr.estrutura_alvo if any(o["estrutura"] == pr.estrutura_alvo for o in lower) else \
+                (max(lower, key=lambda o: o["dose_gy"])["estrutura"] if lower else None)
+            if nome:
+                dose = pr.dose_total_gy if nome == pr.estrutura_alvo else max(o["dose_gy"] for o in lower
+                                                                              if o["estrutura"] == nome)
+                linhas.append({"estrutura": nome, "tipo": "alvo", "dose_gy": dose, "peso": 1.0, "auto": True})
+        im = {**im, "objetivos": linhas}
         for o in im.get("objetivos") or []:
             e = self.estruturas.get(o.get("estrutura"))
             if e is None or not e.mascara.any():
@@ -1857,7 +1883,8 @@ class Sessao:
                     raise ErroUsuario(f"{e.nome} está inteiro dentro de um alvo de dose maior")
             objs.append(I.Objetivo(e.nome, masc, tipo, dose, float(vol) if vol not in (None, "") else None,
                                    float(o.get("peso", 1.0)), bool(o.get("restrito")) and tipo != "alvo"))
-            guardar.append({k: o.get(k) for k in ("estrutura", "tipo", "dose_gy", "volume_pct", "peso", "restrito")})
+            guardar.append({k: o.get(k) for k in ("estrutura", "tipo", "dose_gy", "volume_pct", "peso", "restrito",
+                                                  "funcao", "prioridade", "k", "perfil", "auto") if o.get(k) is not None})
         if not any(o.tipo == "alvo" for o in objs):
             raise ErroUsuario("Defina pelo menos um alvo com dose")
         evitar = []
@@ -1874,6 +1901,9 @@ class Sessao:
         """VMAT nos arcos do plano. SRS-VMT-001."""
         from tps.planejamento import vmat as V
         p, m, g = self.plano, self.maquina, self.grade
+        if vm.get("perfil"):
+            from tps.planejamento import perfil_sistema as PS
+            p.perfil = PS._perfil(vm["perfil"])
         objs, guardar, evitar = self._objetivos_otimizacao(vm)
 
         def prog(msg):
@@ -2031,6 +2061,10 @@ class Sessao:
         p, m, g = self.plano, self.maquina, self.grade
         if any(c.e_arco for c in p.campos):
             raise ErroUsuario("O plano tem arcos: use VMAT ou troque por campos estáticos")
+        from tps.planejamento import perfil_sistema as PS
+        if im.get("perfil"):
+            p.perfil = PS._perfil(im["perfil"])
+        im = PS.opcoes_otimizacao(p.perfil, im)
         objs, guardar, evitar = self._objetivos_otimizacao(im)
         for c in p.campos:
             if c.campo_pai is None and "_abertura_conformada" not in c.__dict__:
@@ -2044,6 +2078,7 @@ class Sessao:
                                 um_min_segmento=float(im.get("um_min") or (m.raw.get("imrt") or {}).get("um_min_segmento", 3.0)),
                                 area_min_cm2=float(im.get("area_min_cm2") or (m.raw.get("imrt") or {}).get("area_min_cm2", 4.0)),
                                 peso_nto=float(im.get("peso_nto", 1.0)), progresso=prog, evitar=evitar,
+                                suavidade=float(im.get("suavidade", 0.05)),
                                 flash_mm=float(im.get("flash_mm", 0) or 0),
                                 flash_pele_mm=float(im.get("flash_pele_mm", 5) or 5),
                                 forma_segmentos=bool(im.get("forma_segmentos", True)))
@@ -2327,7 +2362,7 @@ class Sessao:
                               ponto_mm=pr.ponto_mm if pr.metodo == "ponto" else None) if m.tabelas else []
         for k in conf:
             c = self._campo(k["campo"])
-            k["compensado"] = bool(c.segmentos or c.pontos_controle)
+            k["compensado"] = bool((c.segmentos and c.segmentos != c.segmentos_blindagem) or c.pontos_controle)
         if p.tecnica in ("IMRT", "VMAT") and m.tabelas and alvo is not None:
             conf.append(self._conferencia_composta(alvo))
         corpo = self._corpo()
@@ -2489,6 +2524,8 @@ class Sessao:
             rs = exportar_rtstruct(self, arq_rs)
             extras["rtstruct"] = str(rs.SOPInstanceUID)
         try:
+            from tps.planejamento.perfil_sistema import convencoes_exportacao
+            extras["convencoes"] = convencoes_exportacao(p.perfil)
             rp = exportar_rtplan(p, self.maquina.colim, destino / f"RP_{base}.dcm", modo_segmentos=modo_segmentos,
                                  extras=extras)
         except (ValueError, PermissionError) as e:
@@ -2503,9 +2540,9 @@ class Sessao:
         from tps.exportacao.entregabilidade import Regras, conferir as conferir_entrega
         entrega = conferir_entrega(rp, Regras.da_maquina(self.maquina.colim, self.maquina.raw))
         if p.objetivos_imrt and p.tecnica in ("IMRT", "VMAT"):
-            from tps.exportacao.objetivos_monaco import gravar as gravar_obj
-            arquivos.append(gravar_obj(p.objetivos_imrt, destino / f"OBJ_Monaco_{base}.csv",
-                                       f"{p.rotulo} — {p.prescricao.dose_total_gy:g} Gy / {p.prescricao.fracoes} fx"))
+            from tps.planejamento.perfil_sistema import gravar_ficha
+            arquivos += gravar_ficha(p.perfil, p.objetivos_imrt, destino, base,
+                                     f"{p.rotulo} — {p.prescricao.dose_total_gy:g} Gy / {p.prescricao.fracoes} fx")
         if incluir_imagens is None:
             incluir_imagens = self.tipo == "fantoma"          # CT real: o Mosaiq normalmente já tem as imagens
         if incluir_imagens:
@@ -2691,7 +2728,7 @@ class Sessao:
             out["plano"] = {"rotulo": p.rotulo, "estado": p.estado, "aprovacao": p.aprovacao, "tecnica": p.tecnica,
                             "pontos": pts, "restricoes": p.restricoes, "bolus": p.bolus, "densidades": p.densidades,
                             "prescricao": dataclasses.asdict(p.prescricao), "historico": p.historico,
-                            "calculo_dose": p.calculo_dose or {},
+                            "calculo_dose": p.calculo_dose or {}, "perfil": getattr(p, "perfil", "tps"),
                             "campos": [self._campo_json(c) for c in p.campos],
                             "campos_setup": [self._campo_json(c) for c in p.campos_setup]}
             if self.dose_atualizada and self.resultado:

@@ -140,10 +140,12 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
     ds.OperatorsName = (plano.aprovacao or {}).get("usuario", "")
 
     # ---------------------------------------------------------------- RT General Plan
-    ds.RTPlanLabel = plano.rotulo
+    conv = ex.get("convencoes") or {}                    # perfil de planejamento (Monaco | Eclipse)
+    ds.RTPlanLabel = plano.rotulo[:int(conv.get("rotulo_max", 16))]
     ds.RTPlanName = plano.rotulo
     ds.RTPlanDate, ds.RTPlanTime = agora.strftime("%Y%m%d"), agora.strftime("%H%M%S")
-    ds.RTPlanDescription = ""
+    ds.RTPlanDescription = (f"Planejado no TPS (perfil {conv['sistema']})" if conv.get("sistema") not in (None, "TPS")
+                            else "")
     ds.PlanIntent = str(ex.get("intencao") or "CURATIVE")
     ds.RTPlanGeometry = "TREATMENT_DEVICE" if sem_imagem else "PATIENT"
     rs_uid = ex.get("rtstruct") or plano.referencia_rtstruct
@@ -220,7 +222,9 @@ def exportar_rtplan(plano: Plano, colim: Colimacao, destino: str | Path, sad_mm:
         b = Dataset()
         bol = [x for x in plano.bolus if not x.get("campos") or c.nome in x["campos"] or (c.campo_pai or "") in x["campos"]]
         b.BeamNumber, b.BeamName = nb, nome[:16]
-        b.BeamDescription = ((getattr(c, "descricao", "") or nome)
+        tec = {"IMRT": "IMRT sMLC", "VMAT": "VMAT", "DCA": "Arco conformacional"}.get(plano.tecnica, plano.tecnica)
+        desc0 = (getattr(c, "descricao", "") or (tec if conv.get("descricao_feixe") == "tecnica" else nome))
+        b.BeamDescription = (desc0
                              + "".join(f" BOLUS {x['espessura_mm']:g}mm" for x in bol))[:64]
         if ex.get("departamento"):
             b.InstitutionalDepartmentName = str(ex["departamento"])[:64]

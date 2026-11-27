@@ -45,6 +45,10 @@ def traduzir(objetivos: list[dict]) -> list[dict]:
             vol = v if v is not None else 50
             out.append({"estrutura": n, "funcao": "Overdose DVH", "parametros": f"Dose {d:g} Gy; Maximum Volume {vol:g}%",
                         "papel": tipo, "origem": f"V{d:g}Gy ≤ {vol:g}%"})
+        elif t == "dvh_min":
+            vol = v if v is not None else 95
+            out.append({"estrutura": n, "funcao": "Underdose DVH", "parametros": f"Dose {d:g} Gy; Minimum Volume {vol:g}%",
+                        "papel": "Objetivo", "origem": f"V{d:g}Gy ≥ {vol:g}%"})
         elif t == "paralelo":
             vol = v if v is not None else 50
             out.append({"estrutura": n, "funcao": "Parallel",

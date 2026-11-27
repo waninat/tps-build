@@ -125,6 +125,12 @@ def _estado_ia():
         return {"disponivel": False, "motivo": str(e), "orgaos": []}
 
 
+@app.get("/api/perfis")
+def perfis_planejamento(u: dict = Depends(usuario)):
+    from tps.planejamento import perfil_sistema
+    return perfil_sistema.perfis()
+
+
 @app.get("/api/objetivos_sitio")
 def objetivos_sitio(u: dict = Depends(usuario)):
     from tps.planejamento import assistente

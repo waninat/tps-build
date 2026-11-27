@@ -678,6 +678,7 @@ function atualizar(r) {
     if (cd.incerteza_pct) $("#o-mc-inc").value = String(cd.incerteza_pct);
     $("#o-mc-agua").checked = !!cd.dose_na_agua;
   }
+  if (p && p.perfil && $("#obj-perfil") && $("#obj-perfil").value !== p.perfil) tentar(() => aplicarPerfil(p.perfil, false));
   if (p && p.objetivos_imrt && p.objetivos_imrt.length && !(E.objetivos || []).length) { E.objetivos = p.objetivos_imrt; listarObjetivos(); }
   if (E.objetivos && E.objetivos.length) listarObjetivos();
   if (p && r.dose_atualizada) carregarChecklist(); else $("#checklist").innerHTML = p ? `<div class="pequeno-txt">Calcule a dose para conferir o plano.</div>` : "";
@@ -777,7 +778,7 @@ async function calcular() {
     const objetivos = (E.objetivos || []).map(o => ({ estrutura: o.estrutura, tipo: o.tipo, dose_gy: +String(o.dose_gy).replace(",", "."),
       volume_pct: o.volume_pct === "" || o.volume_pct == null ? null : +String(o.volume_pct).replace(",", "."), peso: +o.peso || 1,
       restrito: !!o.restrito }));
-    const comum = { objetivos, avoidance: (E.avoid || []).filter(a => a.estrutura),
+    const comum = { objetivos, perfil: perfilAtual(), avoidance: (E.avoid || []).filter(a => a.estrutura),
       flash_mm: $("#im-flash").checked ? +$("#im-flash-mm").value : 0, flash_pele_mm: +$("#im-flash-pele").value };
     const corpo = tec === "VMAT"
       ? { ...normalizacaoDoForm(), ...algoritmoDoForm(), vmat: { ...comum, setor_graus: +$("#vm-setor").value, iteracoes: +$("#vm-it").value,
@@ -841,7 +842,8 @@ async function exportar() {
     ((r.entregabilidade || []).length ? `<h3>Entregabilidade (regras da máquina)</h3><ul class="assist-lista">` +
       r.entregabilidade.map(i => `<li class="${i.gravidade === "erro" ? "falha" : "avisotxt"}">${esc(i.feixe)}: ${esc(i.msg)}${i.n > 1 ? ` (${i.n} pontos de controle)` : ""}</li>`).join("") + `</ul>`
       : `<div class="ok pequeno-txt">Entregabilidade: sem problemas nas regras da máquina</div>`) +
-    (r.arquivos.some(a => /OBJ_Monaco_/.test(a)) ? `<div class="pequeno-txt">OBJ_Monaco_…csv: os objetivos traduzidos para as funções de custo do Monaco (o DICOM não leva objetivos)</div>` : "");
+    (r.arquivos.some(a => /OBJ_Monaco_/.test(a)) ? `<div class="pequeno-txt">OBJ_Monaco_…csv: os objetivos traduzidos para as funções de custo do Monaco (o DICOM não leva objetivos)</div>` : "") +
+    (r.arquivos.some(a => /OBJ_Eclipse_/.test(a)) ? `<div class="pequeno-txt">OBJ_Eclipse_…xml/csv: modelo de objetivos do Eclipse (Upper/Lower/Mean/gEUD + NTO) para reotimizar lá (o DICOM não leva objetivos)</div>` : "");
   if (E.janela) $("#b-abrir-exp").onclick = () => window.pywebview.api.abrir_pasta(r.pasta);
   const erros = (r.entregabilidade || []).filter(i => i.gravidade === "erro").length;
   aviso(erros ? `RTPLAN exportado, mas com ${erros} problema(s) de entregabilidade: veja a lista` : "RTPLAN exportado e conferido", !erros);
@@ -1589,6 +1591,7 @@ function ligarInterface() {
   $("#iso-gy-rapido").onkeydown = (ev) => { if (ev.key === "Enter") addGy("#iso-gy-rapido"); };
   // objetivos
   $("#obj-est-nova").onchange = () => { const n = $("#obj-est-nova").value; if (n) novoGrupo(n); };
+  if ($("#obj-perfil")) $("#obj-perfil").onchange = () => tentar(() => aplicarPerfil($("#obj-perfil").value));
   $("#b-obj-limpar").onclick = () => { if ((E.objetivos || []).length && confirm("Apagar todos os objetivos?")) { E.objetivos = []; listarObjetivos(); } };
   $("#b-obj-prot").onclick = () => tentar(aplicarProtocolo);
   $("#b-obj-assist").onclick = () => tentar(() => assistente());
@@ -1688,7 +1691,32 @@ function desenharPainelIso() {
 
 // ---- objetivos agrupados por estrutura
 const TIPOS_OBJ = { alvo: "alvo (uniforme)", min: "mínimo ≥", max: "máximo ≤", media: "média ≤", dvh: "DVH: V(Gy) ≤ vol%",
-  serial: "serial: EUD(k) ≤", paralelo: "paralelo: ≤ v% acima" };
+  dvh_min: "DVH: V(Gy) ≥ vol%", serial: "serial: EUD(k) ≤", paralelo: "paralelo: ≤ v% acima" };
+// vocabulário do sistema escolhido (planejar como no Monaco / Eclipse): mesmos objetivos, nomes do sistema
+const TIPOS_PERFIL = {
+  tps: TIPOS_OBJ,
+  monaco: { alvo: "Target Penalty", min: "Quadratic Underdose", max: "Quadratic Overdose / Maximum Dose", media: "Serial k=1 (média)",
+    dvh: "Overdose DVH", dvh_min: "Underdose DVH", serial: "Serial (EUD, k)", paralelo: "Parallel" },
+  eclipse: { alvo: "Lower + Upper (alvo)", min: "Lower (100%)", max: "Upper (0% = máx)", media: "Mean", dvh: "Upper (V%)",
+    dvh_min: "Lower (V%)", serial: "Upper gEUD (a)", paralelo: "Upper (paralelo)" } };
+const perfilAtual = () => ($("#obj-perfil") && $("#obj-perfil").value) || "tps";
+async function aplicarPerfil(perfil, padroes = true) {
+  if (!E.perfis) E.perfis = await api("GET", "/api/perfis");
+  const pf = E.perfis[perfil] || {};
+  if ($("#obj-perfil")) $("#obj-perfil").value = perfil;
+  const o = pf.otimizacao || {};
+  if (padroes) {
+    const por = { niveis: "#im-niveis", um_min: "#im-ummin", area_min_cm2: "#im-area", peso_nto: "#im-nto" };
+    for (const [k, sel] of Object.entries(por)) if (o[k] != null && $(sel)) $(sel).value = o[k];
+    if (o.forma_segmentos != null && $("#im-forma")) $("#im-forma").checked = !!o.forma_segmentos;
+  }
+  const th = $("#tab-objetivos thead th:nth-child(4)");
+  if (th) { th.textContent = perfil === "eclipse" ? "Prior." : "Peso"; th.title = perfil === "eclipse" ? "prioridade do Eclipse (0–1000; 100 = peso 1)" : "peso relativo"; }
+  if ($("#obj-perfil-info")) $("#obj-perfil-info").textContent = perfil === "tps" ? "" :
+    `${pf.rotulo}: objetivos com os nomes do ${pf.sistema}, padrões de sequenciamento dele e, na exportação, a ficha de objetivos ` +
+    (perfil === "eclipse" ? "(modelo XML + tabela) e o RT Plan nas convenções do Eclipse." : "(funções de custo) e o RT Plan nas convenções do Monaco.");
+  listarObjetivos();
+}
 const eAlvoNome = (n) => /^(PTV|CTV|GTV|ITV)/i.test(n || "");
 function doseDoNome(n) {
   const m = /(\d+(?:[.,]\d+)?)/.exec((n || "").replace(/^(PTV|CTV|GTV|ITV)/i, ""));
@@ -1710,16 +1738,21 @@ function listarObjetivos() {
       (da ? `<span class="alvo-tag">alvo ${f1(da, 2)} Gy</span>` : "") + (ests.some(e => e.nome === n) ? "" : ` <span class="falha">(não existe)</span>`) +
       `<button data-rem-g="${esc(n)}" title="tirar a estrutura e os objetivos dela">×</button><button data-add-g="${esc(n)}" title="mais um objetivo nesta estrutura">+ objetivo</button></td></tr>` +
       linhas.map(([o, k]) => `<tr class="obj" data-k="${k}" title="${esc(o.origem ? "de: " + o.origem : "")}">
-      <td><select data-c="tipo">${Object.entries(TIPOS_OBJ).map(([v, t]) => `<option value="${v}" ${v === o.tipo ? "selected" : ""}>${t}</option>`).join("")}</select></td>
+      <td><select data-c="tipo">${Object.entries(TIPOS_PERFIL[perfilAtual()] || TIPOS_OBJ).map(([v, t]) => `<option value="${v}" ${v === o.tipo ? "selected" : ""}>${t}</option>`).join("")}</select></td>
       <td><input data-c="dose_gy" value="${o.dose_gy ?? ""}"></td>
-      <td><input data-c="volume_pct" value="${o.volume_pct ?? (o.tipo === "serial" ? 8 : "")}" ${["dvh", "paralelo", "serial"].includes(o.tipo) ? "" : "disabled"}></td>
-      <td><input data-c="peso" type="number" min="0.1" step="0.5" value="${o.peso ?? 1}"></td>
+      <td><input data-c="volume_pct" value="${o.volume_pct ?? (o.tipo === "serial" ? 8 : "")}" ${["dvh", "dvh_min", "paralelo", "serial"].includes(o.tipo) ? "" : "disabled"}></td>
+      <td>${perfilAtual() === "eclipse"
+        ? `<input data-c="prioridade" type="number" min="0" max="1000" step="10" value="${Math.round((o.peso ?? 1) * 100)}">`
+        : `<input data-c="peso" type="number" min="0.1" step="0.5" value="${o.peso ?? 1}">`}</td>
       <td><input data-c="restrito" type="checkbox" ${o.restrito ? "checked" : ""} ${o.tipo === "alvo" ? "disabled" : ""}></td>
       <td><button class="pequeno" data-rem-obj="${k}">×</button></td></tr>`).join("");
   }).join("") || `<tr><td colspan="6" class="pequeno-txt" style="text-align:left">Sem objetivos: escolha um protocolo, use o assistente ou acrescente as estruturas abaixo.</td></tr>`;
   $$("#tab-objetivos [data-c]").forEach(i => i.onchange = () => {
-    const k = +i.closest("tr").dataset.k; E.objetivos[k][i.dataset.c] = i.type === "checkbox" ? i.checked : i.value;
-    if (i.dataset.c === "tipo") { if (i.value === "serial" && !E.objetivos[k].volume_pct) E.objetivos[k].volume_pct = 8; listarObjetivos(); }
+    const k = +i.closest("tr").dataset.k;
+    if (i.dataset.c === "prioridade") E.objetivos[k].peso = Math.max(0, +i.value || 0) / 100;
+    else E.objetivos[k][i.dataset.c] = i.type === "checkbox" ? i.checked : i.value;
+    if (i.dataset.c === "tipo") { if (i.value === "serial" && !E.objetivos[k].volume_pct) E.objetivos[k].volume_pct = 8;
+      if (i.value === "dvh_min" && !E.objetivos[k].volume_pct) E.objetivos[k].volume_pct = 95; listarObjetivos(); }
     if (i.dataset.c === "dose_gy" && E.objetivos[k].tipo === "alvo") listarObjetivos();
   });
   $$("[data-rem-obj]").forEach(b => b.onclick = () => { E.objetivos.splice(+b.dataset.remObj, 1); listarObjetivos(); });

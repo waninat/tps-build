@@ -56,7 +56,7 @@ def test_compensador_homogeneiza_o_alvo(caso):
 
 def test_segmentos_respeitam_a_mecanica_e_a_um_minima(caso):
     for c in caso.plano.campos:
-        assert c.segmentos and 2 <= len(c.segmentos) <= 8
+        assert c.segmentos and 2 <= len(c.segmentos) <= 16
         assert sum(s["peso"] for s in c.segmentos) == pytest.approx(1.0)
         for s in c.segmentos:
             seg = Campo(c.nome, c.gantry, jaw_x=s["jaw_x"], jaw_y=s["jaw_y"], mlc_a=s["mlc_a"], mlc_b=s["mlc_b"])

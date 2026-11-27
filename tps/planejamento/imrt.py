@@ -40,15 +40,16 @@ from tps.planejamento.modelo import Campo, Plano
 
 
 # ------------------------------------------------------------------ objetivos
-TIPOS = ("alvo", "min", "max", "media", "dvh", "serial", "paralelo")
-ESCALA = {"alvo": 1.0, "min": 50.0, "max": 20.0, "media": 20.0, "dvh": 20.0, "serial": 20.0, "paralelo": 20.0}
+TIPOS = ("alvo", "min", "max", "media", "dvh", "dvh_min", "serial", "paralelo")
+ESCALA = {"alvo": 1.0, "min": 50.0, "max": 20.0, "media": 20.0, "dvh": 20.0, "dvh_min": 50.0, "serial": 20.0,
+          "paralelo": 20.0}
 
 
 @dataclass
 class Objetivo:
     nome: str
     mascara: np.ndarray
-    tipo: str                         # alvo | min | max | media | dvh | serial | paralelo
+    tipo: str                         # alvo | min | max | media | dvh | dvh_min | serial | paralelo
     dose_gy: float                    # dose total (Gy)
     volume_pct: float | None = None   # dvh/paralelo: no máximo volume_pct% acima de dose_gy; serial: expoente k
     peso: float = 1.0
@@ -91,6 +92,13 @@ def _termo(o: Objetivo, d: np.ndarray):
         if not len(sel):
             return 0.0, g
         e = np.maximum(d[sel] / L - 1.0, 0.0)
+        g[sel] = 2 * e / (len(sel) * L)
+        return (e @ e) / len(sel), g
+    if o.tipo == "dvh_min":                   # pelo menos volume_pct% com dose ≥ L (Underdose DVH / Lower)
+        k = int(np.ceil(n * (o.volume_pct if o.volume_pct is not None else 95.0) / 100.0))
+        sel = np.argsort(d)[::-1][:max(k, 1)]
+        g = np.zeros(n)
+        e = np.minimum(d[sel] / L - 1.0, 0.0)
         g[sel] = 2 * e / (len(sel) * L)
         return (e @ e) / len(sel), g
     if o.tipo == "serial":
