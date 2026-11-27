@@ -781,6 +781,10 @@ class Sessao:
         p, m = self.plano, self.maquina
         nome = (spec.get("nome") or f"G{int(round(float(spec.get('gantry', 0)))) % 360:03d}").strip()[:16]
         existente = next((c for c in p.campos if c.nome == (spec.get("nome_antigo") or nome)), None)
+        if existente is not None and existente.campo_pai is not None:
+            raise ErroUsuario(f"{existente.nome} é um sub-campo gerado (field-in-field / proteção de órgãos) a partir de "
+                              f"{existente.campo_pai}: ajuste o campo {existente.campo_pai} e recalcule, ou mova as lâminas "
+                              "do sub-campo no editor do BEV")
         if existente is None and any(c.nome == nome for c in p.campos):
             raise ErroUsuario(f"Já existe um campo {nome}")
         c = Campo(nome=nome, gantry=float(spec.get("gantry", 0)) % 360, colimador=float(spec.get("colimador", 0)) % 360,

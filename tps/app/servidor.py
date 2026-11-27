@@ -23,7 +23,27 @@ from tps.app.sessao import ErroUsuario, Sessao, maquinas_disponiveis, mover_para
 from tps.version import __version__
 
 ESTATICOS = Path(__file__).parent / "estatico"
-app = FastAPI(title="TPS", version=__version__)
+class _JSONSeguro(JSONResponse):
+    """Resposta JSON sem inf/NaN (o navegador não lê "Infinity"): valores não finitos viram null."""
+
+    def render(self, content) -> bytes:
+        import json
+        import math
+        try:
+            return json.dumps(content, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        except ValueError:
+            def limpar(x):
+                if isinstance(x, float):
+                    return x if math.isfinite(x) else None
+                if isinstance(x, dict):
+                    return {k: limpar(v) for k, v in x.items()}
+                if isinstance(x, (list, tuple)):
+                    return [limpar(v) for v in x]
+                return x
+            return json.dumps(limpar(content), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+app = FastAPI(title="TPS", version=__version__, default_response_class=_JSONSeguro)
 SESSOES: dict[str, Sessao] = {}
 TRAVA = threading.Lock()                 # um cálculo por vez (numba já usa todos os núcleos)
 _BANCO: Banco | None = None

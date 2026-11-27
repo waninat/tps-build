@@ -118,6 +118,17 @@ def _registro_inicio():
     return etapa
 
 
+def _fim_do_vigia_de_inicio():
+    """Desliga o vigia da inicialização (pilhas a cada 30 s em inicio.log). Ele só serve para achar um travamento ao
+    abrir: deixado ligado, despejava as pilhas de todas as linhas a cada 30 s com o programa trabalhando — e despejar
+    a pilha de uma linha que está rodando pode derrubar o processo (access violation). Era o que fechava o TPS."""
+    try:
+        import faulthandler
+        faulthandler.cancel_dump_traceback_later()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _carregar(etapa):
     etapa("carregando numpy/scipy…")
     import numpy  # noqa: F401
@@ -166,7 +177,9 @@ def _janela_propria():
 
     def iniciar(host, porta):
         from tps.app import servidor
-        return servidor.servidor_em_paralelo(host, porta)
+        srv = servidor.servidor_em_paralelo(host, porta)
+        _fim_do_vigia_de_inicio()
+        return srv
 
     try:
         return janela.rodar(preparar, iniciar, teste=a.teste_janela)
@@ -250,6 +263,7 @@ def main() -> int:
         _carregar(etapa)
         from tps.app.servidor import main as servidor
         etapa("iniciando o servidor…")
+        _fim_do_vigia_de_inicio()
         servidor()
     except SystemExit:
         raise
