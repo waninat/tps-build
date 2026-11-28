@@ -31,11 +31,11 @@
       <hr><button data-acao="aprovar" data-precisa="dose">Aprovar…</button>
       <button data-acao="aba:aprov">Aprovação e exportação</button></div></div>
     <div class="menu"><button class="menu-b">Ferramentas</button><div class="menu-l">
-      <button data-acao="ia">Contorno automático de órgãos (TotalSegmentator)…</button>
+      <button data-acao="ia">Segmentação automática de órgãos…</button>
       <button data-acao="assistente" data-precisa="plano">Assistente de objetivos (IMRT/VMAT)…</button>
-      <button data-acao="claude">Assistente com Claude (configurar)…</button>
+      <button data-acao="claude">Assistente de IA (configurar)…</button>
       <button data-acao="automacao">Automação: pasta, contorno e plano automáticos…</button>
-      <button data-acao="copiloto">Copiloto do plano (Claude)… <kbd>Ctrl+K</kbd></button>
+      <button data-acao="copiloto">Copiloto de IA do plano… <kbd>Ctrl+K</kbd></button>
       <button data-acao="aba-d:est">Estruturas e contorno</button>
       <button data-acao="aba-d:pl">Comparar / somar planos</button>
       <button data-acao="aba-d:um">UM e pontos</button>
@@ -518,13 +518,13 @@
         <button id="b-auto-ossos" class="pequeno" title="osso por limiar (> 200 HU)">Ossos</button>
       </div>
       <div id="ia-caixa" class="caixa-import">
-        <div class="pequeno-txt"><b>Órgãos por IA</b> (TotalSegmentator, roda neste computador) — <span id="ia-estado">verificando…</span></div>
+        <div class="pequeno-txt"><b>Segmentação automática</b> (roda neste computador) — <span id="ia-estado">verificando…</span></div>
         <select id="ia-orgaos" multiple size="10"></select>
         <label title="o reto sai do cólon da IA, do corte mais inferior até a junção retossigmoide detectada; para mudar, informe o z (mm) do último corte e segmente de novo">
           Limite superior do reto (z, mm)<input id="ia-reto-z" placeholder="automático"></label>
         <label title="suavização 3D dos contornos da IA, preservando o volume (0 = como a rede entrega, em degraus)">Suavizar (mm)<select id="ia-suave"><option>0</option><option>1</option><option>1.5</option><option selected>2</option><option>3</option></select></label>
         <div class="botoes"><button id="b-ia" class="pequeno" disabled>Segmentar</button>
-          <button id="b-ia-instalar" class="pequeno" title="instalar ou configurar o TotalSegmentator">Instalar / configurar…</button></div>
+          <button id="b-ia-instalar" class="pequeno" title="instalar ou configurar a segmentação automática">Instalar / configurar…</button></div>
       </div>
       <div class="pequeno-txt">Todo contorno automático precisa ser revisado e corrigido antes do plano.</div>
     </details>
@@ -634,7 +634,11 @@
   <h3>Colorwash</h3>
   <div class="linha2">
     <label class="check"><input type="checkbox" id="t-wash"> mostrar (3 cortes)</label>
-    <label>Mínimo (% da prescrição)<select id="wash-min"><option>10</option><option selected>20</option><option>30</option><option>50</option><option>80</option><option>90</option><option>95</option></select></label>
+    <label>Escala<select id="wash-un"><option value="pct">% da prescrição</option><option value="gy">Gy (dose total)</option></select></label>
+  </div>
+  <div class="linha2">
+    <label>Mínimo<input id="wash-min" type="number" value="20" step="0.5" min="0" title="abaixo disto fica transparente"></label>
+    <label>Máximo<input id="wash-max" type="number" value="" step="0.5" min="0" placeholder="dose máx." title="vazio = dose máxima do plano"></label>
   </div>
   <div id="iso-info" class="pequeno-txt"></div>
   </div>
@@ -724,7 +728,7 @@
 <div id="toast" class="oculto"></div>
 <script src="/estatico/app.js"></script>
 <aside id="copiloto" class="oculto" aria-label="Copiloto do plano">
-  <div class="cp-topo"><b>Copiloto</b> <span class="pequeno-txt">Claude · só no rascunho · não aprova nem exporta</span>
+  <div class="cp-topo"><b>Copiloto</b> <span class="pequeno-txt">IA · só no rascunho · não aprova nem exporta</span>
     <span class="cp-esp"></span>
     <button id="cp-desf" class="pequeno" title="volta o plano ao estado de antes do último pedido">Desfazer</button>
     <button id="cp-novo" class="pequeno" title="começa uma conversa nova">Nova</button>

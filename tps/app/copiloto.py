@@ -28,7 +28,7 @@ from tps import paths
 from tps.planejamento import assistente_claude as C
 
 MAX_VOLTAS = 14
-ACOES = {"definir_objetivos", "otimizar_modulado", "calcular", "salvar_campo", "remover_campo", "bloquear_orgao",
+ACOES = {"criar_plano", "criar_campos", "definir_objetivos", "otimizar_modulado", "calcular", "salvar_campo", "remover_campo", "bloquear_orgao",
          "mover_laminas", "pos_processar_contorno", "criar_rascunho_maquina", "definir_perfil"}
 
 SISTEMA = """Você é o copiloto de um físico médico num sistema de planejamento (TPS) para aceleradores Elekta (Precise
@@ -38,6 +38,9 @@ ferramentas devolvem (resumo anônimo, DVH, medidas, campos).
 
 Como trabalhar:
 - Antes de opinar sobre um plano, leia-o (ler_plano, ler_dose) — não invente números.
+- Você PODE fazer o plano do zero: listar_opcoes → criar_plano (prescrição, alvo, máquina) → criar_campos (3D com
+  ângulos, modelo do sítio, IMRT, VMAT ou DCA) → objetivos/otimização ou calcular → ler_dose → ajustes. Não espere
+  o usuário criar o plano: se ele pedir um plano, faça.
 - Ao avaliar: compare com a prescrição e as restrições (ler_dose traz a avaliação QUANTEC/clínica), cobertura do
   alvo (D95/D98, V95), homogeneidade (HI, D2/Dmax), órgãos; dê um parecer com dar_parecer (aval: "aceitavel",
   "melhorar" ou "refazer") e sugestões concretas e priorizadas (objetivos novos, ângulos, blindagens, técnica).
@@ -82,6 +85,24 @@ FERRAMENTAS = [
      "ainda está marcado CONFIRMAR.", "input_schema": _esquema({})},
     {"name": "ler_protocolo", "description": "Limites de dose do protocolo de um sítio.",
      "input_schema": _esquema({"sitio": _STR}, ["sitio"])},
+    {"name": "listar_opcoes", "description": "Máquinas (energias), modelos de plano 3D por sítio e planos já abertos "
+     "na sessão — use antes de criar um plano.", "input_schema": _esquema({})},
+    {"name": "criar_plano", "description": "Cria um plano NOVO (rascunho) com a prescrição. O isocentro vai para o "
+     "centro do alvo. Depois crie os campos com criar_campos.",
+     "input_schema": _esquema({"rotulo": _STR, "dose_total_gy": _NUM, "fracoes": {"type": "integer"}, "alvo": _STR,
+                               "maquina": _STR, "energia": _STR,
+                               "normalizacao": {"type": "string", "enum": ["media_alvo", "cobertura", "ponto", "isocentro"]}},
+                              ["rotulo", "dose_total_gy", "fracoes", "alvo"])},
+    {"name": "criar_campos", "description": "Cria/substitui os campos do plano atual. tecnica: '3D' (gantries: lista "
+     "de ângulos, ex. [0,90,180,270]; conformados ao alvo com margem_mm e blindagens), 'modelo' (modelo 3D do sítio: "
+     "use o id de listar_opcoes; refaz o plano com a prescrição dele), 'IMRT' (n campos equiespaçados), 'VMAT' "
+     "(n_arcos) ou 'DCA' (arco conformacional).",
+     "input_schema": _esquema({"tecnica": {"type": "string", "enum": ["3D", "modelo", "IMRT", "VMAT", "DCA"]},
+                               "gantries": {"type": "array", "items": _NUM}, "colimador": _NUM,
+                               "margem_mm": _NUM, "blindagens": {"type": "array", "items": _esquema(
+                                   {"nome": _STR, "margem": _NUM}, ["nome"])},
+                               "otimizar_colimador": {"type": "boolean"}, "n": {"type": "integer"},
+                               "n_arcos": {"type": "integer"}, "modelo": _STR, "alvo": _STR}, ["tecnica"])},
     {"name": "definir_perfil", "description": "Planejar como TPS, Monaco ou Eclipse (vocabulário, padrões e "
      "exportação).", "input_schema": _esquema({"perfil": {"type": "string", "enum": ["tps", "monaco", "eclipse"]}},
                                               ["perfil"])},
@@ -195,7 +216,7 @@ def criar_rascunho_maquina(dados: dict) -> dict:
         "dicom_exportacao": {"distancia_fonte_mm": q("distancias_fonte_mm", {}), "tolerancia": q("tolerancia", ""),
                              "segmentos": "step_and_shoot"},
         "vmat": q("vmat", {}),
-        "rascunho": {"criado": dt.datetime.now().isoformat(timespec="seconds"), "por": "copiloto (Claude)",
+        "rascunho": {"criado": dt.datetime.now().isoformat(timespec="seconds"), "por": "copiloto (IA)",
                      "comissionado": False},
     }
     pend = []
@@ -366,7 +387,72 @@ class Ferramentas:
     def ler_protocolo(self, e):
         return C._protocolo(str(e.get("sitio", "")))
 
+    def listar_opcoes(self, _):
+        from tps.app.sessao import maquinas_disponiveis
+        from tps.planejamento import modelos_plano as MP
+        s = self.s
+        return {"maquinas": maquinas_disponiveis(),
+                "maquina_atual": {"id": s.maquina.id, "energia": s.maquina.energia} if s.maquina else None,
+                "modelos_3d": [{"id": m["id"], "nome": m.get("nome"), "sitio": m.get("sitio")} for m in MP.lista()],
+                "planos_na_sessao": [p.get("rotulo") for p in (s.resumo().get("planos_sessao") or [])],
+                "estruturas": [n for n, e in s.estruturas.items() if e.mascara is not None and e.mascara.any()]}
+
     # -- ações
+    def criar_plano(self, e):
+        from tps.app.sessao import maquinas_disponiveis
+        s = self.s
+        self._guardar()
+        if e.get("alvo") not in s.estruturas:
+            return {"erro": f"alvo {e.get('alvo')} não existe; estruturas: {list(s.estruturas)[:40]}"}
+        if e.get("maquina") or s.maquina is None:
+            mid = e.get("maquina") or maquinas_disponiveis()[0]["id"]
+            s.definir_maquina(mid, e.get("energia") or "6MV")
+        elif e.get("energia") and e["energia"] != s.maquina.energia:
+            s.definir_maquina(s.maquina.id, e["energia"])
+        s.novo_plano(str(e["rotulo"])[:16], float(e["dose_total_gy"]), int(e["fracoes"]), e["alvo"],
+                     e.get("normalizacao") or "media_alvo")
+        p = s.plano
+        return {"plano": p.rotulo, "maquina": s.maquina.id, "energia": s.maquina.energia,
+                "isocentro_mm": [round(float(v), 1) for v in s.isocentro]}
+
+    def criar_campos(self, e):
+        s = self.s
+        self._guardar()
+        if s.plano is None:
+            return {"erro": "crie o plano antes (criar_plano)"}
+        tec = e.get("tecnica")
+        alvo = e.get("alvo") or s.plano.prescricao.estrutura_alvo
+        margem = float(e.get("margem_mm") if e.get("margem_mm") is not None else 7.0)
+        if tec == "modelo":
+            pr = s.plano.prescricao
+            rot = s.plano.rotulo
+            if not s.plano.campos:                      # plano vazio recém-criado: o modelo o substitui
+                s.remover_plano(rot)
+            else:
+                rot = rot + "_m" if len(rot) < 15 else rot[:14] + "_m"
+            r = s.aplicar_modelo(str(e.get("modelo")), rot, pr.dose_total_gy, pr.fracoes, alvo, calcular=False)
+            return {"plano": s.plano.rotulo, "campos": [c.nome for c in s.plano.campos], "avisos": (r or {}).get("avisos")}
+        if tec == "IMRT":
+            s.campos_imrt(int(e.get("n") or 7), alvo=alvo, margem_mm=float(e.get("margem_mm") or 5.0),
+                          colimador=float(e.get("colimador") or 0.0))
+        elif tec in ("VMAT", "DCA"):
+            f = s.campos_vmat if tec == "VMAT" else s.campos_dca
+            f(n_arcos=int(e.get("n_arcos") or (2 if tec == "VMAT" else 1)), alvo=alvo,
+              margem_mm=float(e.get("margem_mm") or 5.0))
+        else:
+            gs = [float(g) for g in (e.get("gantries") or [0, 90, 180, 270])]
+            for c in [c for c in s.plano.campos if c.campo_pai is None]:
+                s.remover_campo(c.nome)
+            avisos = []
+            for g in gs:
+                r = s.salvar_campo({"gantry": g, "colimador": float(e.get("colimador") or 0.0), "alvo": alvo,
+                                    "margem": {"x1": margem, "x2": margem, "y1": margem, "y2": margem},
+                                    "blindagens": e.get("blindagens") or [],
+                                    "otimizar_colimador": bool(e.get("otimizar_colimador"))})
+                avisos += r["avisos"]
+            return {"campos": [c.nome for c in s.plano.campos], "avisos": avisos[:15]}
+        return {"campos": [c.nome for c in s.plano.campos], "tecnica": s.plano.tecnica}
+
     def definir_perfil(self, e):
         from tps.planejamento import perfil_sistema as PS
         self._guardar()
@@ -497,7 +583,7 @@ class Ferramentas:
             self.acoes.append(f"{nome} {resumo}")
             try:
                 if self.s.plano is not None:
-                    self.s._registrar(f"Copiloto (Claude): {nome} {resumo}")
+                    self.s._registrar(f"Copiloto (IA): {nome} {resumo}")
                     self.s.plano.historico.append({"evento": "copiloto", "acao": nome, "detalhe": resumo,
                                                    "quando": dt.datetime.now().isoformat(timespec="seconds")})
             except Exception:  # noqa: BLE001
@@ -541,7 +627,7 @@ def conversar(sessao, texto: str, progresso=None, novo: bool = False, somente_le
     """Um pedido do usuário ao copiloto: o Claude lê, age e responde. A conversa fica na sessão."""
     cfg = C.config()
     if not cfg["chave"]:
-        raise RuntimeError("Copiloto com Claude não configurado (Ferramentas › Assistente com Claude)")
+        raise RuntimeError("Copiloto de IA não configurado (Ferramentas › Assistente de IA)")
     if novo or "_copiloto_msgs" not in sessao.__dict__:
         sessao.__dict__["_copiloto_msgs"] = []
     msgs = sessao.__dict__["_copiloto_msgs"]

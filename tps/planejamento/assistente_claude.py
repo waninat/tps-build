@@ -24,8 +24,8 @@ from tps import paths
 from tps.planejamento import assistente as A
 from tps.planejamento.restricoes import nome_tg263
 
-MODELOS = {"claude-opus-5-5": "Claude Opus 5.5 — melhor raciocínio (padrão)",
-           "claude-sonnet-5-5": "Claude Sonnet 5.5 — mais rápido e mais barato"}
+MODELOS = {"claude-opus-5-5": "Modelo avançado — melhor raciocínio (padrão)",
+           "claude-sonnet-5-5": "Modelo rápido — mais rápido e mais barato"}
 MODELO_PADRAO = "claude-opus-5-5"
 MAX_VOLTAS = 8
 TIPOS = ("alvo", "min", "max", "media", "dvh", "serial", "paralelo")
@@ -157,7 +157,7 @@ def mensagem_erro(e: Exception) -> str:
     t = str(e)
     for cod, msg in (("401", "chave da API inválida"), ("403", "chave sem permissão para este modelo"),
                      ("404", "modelo não encontrado para esta chave"), ("429", "limite de uso da conta atingido; tente daqui a pouco"),
-                     ("529", "serviço da Anthropic sobrecarregado; tente daqui a pouco"),
+                     ("529", "serviço de IA sobrecarregado; tente daqui a pouco"),
                      ("credit", "conta sem créditos (console.anthropic.com › Billing)")):
         if cod in t:
             return msg
@@ -344,7 +344,7 @@ def validar(prop: dict, ctx: Contexto) -> tuple[list[dict], list[str]]:
         peso = float(o.get("peso") or (5.0 if t == "alvo" else 1.0))
         ok.append({"estrutura": n, "tipo": t, "dose_gy": round(d, 2), "volume_pct": v,
                    "peso": float(min(max(peso, 0.1), 10.0)), "restrito": bool(o.get("restrito")) and t != "alvo",
-                   "origem": "Claude: " + str(o.get("motivo") or "")[:120]})
+                   "origem": "IA: " + str(o.get("motivo") or "")[:120]})
     if not any(o["tipo"] == "alvo" for o in ok):
         avisos.append("A proposta não tem objetivo de alvo: confira")
     return ok, avisos
@@ -373,7 +373,7 @@ def _bloco(b) -> dict:
 def propor(ctx: Contexto, texto_anon: str, progresso=None) -> dict:
     c = config()
     if not c["chave"]:
-        raise RuntimeError("Assistente com Claude não configurado (Ferramentas › Assistente com Claude)")
+        raise RuntimeError("Assistente de IA não configurado (Ferramentas › Assistente de IA)")
     cli = _cliente(c["chave"])
     resumo = ctx.resumo(texto_anon)
     msgs = [{"role": "user", "content": "Resumo do caso calculado pelo TPS (JSON):\n" +
@@ -383,7 +383,7 @@ def propor(ctx: Contexto, texto_anon: str, progresso=None) -> dict:
     for volta in range(MAX_VOLTAS):
         forcar = volta == MAX_VOLTAS - 1
         if progresso:
-            progresso(f"Claude analisando o caso… ({volta + 1})")
+            progresso(f"IA analisando o caso… ({volta + 1})")
         r = cli.messages.create(model=c["modelo"], max_tokens=8000, system=SISTEMA, tools=FERRAMENTAS,
                                 messages=msgs, **({"tool_choice": {"type": "tool", "name": "propor_objetivos"}}
                                                   if forcar else {}))
@@ -406,7 +406,7 @@ def propor(ctx: Contexto, texto_anon: str, progresso=None) -> dict:
              "content": json.dumps(_executar(ctx, b["name"], b.get("input") or {}), ensure_ascii=False, default=str)}
             for b in chamadas]})
     if proposta is None:
-        raise RuntimeError("O Claude não devolveu a proposta")
+        raise RuntimeError("A IA não devolveu a proposta")
     objetivos, descartes = validar(proposta, ctx)
     arquivo = _registrar({"modelo": c["modelo"], "quando": dt.datetime.now().isoformat(), "enviado": msgs,
                           "proposta": proposta, "validados": objetivos, "descartes": descartes, "uso": uso})

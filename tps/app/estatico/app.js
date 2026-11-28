@@ -433,7 +433,15 @@ function ligar() {
   $("#b-salvar").onclick = () => tentar(async () => { aviso("Salvo em " + (await api("POST", `/api/${E.sid}/salvar`)).arquivo, true); listarPlanos(); });
   $("#b-relatorio").onclick = () => window.open(`/api/${E.sid}/relatorio.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
   $("#t-wash").onchange = () => desenharTudo();
-  $("#wash-min").onchange = () => desenharTudo();
+  $("#wash-min").onchange = $("#wash-max").onchange = () => desenharTudo();
+  $("#wash-un").onchange = () => {                       // troca a unidade convertendo os valores
+    const rx = (E.resumo && E.resumo.plano && E.resumo.plano.prescricao && E.resumo.plano.prescricao.dose_total_gy) || 0;
+    if (rx) for (const sel of ["#wash-min", "#wash-max"]) {
+      const v = parseFloat($(sel).value);
+      if (isFinite(v)) $(sel).value = $("#wash-un").value === "gy" ? +(v * rx / 100).toFixed(2) : +(v / rx * 100).toFixed(1);
+    }
+    desenharTudo();
+  };
   $("#b-rel-medico").onclick = () => window.open(`/api/${E.sid}/relatorio_medico.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
   $("#b-checkfilm").onclick = () => window.open(`/api/${E.sid}/checkfilm.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
   $("#b-sair").onclick = () => tentar(async () => {
@@ -599,12 +607,15 @@ function atualizar(r) {
   listarOars();
   const dens = (p && p.densidades) || {};
   $("#lista-estruturas").innerHTML = r.estruturas.map(e => `<li><input type="checkbox" data-est="${e.nome}" ${E.ocultas.has(e.nome) ? "" : "checked"}>
-    <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span>${(e.tipo === "DERIVADA" || e.editada) ? `<button class="pequeno" data-rem-est="${e.nome}" title="remover estrutura criada/editada no TPS">×</button>` : ""}
+    <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span><button class="pequeno rem-est" data-rem-est="${e.nome}" title="apagar a estrutura ${e.nome}">🗑</button>
     <input class="dens ${dens[e.nome] != null ? "ativa" : ""}" data-dens="${e.nome}" title="densidade eletrônica relativa forçada (vazio = do CT)"
       placeholder="ρe" value="${dens[e.nome] != null ? dens[e.nome] : ""}" ${p && p.estado === "RASCUNHO" ? "" : "disabled"}></li>`).join("");
   $$("[data-dens]").forEach(c => c.onchange = () => tentar(async () =>
     atualizar(await api("POST", `/api/${E.sid}/densidade`, { estrutura: c.dataset.dens, valor: c.value.trim() || null }))));
-  $$("[data-rem-est]").forEach(b => b.onclick = () => tentar(async () => atualizar(await api("DELETE", `/api/${E.sid}/estrutura/${encodeURIComponent(b.dataset.remEst)}`))));
+  $$("[data-rem-est]").forEach(b => b.onclick = () => tentar(async () => {
+    if (!confirm(`Apagar a estrutura ${b.dataset.remEst}? (sai também do RTSTRUCT exportado)`)) return;
+    atualizar(await api("DELETE", `/api/${E.sid}/estrutura/${encodeURIComponent(b.dataset.remEst)}`));
+  }));
   $$("[data-est]").forEach(c => c.onchange = () => { c.checked ? E.ocultas.delete(c.dataset.est) : E.ocultas.add(c.dataset.est); desenharTudo(); desenharDvh(); });
   $("#iso-txt").textContent = r.isocentro ? r.isocentro.map(v => v.toFixed(1)).join(", ") : "—";
   // estados dos botões
@@ -1077,12 +1088,13 @@ function desenharCorte(vista) {
   }
   const sobW = E.sobre[`${vista}:${i}`];
   if ($("#t-wash") && $("#t-wash").checked && sobW && sobW !== "carregando" && sobW.wash) {
-    const min = $("#wash-min").value, chave = `${vista}:${i}:${min}:${E.doseVer || 0}:${E.fonte}:${E.fonteVer || 0}`;
+    const un = $("#wash-un").value, min = +$("#wash-min").value || 0, max = +$("#wash-max").value || 0;
+    const chave = `${vista}:${i}:${un}:${min}:${max}:${E.doseVer || 0}:${E.fonte}:${E.fonteVer || 0}`;
     E.wash = E.wash || {};
     let wi = E.wash[chave];
     if (!wi) {
       wi = new Image(); wi.onload = () => desenharCorte(vista);
-      wi.src = `/api/${E.sid}/dose_corte/${vista}/${i}.png?minimo=${min}&fonte=${E.fonte}&v=${E.doseVer || 0}-${E.fonteVer || 0}&t=${encodeURIComponent(E.token)}`;
+      wi.src = `/api/${E.sid}/dose_corte/${vista}/${i}.png?minimo=${min}&maximo=${max}&unidade=${un}&fonte=${E.fonte}&v=${E.doseVer || 0}-${E.fonteVer || 0}&t=${encodeURIComponent(E.token)}`;
       E.wash[chave] = wi;
     }
     if (wi.complete && wi.naturalWidth) {
@@ -1092,13 +1104,15 @@ function desenharCorte(vista) {
     }
     if (vista === "axial") {          // barra de cores
       const dif = sobW.wash.dif;
-      const x0 = 10, y0 = h - 22, larg = Math.min(220, w - 20), lo = dif ? -10 : +min, hi = dif ? 10 : Math.max(sobW.wash.dmax_pct, lo + 1);
+      const gy = un === "gy" && !dif, rxg = sobW.wash.rx_gy || 1, dmaxU = gy ? sobW.wash.dmax_pct * rxg / 100 : sobW.wash.dmax_pct;
+      const x0 = 10, y0 = h - 22, larg = Math.min(220, w - 20), lo = dif ? -10 : min, hi = dif ? 10 : (max > min ? max : Math.max(dmaxU, lo + (gy ? 0.1 : 1)));
       const grad = g.createLinearGradient(x0, 0, x0 + larg, 0);
       (dif ? ["#3b4cc0", "#8db0fe", "#dddddd", "#f49a7b", "#b40426"] : ["#00008f", "#0000ff", "#00ffff", "#7fff7f", "#ffff00", "#ff0000", "#800000"])
         .forEach((c, k, a) => grad.addColorStop(k / (a.length - 1), c));
       g.fillStyle = grad; g.fillRect(x0, y0, larg, 8);
       g.fillStyle = "#fff"; g.font = "10px system-ui";
-      g.fillText(`${lo}%`, x0, y0 - 3); g.fillText(`${hi.toFixed(0)}%`, x0 + larg - 26, y0 - 3);
+      const u = gy ? " Gy" : "%";
+      g.fillText(`${gy ? lo.toFixed(1) : lo}${u}`, x0, y0 - 3); g.fillText(`${hi.toFixed(gy ? 1 : 0)}${u}`, x0 + larg - 34, y0 - 3);
     }
   }
   const pos = posDoIdx(vista, i);
@@ -1859,16 +1873,16 @@ async function assistente(textoIni) {
     <label>Protocolo<select name="sitio"><option value="">automático (pela descrição e pela anatomia)</option>
       ${(E.sitios || []).map(s => `<option value="${s.id}">${esc(s.nome)}</option>`).join("")}</select></label>
     <label>Quem propõe<select name="motor">
-      ${E.claude && E.claude.ativo ? `<option value="auto">Claude (nuvem; se falhar, as regras)</option>` : ""}
+      ${E.claude && E.claude.ativo ? `<option value="auto">IA (nuvem; se falhar, as regras)</option>` : ""}
       <option value="regras">Regras do TPS (sem internet)</option></select></label>
-    <div class="pequeno-txt">${E.claude && E.claude.ativo ? `Com o Claude (${esc(E.claude.modelo)}) sai da clínica só um resumo anônimo: nomes,
+    <div class="pequeno-txt">${E.claude && E.claude.ativo ? `Com a IA (${esc(E.claude.modelo)}) sai da clínica só um resumo anônimo: nomes,
       volumes e distâncias das estruturas, a prescrição e a descrição acima (sem o nome e o ID do paciente). Nunca a TC.`
-      : `O Claude não está configurado: Ferramentas › Assistente com Claude.`}</div>`, { ok: "Analisar" });
+      : `A IA não está configurada: Ferramentas › Assistente de IA.`}</div>`, { ok: "Analisar" });
   E.assistTexto = v.texto;
   const tp = acompanharProgresso();
   let r;
   try { r = await api("POST", `/api/${E.sid}/imrt/assistente`, { texto: v.texto, sitio: v.sitio || null, motor: v.motor || "regras" },
-    v.motor === "auto" ? "O Claude está analisando o caso…" : "Analisando a TC e as estruturas…"); } finally { clearInterval(tp); }
+    v.motor === "auto" ? "A IA está analisando o caso…" : "Analisando a TC e as estruturas…"); } finally { clearInterval(tp); }
   const faltIA = r.faltando.filter(f => f.ia_disponivel).map(f => f.ia);
   const p = r.parametros || {};
   const tabela = r.objetivos.map(o => `<tr><td>${esc(o.estrutura)}</td><td>${TIPOS_OBJ[o.tipo] || o.tipo}</td><td>${o.dose_gy}</td>` +
@@ -1939,14 +1953,14 @@ async function janelaIA() {
   let e = await api("GET", "/api/ia/instalacao");
   const estadoTxt = () => e.segmentacao.disponivel ? `<span class="ok">instalado</span> — ${esc(e.segmentacao.executavel)}`
     : `<span class="avisotxt">não instalado</span>`;
-  const pr = modal("Contorno automático de órgãos (TotalSegmentator)", `<p>Estado: <span id="ia-st">${estadoTxt()}</span></p>
+  const pr = modal("Segmentação automática de órgãos", `<p>Estado: <span id="ia-st">${estadoTxt()}</span></p>
     <p class="pequeno-txt">A rede roda neste computador (servidor do TPS), num ambiente Python próprio em <code>${esc(e.destino)}</code>.
     Precisa de internet uma vez (~2 GB)${e.plataforma === "win32" ? " e do Python 3.11–3.14 (recomendado 3.12) do python.org (marque “Add to PATH”)" : ""}.
     Com placa NVIDIA, a versão GPU segmenta em segundos; na CPU, 1–5 min por grupo de órgãos.</p>
     <label>Sua senha (físico/administrador)<input id="ia-senha" type="password"></label>
     <div class="botoes"><button id="b-ia-cpu" class="primario">Instalar (CPU)</button><button id="b-ia-gpu">Instalar (GPU NVIDIA)</button></div>
-    <label>Ou usar um TotalSegmentator já instalado (caminho do executável)
-      <span class="linha-inline"><input id="ia-exe" placeholder="C:\\…\\Scripts\\TotalSegmentator.exe"><button id="b-ia-apontar" class="pequeno">Usar</button></span></label>
+    <label>Ou usar uma instalação já existente (caminho do executável)
+      <span class="linha-inline"><input id="ia-exe" placeholder="C:\\…\\segmentador.exe"><button id="b-ia-apontar" class="pequeno">Usar</button></span></label>
     <div class="pequeno-txt" id="ia-rodando"></div>
     <pre class="log" id="ia-log">${esc((e.log || []).join("\n")) || "—"}</pre>`, { ok: "Fechar", cancelar: false });
   $("#modal .caixa").classList.add("larga");
@@ -1965,7 +1979,7 @@ async function janelaIA() {
   $("#b-ia-gpu").onclick = () => instalar(true);
   $("#b-ia-apontar").onclick = () => tentar(async () => {
     e = await api("POST", "/api/ia/apontar", { executavel: $("#ia-exe").value, senha: $("#ia-senha").value }); mostrar();
-    aviso("TotalSegmentator configurado", true);
+    aviso("Segmentação automática configurada", true);
   });
   mostrar();
   const t = setInterval(async () => { try { e = await api("GET", "/api/ia/instalacao"); if ($("#ia-log")) mostrar(); } catch (x) { /* ok */ } }, 3000);
@@ -2069,23 +2083,23 @@ iniciar().catch(e => aviso(e.message));
 // ---- assistente com Claude: chave da API e modelo
 async function janelaClaude() {
   let e = await api("GET", "/api/claude");
-  const pr = modal("Assistente com Claude", `<p>Estado: <span id="cl-st"></span></p>
-    <p class="pequeno-txt">O assistente de objetivos usa o Claude (Anthropic) pela internet. Sai da clínica só um
+  const pr = modal("Assistente de IA", `<p>Estado: <span id="cl-st"></span></p>
+    <p class="pequeno-txt">O assistente de objetivos e o copiloto usam um serviço de IA pela internet. Sai da clínica só um
     <b>resumo anônimo</b> calculado pelo TPS — nomes, volumes, distâncias e sobreposições das estruturas, a prescrição,
     a dose por estrutura se houver, e a descrição digitada (o nome e o ID do paciente são apagados). Nunca a TC, as
-    imagens ou os contornos. Cada consulta fica registrada em <code>ia/claude</code> na pasta de dados (o que foi enviado e
+    imagens ou os contornos. Cada consulta fica registrada na pasta <code>ia</code> dos dados (o que foi enviado e
     o que voltou). A chave fica na pasta de dados do servidor e não volta para a tela.</p>
-    <label>Chave da API (console.anthropic.com › API keys)<input id="cl-chave" type="password" placeholder="sk-ant-…  (vazio = manter a atual)"></label>
+    <label>Chave da API do serviço de IA<input id="cl-chave" type="password" placeholder="sk-ant-…  (vazio = manter a atual)"></label>
     <div class="linha2">
       <label>Modelo<select id="cl-modelo">${Object.entries(e.modelos).map(([k, t]) => `<option value="${k}" ${k === e.modelo ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></label>
-      <label class="check"><input type="checkbox" id="cl-ativo" ${e.ativo || !e.configurado ? "checked" : ""}> usar o Claude no assistente</label>
+      <label class="check"><input type="checkbox" id="cl-ativo" ${e.ativo || !e.configurado ? "checked" : ""}> usar a IA no assistente e no copiloto</label>
     </div>
     <label>Sua senha (físico/administrador)<input id="cl-senha" type="password"></label>
     <div class="botoes"><button id="b-cl-salvar" class="primario">Salvar</button><button id="b-cl-testar">Testar a conexão</button>
       <button id="b-cl-apagar" class="perigo">Apagar a chave</button></div>
     <div id="cl-res" class="pequeno-txt"></div>`, { ok: "Fechar", cancelar: false });
   const mostrar = () => {
-    $("#cl-st").innerHTML = e.configurado ? `<span class="ok">configurado</span> (chave …${esc(e.chave_final)}${e.da_variavel ? ", da variável ANTHROPIC_API_KEY" : ""}) · ${esc(e.modelo)} · ${e.ativo ? "em uso" : "desligado"}`
+    $("#cl-st").innerHTML = e.configurado ? `<span class="ok">configurado</span> (chave …${esc(e.chave_final)}${e.da_variavel ? ", da variável de ambiente" : ""}) · ${esc(e.modelo)} · ${e.ativo ? "em uso" : "desligado"}`
       : `<span class="avisotxt">sem chave</span>`;
     $("#b-cl-testar").disabled = !e.configurado; $("#b-cl-apagar").disabled = !e.configurado || e.da_variavel;
   };
@@ -2093,7 +2107,7 @@ async function janelaClaude() {
   $("#b-cl-salvar").onclick = () => tentar(async () => {
     e = await api("POST", "/api/claude", { chave: $("#cl-chave").value, modelo: $("#cl-modelo").value, ativo: $("#cl-ativo").checked,
       senha: $("#cl-senha").value });
-    $("#cl-chave").value = ""; mostrar(); aviso("Assistente com Claude configurado", true);
+    $("#cl-chave").value = ""; mostrar(); aviso("Assistente de IA configurado", true);
   });
   $("#b-cl-testar").onclick = () => tentar(async () => {
     $("#cl-res").textContent = "Testando…";
@@ -2231,7 +2245,7 @@ async function janelaCasos() {
     <td>${esc(c.estado || "")}${c.sitio ? `<div class="pequeno-txt">sítio: ${esc(c.sitio)}</div>` : ""}</td>
     <td>${(c.ptvs || []).map(esc).join("<br>")}</td>
     <td>${(c.planos || []).map(p => `<div><button class="pequeno" data-abrir-plano="${esc(c.id)}" data-plano="${esc(p.rotulo)}" ${p.arquivo ? "" : "disabled"}>${esc(p.rotulo)}</button>
-      <span class="pequeno-txt">${esc(p.tecnica || "")} · ${esc(p.estado || "")}${p.hi != null ? ` · HI ${p.hi}` : ""}${p.parecer && p.parecer.aval ? ` · Claude: ${esc(AVAL[p.parecer.aval] || p.parecer.aval)}` : ""}</span>
+      <span class="pequeno-txt">${esc(p.tecnica || "")} · ${esc(p.estado || "")}${p.hi != null ? ` · HI ${p.hi}` : ""}${p.parecer && p.parecer.aval ? ` · IA: ${esc(AVAL[p.parecer.aval] || p.parecer.aval)}` : ""}</span>
       ${p.parecer && p.parecer.resumo ? `<div class="pequeno-txt">${esc(p.parecer.resumo)}</div>` : ""}</div>`).join("")}</td>
     <td><button class="pequeno" data-abrir-caso="${esc(c.id)}">Abrir TC</button>
       <button class="pequeno" data-etapa="contornar" data-caso="${esc(c.id)}" title="refaz o contorno automático">Recontornar</button>
@@ -2265,18 +2279,18 @@ async function janelaAutomacao() {
       <label>Porta<input id="au-porta" type="number" value="${c.receptor_dicom.porta}"></label><label>AE<input id="au-ae" value="${esc(c.receptor_dicom.ae)}"></label></div>
     <h3>Contorno automático</h3>
     <div class="linha2"><label class="check"><input type="checkbox" id="au-cont" ${c.contorno.ativo ? "checked" : ""}> Contornar ao receber</label>
-      <label class="check"><input type="checkbox" id="au-ia" ${c.contorno.ia ? "checked" : ""}> Órgãos por IA (TotalSegmentator)</label>
+      <label class="check"><input type="checkbox" id="au-ia" ${c.contorno.ia ? "checked" : ""}> Órgãos por segmentação automática</label>
       <label>Suavizar (mm)<input id="au-suave" type="number" step="0.5" value="${c.contorno.suavizar_mm}"></label></div>
     <h3>Plano automático</h3>
     <div class="linha2"><label class="check"><input type="checkbox" id="au-plano" ${pl.ativo ? "checked" : ""}> Fazer o plano</label>
       <label>Gatilho<select id="au-gat"><option value="aprovacao" ${pl.gatilho === "aprovacao" ? "selected" : ""}>aprovação das estruturas</option>
         <option value="ptv" ${pl.gatilho === "ptv" ? "selected" : ""}>PTV com prescrição no nome</option></select></label></div>
     <div class="linha2"><label>Máquina<select id="au-maq">${maqs}</select></label><label>Técnica padrão<select id="au-tec">${opT(pl.tecnica_padrao)}</select></label>
-      <label>Objetivos<select id="au-motor"><option value="auto" ${pl.motor === "auto" ? "selected" : ""}>Claude (cai nas regras)</option>
-        <option value="regras" ${pl.motor === "regras" ? "selected" : ""}>Regras</option><option value="claude" ${pl.motor === "claude" ? "selected" : ""}>Só Claude</option></select></label>
+      <label>Objetivos<select id="au-motor"><option value="auto" ${pl.motor === "auto" ? "selected" : ""}>IA (cai nas regras)</option>
+        <option value="regras" ${pl.motor === "regras" ? "selected" : ""}>Regras</option><option value="claude" ${pl.motor === "claude" ? "selected" : ""}>Só IA</option></select></label>
       <label>Planejar como<select id="au-perfil">${["tps", "monaco", "eclipse"].map(x => `<option ${x === pl.perfil ? "selected" : ""}>${x}</option>`).join("")}</select></label></div>
     <div class="linha2">${sitios.map(st => `<label>${st.replace("_", " ")}<select data-sit="${st}"><option value="">padrão</option>${opT(ts[st] || "")}</select></label>`).join("")}</div>
-    <label class="check"><input type="checkbox" id="au-parecer" ${pl.parecer_claude ? "checked" : ""}> Parecer do Claude no plano pronto (só avalia)</label>
+    <label class="check"><input type="checkbox" id="au-parecer" ${pl.parecer_claude ? "checked" : ""}> Parecer da IA no plano pronto (só avalia)</label>
     <label>Sua senha (físico/administrador)<input id="au-senha" type="password"></label>
     <pre class="log">${esc((e.log || []).join("\n")) || "—"}</pre>`, { ok: "Salvar" });
   $("#modal .caixa").classList.add("larga");

@@ -87,7 +87,7 @@ def test_copiloto_le_age_e_desfaz(cli, monkeypatch):
     assert "aprovar" not in {t["name"] for t in falso.chamadas[0]["tools"]}
     g090 = next(x for x in r["resumo"]["plano"]["campos"] if x["nome"] == "G090")
     assert any(b["nome"] == "Osso_inserto" for b in (g090["spec"] or {}).get("blindagens", []))
-    assert any("Copiloto (Claude): bloquear_orgao" in h for h in r["resumo"]["log"])
+    assert any("Copiloto (IA): bloquear_orgao" in h for h in r["resumo"]["log"])
     assert any(h.get("evento") == "copiloto" and h["acao"] == "bloquear_orgao" for h in r["resumo"]["plano"]["historico"])
     # desfazer volta ao plano de antes do pedido
     d = _ok(c.post(f"/api/{sid}/copiloto/desfazer"))
@@ -159,3 +159,20 @@ def test_raciocinio_de_pedidos_anteriores_nao_volta(cli, monkeypatch):
     _ok(c.post(f"/api/{sid}/copiloto", json={"texto": "quarto"}))
     assert [m["content"] for m in falso.chamadas[-1]["messages"] if m["role"] == "user"
             and isinstance(m["content"], str)][-2:] == ["segundo", "quarto"]
+
+
+def test_copiloto_cria_plano_do_zero(cli, monkeypatch):
+    from tps.planejamento import assistente_claude as C
+    c, sid, _ = cli
+    _ok(c.post("/api/claude", json={"chave": "sk-ant-teste-9999", "senha": SENHA}))
+    falso = _Falso([
+        [_tu("a", "listar_opcoes", {})],
+        [_tu("b", "criar_plano", {"rotulo": "COPI3D", "dose_total_gy": 50, "fracoes": 25, "alvo": "PTV_fantoma"})],
+        [_tu("c", "criar_campos", {"tecnica": "3D", "gantries": [0, 120, 240], "margem_mm": 7})],
+        [_tu("d", "calcular", {})],
+        [{"type": "text", "text": "Plano feito."}]])
+    monkeypatch.setattr(C, "_cliente", lambda chave: falso)
+    r = _ok(c.post(f"/api/{sid}/copiloto", json={"texto": "faça um plano 3D de 3 campos", "novo": True}))
+    assert [a.split()[0] for a in r["acoes"]] == ["criar_plano", "criar_campos", "calcular"]
+    assert r["resumo"]["plano"]["rotulo"] == "COPI3D" and [x["gantry"] for x in r["resumo"]["plano"]["campos"]] == [0, 120, 240]
+    assert r["resumo"]["dose_atualizada"]

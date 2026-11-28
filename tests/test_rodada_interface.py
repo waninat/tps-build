@@ -198,7 +198,7 @@ def test_assistente_com_claude_simulado(cli, monkeypatch):
         raise RuntimeError("sem internet")
     monkeypatch.setattr(C, "_cliente", quebra)
     r = _ok(c.post(f"/api/{sid}/imrt/assistente", json={"texto": "próstata", "motor": "auto"}))
-    assert r["motor"] == "regras" and "Claude indisponível" in r["avisos"][0]
+    assert r["motor"] == "regras" and "IA indisponível" in r["avisos"][0]
     _ok(c.post("/api/claude", json={"apagar_chave": True, "senha": SENHA}))
     assert not _ok(c.get("/api/claude"))["configurado"]
 

@@ -1475,7 +1475,7 @@ class Sessao:
         if "bowel_bag" in pedidos:                      # a bolsa exclui bexiga e reto: segmenta junto
             pedidos += [o for o in ("bexiga", "reto") if o not in pedidos]
         arquivos = sorted(f for f in self.pasta_ct.iterdir() if f.is_file() and self._e_ct(f))
-        self.progresso = f"IA: TotalSegmentator rodando ({len(pedidos)} órgão(s); na CPU leva alguns minutos)…"
+        self.progresso = f"Segmentação automática rodando ({len(pedidos)} órgão(s); na CPU leva alguns minutos)…"
         try:
             classes = IA.segmentar(arquivos, pedidos)
         except (RuntimeError, ValueError, OSError) as e:
@@ -1545,7 +1545,7 @@ class Sessao:
         self.progresso = None
         if not criadas:
             raise ErroUsuario("A IA não encontrou nenhum dos órgãos pedidos neste CT")
-        self._registrar("Contorno por IA (TotalSegmentator): " + ", ".join(criadas) + " — revise antes de usar")
+        self._registrar("Segmentação automática: " + ", ".join(criadas) + " — revise antes de usar")
         out = {"criadas": criadas, "nao_encontrados": faltam}
         if z_reto is not None:
             out["reto_limite_superior_mm"] = round(z_reto, 1)
@@ -1579,15 +1579,23 @@ class Sessao:
         self._atualizar_avaliacao()
 
     def remover_estrutura(self, nome: str):
-        if nome not in self.derivadas and nome not in self.editadas:
-            raise ErroUsuario("Só estruturas criadas no TPS podem ser removidas")
+        if nome not in self.estruturas:
+            raise ErroUsuario(f"Estrutura {nome} não existe")
         if self.plano:
             usos = [c.nome for c in self.plano.campos if (c.__dict__.get("_spec") or {}).get("alvo") == nome]
             if usos or self.plano.prescricao.estrutura_alvo == nome:
                 raise ErroUsuario(f"A estrutura {nome} é usada pelo plano ({', '.join(usos) or 'prescrição'})")
+        if self.plano and self.estruturas[nome].tipo.upper() == "EXTERNAL":
+            raise ErroUsuario(f"{nome} é o contorno externo do plano: refaça-o (BODY automático) em vez de apagar")
+        dens = bool(self.plano and nome in (self.plano.densidades or {}))
+        if dens:
+            self.plano.densidades.pop(nome, None)
         self.estruturas.pop(nome, None)
         self.derivadas.pop(nome, None)
         self.editadas.discard(nome)
+        if dens:
+            self._aplicar_eta()
+        self._registrar(f"Estrutura {nome} apagada")
         if self.dose_atualizada and self.resultado:
             self.resultado["dvh"].pop(nome, None)
             self._atualizar_avaliacao()
@@ -2300,7 +2308,7 @@ class Sessao:
             from tps.planejamento import assistente_claude as C
             if not C.estado()["ativo"]:
                 if motor == "claude":
-                    raise ErroUsuario("Assistente com Claude não configurado (Ferramentas › Assistente com Claude)")
+                    raise ErroUsuario("Assistente de IA não configurado (Ferramentas › Assistente de IA)")
             else:
                 dose = (self.dose_fx * pr.fracoes) if (self.dose_atualizada and self.dose_fx is not None) else None
                 ctx = C.Contexto(est, self.grade, self._corpo(), self.grade.voxel_cc,
@@ -2315,8 +2323,8 @@ class Sessao:
                     c = C.propor(ctx, C.anonimizar(texto or "", self.paciente), prog)
                 except Exception as e:  # noqa: BLE001
                     if motor == "claude":
-                        raise ErroUsuario(f"Claude indisponível: {C.mensagem_erro(e)}") from e
-                    r["avisos"].insert(0, f"Claude indisponível ({C.mensagem_erro(e)}): proposta feita pelas regras")
+                        raise ErroUsuario(f"IA indisponível: {C.mensagem_erro(e)}") from e
+                    r["avisos"].insert(0, f"IA indisponível ({C.mensagem_erro(e)}): proposta feita pelas regras")
                 else:
                     par = dict(r.get("parametros") or {})
                     arc = c.get("arcos") or None
@@ -2330,9 +2338,9 @@ class Sessao:
                     r.update({"objetivos": c["objetivos"], "explicacao": c["explicacao"], "avisos": c["avisos"],
                               "parametros": par, "motor": "claude", "modelo": c["modelo"], "tempo_s": c["tempo_s"],
                               "uso_tokens": c["uso_tokens"], "sitio": sit,
-                              "sitio_nome": (A.carregar().get(sit) or {}).get("nome") if sit else "Proposta do Claude",
-                              "fonte": "Claude, a partir do resumo anônimo do caso e do protocolo do sítio"})
-                    self._registrar(f"Assistente com Claude ({c['modelo']}): {len(c['objetivos'])} objetivos "
+                              "sitio_nome": (A.carregar().get(sit) or {}).get("nome") if sit else "Proposta da IA",
+                              "fonte": "IA, a partir do resumo anônimo do caso e do protocolo do sítio"})
+                    self._registrar(f"Assistente de IA ({c['modelo']}): {len(c['objetivos'])} objetivos "
                                     f"em {c['tempo_s']} s")
                 finally:
                     self.progresso = None
@@ -2874,12 +2882,15 @@ class Sessao:
         return self.dose_fx * self.plano.prescricao.fracoes, float(self.plano.prescricao.dose_total_gy), False
 
     def imagem_dose(self, vista: str, idx: int, minimo_pct: float = 20.0, maximo_pct: float = 0.0,
-                    opacidade: float = 0.45, fonte: str = "plano") -> bytes:
+                    opacidade: float = 0.45, fonte: str = "plano", unidade: str = "pct") -> bytes:
         """Colorwash: dose do corte em cores (azul → vermelho), RGBA, na grade de dose, transparente abaixo do mínimo.
         Escala em % da prescrição; máximo 0 = dose máxima. Diferença de planos: azul (menos) ↔ vermelho (mais),
         simétrica em ±máximo (padrão 10%), transparente abaixo de ±1%. Linha 0 = topo da tela."""
         import matplotlib
         total, rx, e_dif = self._fonte(fonte)
+        if unidade == "gy" and not e_dif:             # limites em Gy (dose total) → % da prescrição
+            minimo_pct = float(minimo_pct) / rx * 100.0
+            maximo_pct = float(maximo_pct) / rx * 100.0 if maximo_pct else 0.0
         g = self.grade
         pos, eh, ev = self._plano_corte(vista, int(idx))
         rel = total / rx * 100.0
@@ -2963,7 +2974,7 @@ class Sessao:
             pas = {k: float(abs(v[1] - v[0])) for k, v in ax.items()}
             out["wash"] = {"h": [float(ax[eh][0]) - pas[eh] / 2, float(ax[eh][-1]) + pas[eh] / 2],
                            "v": [float(ax[ev][0]) - pas[ev] / 2, float(ax[ev][-1]) + pas[ev] / 2],
-                           "dmax_pct": round(dmax / rx * 100, 1), "dif": e_dif}
+                           "dmax_pct": round(dmax / rx * 100, 1), "dif": e_dif, "rx_gy": round(float(rx), 4)}
             if isodoses:
                 # 100% = prescrição ou dose máxima; níveis em % ou em Gy (dose total). Diferença: ±% da prescrição
                 cem = dmax if (referencia == "max" and not e_dif) else rx

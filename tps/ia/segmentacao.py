@@ -105,7 +105,7 @@ def executavel() -> Path | None:
 def estado() -> dict:
     exe = executavel()
     return {"disponivel": exe is not None, "executavel": str(exe) if exe else None,
-            "motivo": None if exe else "TotalSegmentator não instalado: menu Ferramentas > Contorno por IA… (ou menu Iniciar > TPS > Instalar contorno por IA)",
+            "motivo": None if exe else "Segmentação automática não instalada: menu Ferramentas > Segmentação automática de órgãos… (ou menu Iniciar > TPS > Instalar segmentação automática)",
             "orgaos": [{"id": k, "nome": ORGAOS[k][0], "grupo": g} for g, ks in GRUPOS.items() for k in ks]}
 
 
@@ -130,10 +130,10 @@ def _rodar(exe: Path, ent: Path, saida: Path, tarefa: str, classes: list[str], r
         out, err = pr.communicate(timeout=tempo_max_s)
     except subprocess.TimeoutExpired:
         _matar_arvore(pr)                       # o nnU-Net abre processos filhos: não deixar órfãos
-        raise RuntimeError(f"TotalSegmentator ({tarefa}) passou de {tempo_max_s // 60} min e foi interrompido")
+        raise RuntimeError(f"Segmentação automática ({tarefa}) passou de {tempo_max_s // 60} min e foi interrompido")
     rs = next(iter(sorted(saida.rglob("*.dcm"))), None) if saida.is_dir() else (saida if saida.exists() else None)
     if pr.returncode != 0 or rs is None:
-        raise RuntimeError(f"TotalSegmentator ({tarefa}) falhou: " + (err or out or "")[-800:])
+        raise RuntimeError(f"Segmentação automática ({tarefa}) falhou: " + (err or out or "")[-800:])
     return rs
 
 
@@ -144,7 +144,7 @@ def segmentar(arquivos_ct: list[Path], orgaos: list[str], rapido: bool = True, t
     from tps.importacao.rtplan import ler_dicom
     exe = executavel()
     if exe is None:
-        raise RuntimeError("TotalSegmentator não está instalado neste computador")
+        raise RuntimeError("Segmentação automática não está instalada neste computador")
     desconhecidos = [o for o in orgaos if o not in ORGAOS]
     if desconhecidos:
         raise ValueError(f"Órgãos desconhecidos: {', '.join(desconhecidos)}")

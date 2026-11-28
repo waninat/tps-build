@@ -167,7 +167,7 @@ def claude_estado(u: dict = Depends(usuario)):
 def claude_configurar(d: dict = Body(...), u: dict = Depends(usuario)):
     """Chave da API da Anthropic e modelo do assistente (físico/administrador; fica na pasta de dados)."""
     from tps.planejamento import assistente_claude as C
-    banco().assinar(u, d.get("senha", ""), {"admin", "fisico"}, "configurar o assistente com Claude")
+    banco().assinar(u, d.get("senha", ""), {"admin", "fisico"}, "configurar o assistente de IA")
     try:
         if d.get("apagar_chave"):
             r = C.apagar_chave()
@@ -632,7 +632,7 @@ def copiloto(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     if not texto:
         raise ErroUsuario("Escreva o pedido para o copiloto")
     if not C.estado()["ativo"]:
-        raise ErroUsuario("Copiloto com Claude não configurado (Ferramentas › Assistente com Claude)")
+        raise ErroUsuario("Copiloto de IA não configurado (Ferramentas › Assistente de IA)")
 
     def prog(msg):
         s.progresso = msg
@@ -950,11 +950,12 @@ def corte(sid: str, vista: str, idx: int, janela: float = 400, nivel: float = 40
 
 @app.get("/api/{sid}/dose_corte/{vista}/{idx}.png")
 def dose_corte(sid: str, vista: str, idx: int, minimo: float = 20.0, maximo: float = 0.0, fonte: str = "plano",
-               u: dict = Depends(usuario)):
+               unidade: str = "pct", u: dict = Depends(usuario)):
     if vista not in ("axial", "coronal", "sagital"):
         raise ErroUsuario("vista inválida")
     fonte = fonte if fonte in ("plano", "soma", "dif") else "plano"
-    return Response(_s(sid).imagem_dose(vista, idx, minimo, maximo, fonte=fonte), media_type="image/png",
+    return Response(_s(sid).imagem_dose(vista, idx, minimo, maximo, fonte=fonte,
+                                        unidade="gy" if unidade == "gy" else "pct"), media_type="image/png",
                     headers={"Cache-Control": "no-store"})
 
 
