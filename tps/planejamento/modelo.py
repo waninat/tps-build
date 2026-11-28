@@ -128,6 +128,7 @@ class Plano:
     calculo_dose: dict = field(default_factory=dict)
     campos_setup: list = field(default_factory=list)        # campos de localização (sem dose; SETUP no DICOM)
     perfil: str = "tps"                                     # planejado como: tps | monaco | eclipse (objetivos/exportação)
+    referencia_mm: list | None = None                       # marcas da tomografia (BB): o "zero" do posicionamento
 
     # ------------------------------------------------------------------ edição controlada
     def _exigir_rascunho(self):
@@ -156,6 +157,8 @@ class Plano:
         d.pop("restricoes", None)                # avaliação, não tratamento
         d.pop("objetivos_imrt", None)
         d.pop("perfil", None)                    # vocabulário/exportação, não tratamento
+        if not d.get("referencia_mm"):
+            d.pop("referencia_mm", None)
         if not d.get("calculo_dose"):            # planos sem MC: mesmo hash das versões anteriores
             d.pop("calculo_dose", None)
         for c in d.get("campos", []):           # campo sem descrição: mesmo hash das versões anteriores

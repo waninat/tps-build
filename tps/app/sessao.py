@@ -119,6 +119,13 @@ class Estrutura:
     contornos: list = field(default_factory=list)   # polígonos do RTSTRUCT [n, 3] (para o corte axial exato)
 
 
+def _densidade(val) -> tuple[float, str]:
+    """Densidade atribuída: número (forçar) ou {"valor", "modo"} (forcar | preencher)."""
+    if isinstance(val, dict):
+        return float(val.get("valor", 1.0)), str(val.get("modo", "forcar"))
+    return float(val), "forcar"
+
+
 class Sessao:
     @property
     def progresso(self) -> str | None:
@@ -188,6 +195,13 @@ class Sessao:
         if cands:                     # vários RTSTRUCT (automático, do médico…): o aprovado mais recente, senão o último
             _, _, rs, ds = max(cands, key=lambda t: (t[0], t[1]))
             self.paciente = {"id": str(getattr(ds, "PatientID", "")), "nome": str(getattr(ds, "PatientName", ""))}
+            self.estruturas_aprovadas = None
+            if str(getattr(ds, "ApprovalStatus", "") or "").upper() == "APPROVED":
+                d_, t_ = str(getattr(ds, "ReviewDate", "") or ""), str(getattr(ds, "ReviewTime", "") or "")
+                self.estruturas_aprovadas = {
+                    "por": str(getattr(ds, "ReviewerName", "") or "sistema externo"),
+                    "quando": f"{d_[:4]}-{d_[4:6]}-{d_[6:8]} {t_[:2]}:{t_[2:4]}" if len(d_) == 8 else d_,
+                    "nomes": [str(r.ROIName) for r in getattr(ds, "StructureSetROISequence", [])]}
         elif sem_rtstruct:
             ds0 = pydicom.dcmread(str(next(f for f in sorted(pasta.iterdir()) if f.is_file() and self._e_ct(f))),
                                   stop_before_pixels=True, force=True)
@@ -196,6 +210,8 @@ class Sessao:
             raise ErroUsuario("Nenhum RTSTRUCT na pasta: exporte o CT junto com os contornos")
         self.tipo, self.pasta_ct, self.arquivo_rs = "ct", pasta, rs
         self.secundaria = None                         # fusão: TC secundária (outro caso não herda)
+        if not hasattr(self, "estruturas_aprovadas") or rs is None:
+            self.estruturas_aprovadas = None
         self.curva = HUtoED.from_csv(curva)
         estruturas_rs = read_rtstruct(rs) if rs is not None else []
         if rs is None:                                    # TC sem contornos: BODY automático define a grade
@@ -547,6 +563,91 @@ class Sessao:
         self._registrar(f"Plano {rotulo} em uso")
         return self.resumo()
 
+    def renomear_plano(self, novo_rotulo: str) -> dict:
+        """Muda o nome (rótulo) do plano atual — rascunho; o nome antigo fica no registro."""
+        self._exigir_plano()
+        self.plano._exigir_rascunho()
+        novo = (novo_rotulo or "").strip()[:16]
+        if not novo:
+            raise ErroUsuario("Dê um nome ao plano")
+        if novo == self.plano.rotulo:
+            return self.resumo()
+        if novo in self.outros_planos:
+            raise ErroUsuario(f"Já existe um plano {novo} nesta sessão")
+        antigo = self.plano.rotulo
+        self.plano.rotulo = novo
+        self._registrar(f"Plano {antigo} renomeado para {novo}")
+        return self.resumo()
+
+    def definir_referencia(self, xyz=None, automatico: bool = False) -> dict:
+        """Ponto de referência do posicionamento (marcas/BBs da tomografia, o "zero"): deslocamentos até o
+        isocentro em coordenadas do paciente. automatico: procura os marcadores radiopacos na pele (alto HU, pequenos)
+        perto da cruz e usa x do anterior, y dos laterais e o z do corte deles."""
+        self._exigir_plano()
+        if automatico:
+            xyz = self._achar_marcadores(xyz)
+        if xyz is None:
+            self.plano.referencia_mm = None
+            self._registrar("Ponto de referência removido")
+            return {"referencia_mm": None}
+        self.plano.referencia_mm = [round(float(v), 1) for v in xyz]
+        self._registrar(f"Ponto de referência (BIB) em {self.plano.referencia_mm} mm")
+        return {"referencia_mm": self.plano.referencia_mm, "deslocamentos": self.deslocamentos()}
+
+    def _achar_marcadores(self, perto=None) -> list:
+        from scipy import ndimage
+        hu = self.ct.hu
+        cx, cy, cz = (np.asarray(v, float) for v in self.ct.axes())
+        corpo = self._corpo_ct()
+        borda = corpo & ~ndimage.binary_erosion(corpo, iterations=3)
+        perto_pele = ndimage.binary_dilation(borda, iterations=4)
+        cand = (hu > 1500) & perto_pele
+        lab, n = ndimage.label(cand)
+        if n == 0:
+            raise ErroUsuario("Nenhum marcador radiopaco (> 1500 HU) achado na pele: posicione a cruz e use 'referência = cruz'")
+        objs = ndimage.find_objects(lab)
+        vox = abs(float((cx[1] - cx[0]) * (cy[1] - cy[0]) * ((cz[1] - cz[0]) if len(cz) > 1 else 1.0))) / 1000.0
+        marc = []
+        for i, sl in enumerate(objs, start=1):
+            m = lab[sl] == i
+            vol = float(m.sum()) * vox
+            if vol > 1.0:                                 # marcador é pequeno (< 1 cm³)
+                continue
+            kk, jj, ii = np.nonzero(m)
+            marc.append([float(cx[sl[2].start + ii.mean()]), float(cy[sl[1].start + jj.mean()]),
+                         float(cz[sl[0].start + kk.mean()])])
+        if not marc:
+            raise ErroUsuario("Os objetos densos achados na pele são grandes demais para serem marcadores")
+        marc = np.array(marc)
+        if perto is not None:                             # o grupo de marcadores mais perto da cruz (em z)
+            zc = float(perto[2])
+        else:
+            zs, cont = np.unique(np.round(marc[:, 2] / 3) * 3, return_counts=True)
+            zc = float(zs[np.argmax(cont)])
+        grupo = marc[np.abs(marc[:, 2] - zc) <= 6.0]
+        if len(grupo) == 0:
+            grupo = marc[np.argsort(np.abs(marc[:, 2] - zc))[:3]]
+        ant = grupo[np.argmin(grupo[:, 1])]               # y menor = anterior (coordenadas do paciente)
+        lat = grupo[np.abs(grupo[:, 0] - ant[0]) > 30]
+        y = float(lat[:, 1].mean()) if len(lat) else float(ant[1])
+        return [float(ant[0]), y, float(grupo[:, 2].mean())]
+
+    def deslocamentos(self) -> dict | None:
+        """Do ponto de referência (marcas) ao isocentro, em cm e com o sentido anatômico."""
+        ref = getattr(self.plano, "referencia_mm", None) if self.plano else None
+        if not ref or self.isocentro is None:
+            return None
+        d = [(float(a) - float(b)) / 10.0 for a, b in zip(self.isocentro, ref)]
+        txt = lambda v, pos, neg: "0,0 cm" if abs(v) < 0.05 else f"{abs(v):.1f} cm {'para ' + (pos if v > 0 else neg)}"  # noqa: E731
+        return {"dx_cm": round(d[0], 1), "dy_cm": round(d[1], 1), "dz_cm": round(d[2], 1),
+                "lateral": txt(d[0], "a esquerda do paciente", "a direita do paciente"),
+                "vertical": txt(d[1], "posterior", "anterior"),
+                "longitudinal": txt(d[2], "superior (cabeça)", "inferior (pés)"),
+                "texto": "Isocentro a partir das marcas: " + "; ".join(
+                    f"{k} {txt(v, a, b)}" for k, v, a, b in (("lateral", d[0], "a esquerda do paciente", "a direita do paciente"),
+                                                             ("vertical", d[1], "posterior", "anterior"),
+                                                             ("longitudinal", d[2], "superior", "inferior")))}
+
     def copiar_plano(self, novo_rotulo: str) -> dict:
         """Cópia do plano atual (rascunho, sem aprovação), para variar campos/normalização e comparar."""
         self._exigir_plano()
@@ -760,13 +861,34 @@ class Sessao:
         except Exception:
             return False
 
-    def definir_isocentro(self, xyz):
+    def definir_isocentro(self, xyz=None, estrutura: str | None = None, arredondar_mm: float = 0.0):
+        """Isocentro arbitrário (xyz, mm) ou no centro (centroide) de uma estrutura; arredondar_mm (ex.: 5) põe as
+        coordenadas numa grade redonda. Os campos conformados são reconformados no isocentro novo."""
         self._exigir_plano()
-        self.isocentro = tuple(round(float(v), 1) for v in xyz)
+        self.plano._exigir_rascunho()
+        if estrutura:
+            xyz = self.info_estrutura(estrutura)["centro_mm"]
+        if xyz is None:
+            raise ErroUsuario("Informe o ponto ou a estrutura do isocentro")
+        v = [float(a) for a in xyz]
+        if arredondar_mm and arredondar_mm > 0:
+            v = [round(a / arredondar_mm) * arredondar_mm for a in v]
+        self.isocentro = tuple(round(a, 1) for a in v)
+        refazer = []
         for c in self.plano.campos:
             c.isocentro_mm = self.isocentro
             c.ssd_mm = calculo.ssd_no_eixo(self.grade, c)
+            if c.campo_pai is None and not c.e_arco and (c.__dict__.get("_spec") or {}).get("alvo"):
+                refazer.append(c)
+        for c in refazer:                                # abertura conformada no isocentro novo
+            sp = dict(c.__dict__["_spec"])
+            sp.update({"nome": c.nome, "nome_antigo": c.nome})
+            try:
+                self.salvar_campo(sp)
+            except ErroUsuario as e:
+                self.avisos = (self.avisos or []) + [f"{c.nome}: {e}"]
         self.dose_atualizada = False
+        self._registrar(f"Isocentro em {list(self.isocentro)} mm" + (f" (centro de {estrutura})" if estrutura else ""))
 
     def _margem(self, m) -> Margem:
         if isinstance(m, dict):
@@ -1044,7 +1166,12 @@ class Sessao:
                 eta[m.mascara] = 1.0
         for nome, val in p.densidades.items():
             if nome in self.estruturas:
-                eta[self.estruturas[nome].mascara] = float(val)
+                v, modo = _densidade(val)
+                m = self.estruturas[nome].mascara
+                if modo == "preencher":                  # só o que for menos denso que o valor (ar, gás)
+                    eta[m] = np.maximum(eta[m], v)
+                else:                                    # forçar: todo voxel da estrutura
+                    eta[m] = v
         self.grade.eta = eta.astype(np.float32)
         if manter_dose:
             return
@@ -1053,20 +1180,25 @@ class Sessao:
             for c in p.campos:
                 c.ssd_mm = calculo.ssd_no_eixo(self.grade, c)
 
-    def definir_densidade(self, estrutura: str, valor):
+    def definir_densidade(self, estrutura: str, valor, modo: str = "forcar"):
+        """Densidade eletrônica relativa atribuída a uma estrutura. modo "forcar": todo voxel recebe o valor (ex.:
+        prótese, contraste); "preencher": só os voxels menos densos que o valor sobem para ele (ar no reto, gás)."""
         self._exigir_plano()
         self.plano._exigir_rascunho()
         if estrutura not in self.estruturas:
             raise ErroUsuario(f"Estrutura {estrutura} não existe")
+        if modo not in ("forcar", "preencher"):
+            raise ErroUsuario("Modo da densidade: forcar ou preencher")
         if valor in (None, ""):
             self.plano.densidades.pop(estrutura, None)
         else:
-            v = float(valor)
+            v = float(str(valor).replace(",", "."))
             if not 0.0 <= v <= 4.0:
                 raise ErroUsuario("Densidade eletrônica relativa deve estar entre 0 e 4")
-            self.plano.densidades[estrutura] = v
+            self.plano.densidades[estrutura] = v if modo == "forcar" else {"valor": v, "modo": "preencher"}
         self._aplicar_eta()
-        self._registrar(f"Densidade de {estrutura}: {valor if valor not in (None, '') else 'do CT'}")
+        self._registrar(f"Densidade de {estrutura}: " + (f"{valor} ({'forçar' if modo == 'forcar' else 'preencher'})"
+                                                         if valor not in (None, '') else "do CT"))
 
     def criar_bolus(self, espessura_mm: float, campos: list[str]) -> str:
         """Bolus virtual de água sobre a pele, na entrada dos campos escolhidos (projeção da abertura)."""
@@ -1128,8 +1260,9 @@ class Sessao:
     # ---------------------------------------------------------------- estruturas derivadas
     def criar_estrutura(self, nome: str, operacao: str, a: str, b: str | None = None, margens=None,
                         contrair: bool = False, interno_mm: float = 0.0, externo_mm: float = 0.0,
-                        nivel_gy: float | None = None, cor=None) -> dict:
-        """Margem (simétrica/assimétrica, expandir ou contrair), união, interseção, subtração, anel ou isodose."""
+                        nivel_gy: float | None = None, cor=None, recortar_pele_mm: float | None = None) -> dict:
+        """Margem (simétrica/assimétrica, expandir ou contrair), união, interseção, subtração, anel ou isodose.
+        recortar_pele_mm: tira o que sair do corpo (BODY), deixando essa distância da pele (0 = rente à pele)."""
         from tps.planejamento import estruturas as E
         g = self.grade
         if g is None:
@@ -1160,6 +1293,11 @@ class Sessao:
                 raise ErroUsuario(f"Operação desconhecida: {operacao}")
         except ValueError as e:
             raise ErroUsuario(str(e)) from e
+        if recortar_pele_mm is not None and m.any():
+            corpo = self._corpo()
+            if recortar_pele_mm > 0:
+                corpo = E.margem(corpo, passo, float(recortar_pele_mm), True)
+            m &= corpo
         if not m.any():
             raise ErroUsuario("A estrutura resultante ficou vazia")
         paleta = [(255, 0, 255), (0, 220, 220), (255, 140, 0), (150, 120, 255), (120, 220, 60), (255, 90, 140),
@@ -1168,7 +1306,8 @@ class Sessao:
         self.estruturas[nome] = Estrutura(nome, "DERIVADA", cor, m,
                                           self._contornos_de_mascara(m) if self.tipo == "ct" else [])
         self.derivadas[nome] = {"operacao": operacao, "a": a, "b": b, "margens": margens, "contrair": contrair,
-                                "interno_mm": interno_mm, "externo_mm": externo_mm, "nivel_gy": nivel_gy}
+                                "interno_mm": interno_mm, "externo_mm": externo_mm, "nivel_gy": nivel_gy,
+                                "recortar_pele_mm": recortar_pele_mm}
         self._atualizar_avaliacao()
         self._registrar(f"Estrutura {nome} criada ({operacao} de {a}{' e ' + b if b else ''})")
         return {"nome": nome, "volume_cc": round(float(m.sum()) * g.voxel_cc, 1)}
@@ -1213,10 +1352,27 @@ class Sessao:
         self._registrar(f"Estrutura nova {nome} ({tipo})")
         return {"nome": nome}
 
+    def _bloqueio_aprovacao(self, nome: str):
+        """Estrutura aprovada não pode ser alterada nem apagada: é preciso desaprovar (fica registrado quem)."""
+        ap = getattr(self, "estruturas_aprovadas", None)
+        if ap and nome in (ap.get("nomes") or []):
+            raise ErroUsuario(f"{nome} está aprovada (por {ap.get('por')} em {ap.get('quando')}): para alterar ou apagar, "
+                              "desaprove as estruturas (✔ Estruturas › Desaprovar)")
+
+    def desaprovar_estruturas(self, usuario: str, papel: str, motivo: str = "") -> dict:
+        ap = getattr(self, "estruturas_aprovadas", None)
+        if not ap:
+            raise ErroUsuario("As estruturas não estão aprovadas")
+        self.estruturas_aprovadas = None
+        self._registrar(f"Estruturas DESAPROVADAS por {usuario} ({papel})" + (f": {motivo}" if motivo else "")
+                        + f" — tinham sido aprovadas por {ap.get('por')} em {ap.get('quando')}")
+        return {"desaprovadas_por": usuario, "aprovacao_anterior": ap}
+
     def _editavel(self, nome: str) -> Estrutura:
         e = self.estruturas.get(nome)
         if e is None:
             raise ErroUsuario(f"Estrutura {nome} não existe")
+        self._bloqueio_aprovacao(nome)
         if e.tipo == "BOLUS":
             raise ErroUsuario("O bolus é editado na seção Bolus")
         if not e.contornos and e.mascara.any():
@@ -1439,6 +1595,8 @@ class Sessao:
         """Cria (ou substitui, se foi criada no TPS) uma estrutura a partir de uma máscara na grade do CT."""
         from tps.planejamento import contorno as K
         cx, cy, cz = self.ct.axes()
+        if sobrescrever and nome in self.estruturas:
+            self._bloqueio_aprovacao(nome)
         if nome in self.estruturas and not (sobrescrever and nome in self.editadas):
             base, k = nome, 2
             while nome in self.estruturas:
@@ -1620,6 +1778,7 @@ class Sessao:
         self._atualizar_avaliacao()
 
     def remover_estrutura(self, nome: str):
+        self._bloqueio_aprovacao(nome)
         if nome not in self.estruturas:
             raise ErroUsuario(f"Estrutura {nome} não existe")
         if self.plano:
@@ -1683,6 +1842,71 @@ class Sessao:
     def remover_ponto(self, nome: str):
         self._exigir_plano()
         self.plano.pontos = [p for p in self.plano.pontos if p["nome"] != nome]
+
+    def ponto(self, xyz) -> dict:
+        """HU, densidade eletrônica relativa (curva da TC, com a densidade atribuída no plano se houver) e dose total
+        num ponto (mm) — para o cursor das vistas."""
+        if self.ct is None:
+            return {}
+        cx, cy, cz = (np.asarray(v, float) for v in self.ct.axes())
+        x, y, z = (float(v) for v in xyz)
+        out = {"xyz": [round(x, 1), round(y, 1), round(z, 1)], "hu": None, "densidade": None, "dose_gy": None}
+        if not (min(cx[0], cx[-1]) - 1 <= x <= max(cx[0], cx[-1]) + 1 and min(cy[0], cy[-1]) - 1 <= y <= max(cy[0], cy[-1]) + 1
+                and min(cz[0], cz[-1]) - 1 <= z <= max(cz[0], cz[-1]) + 1):
+            return out
+        i, j, k = (int(np.argmin(np.abs(a - v))) for a, v in ((cx, x), (cy, y), (cz, z)))
+        hu = float(self.ct.hu[k, j, i])
+        out["hu"] = round(hu, 0)
+        if self.curva is not None:
+            out["densidade"] = round(float(self.curva(np.array([hu]))[0]), 3)
+        g = self.grade
+        if g is not None and all(a[0] - 1e-6 <= v <= a[-1] + 1e-6 for v, a in zip((x, y, z), (g.x, g.y, g.z))):
+            try:
+                eta = getattr(g, "eta", None)
+                if eta is not None and self.plano is not None and self.plano.densidades:
+                    out["densidade"] = round(float(calculo.valor_em_ponto(eta, g, (x, y, z))), 3)
+            except Exception:  # noqa: BLE001
+                pass
+            if self.dose_atualizada and self.dose_fx is not None:
+                n = self.plano.prescricao.fracoes
+                tot = calculo.valor_em_ponto(self.dose_fx, g, (x, y, z)) * n
+                out["dose_gy"] = round(float(tot), 3)
+                out["dose_pct"] = round(float(tot / self.plano.prescricao.dose_total_gy * 100), 1)
+        return out
+
+    def info_estrutura(self, nome: str) -> dict:
+        """Centro (centroide), extensão, volume e HU / densidade eletrônica média da estrutura."""
+        e = self.estruturas.get(nome)
+        if e is None or e.mascara is None or not e.mascara.any():
+            raise ErroUsuario(f"Estrutura {nome} vazia ou inexistente")
+        g = self.grade
+        kk, jj, ii = np.nonzero(e.mascara)
+        cen = [float(g.x[ii].mean()), float(g.y[jj].mean()), float(g.z[kk].mean())]
+        out = {"nome": nome, "centro_mm": [round(v, 1) for v in cen],
+               "min_mm": [round(float(g.x[ii].min()), 1), round(float(g.y[jj].min()), 1), round(float(g.z[kk].min()), 1)],
+               "max_mm": [round(float(g.x[ii].max()), 1), round(float(g.y[jj].max()), 1), round(float(g.z[kk].max()), 1)],
+               "volume_cc": round(float(e.mascara.sum()) * g.voxel_cc, 2)}
+        if self.ct is not None:                        # HU na resolução da TC, dentro dos polígonos
+            from tps.planejamento import contorno as K
+            cx, cy, cz = (np.asarray(v, float) for v in self.ct.axes())
+            tol = abs(float(cz[1] - cz[0])) / 2 + 0.01 if len(cz) > 1 else 1.5
+            vals = []
+            for k, z in enumerate(cz):
+                pol = K.poligonos_do_corte(e.contornos, float(z), tol)
+                if pol:
+                    m = K.mascara_de_poligonos(pol, cx, cy)
+                    if m.any():
+                        vals.append(self.ct.hu[k][m].astype(np.float32))
+            if vals:
+                v = np.concatenate(vals)
+                out.update({"hu_medio": round(float(v.mean()), 1), "hu_dp": round(float(v.std()), 1),
+                            "hu_min": round(float(v.min()), 0), "hu_max": round(float(v.max()), 0)})
+                if self.curva is not None:
+                    out["densidade_media"] = round(float(self.curva(v).mean()), 3)
+        dens = (self.plano.densidades or {}).get(nome) if self.plano else None
+        if dens is not None:
+            out["densidade_atribuida"] = dens
+        return out
 
     def dose_em(self, xyz) -> dict:
         """Dose total e por campo (Gy, plano completo) num ponto."""
@@ -1869,7 +2093,13 @@ class Sessao:
         if p.tecnica in ("IMRT", "VMAT", "DCA") and m.tabelas and alvo is not None:
             conf.append(self._conferencia_composta(alvo))
         hi = indice_homogeneidade(total, alvo) if alvo is not None and alvo.any() else None
-        self.resultado = {"dvh": hist, "conferencia_um": conf, "info": info, "hi": hi,
+        from tps.planejamento import indices as IND
+        try:
+            ind = IND.calcular(total, alvo, corpo, pr.dose_total_gy, g.voxel_cc,
+                               (abs(g.z[1] - g.z[0]), abs(g.y[1] - g.y[0]), abs(g.x[1] - g.x[0])))
+        except Exception:  # noqa: BLE001
+            ind = {}
+        self.resultado = {"dvh": hist, "conferencia_um": conf, "info": info, "hi": hi, "indices": ind,
                           "restricoes": self._avaliar_restricoes(total),
                           "comparacao": self.comparacao_ref(total),
                           "dmax_gy": float(total[corpo].max()) if corpo.any() else float(total.max()),
@@ -2839,6 +3069,11 @@ class Sessao:
                "isocentro": self.isocentro, "dose_atualizada": self.dose_atualizada, "avisos": self.avisos,
                "log": self.log[-30:], "planos_dicom": self.planos_dicom, "planos_sessao": self.lista_planos(),
                "dose_ref": {"fonte": self.dose_ref["fonte"], "arquivo": self.dose_ref["arquivo"]} if self.dose_ref else None}
+        out["estruturas_aprovadas"] = getattr(self, "estruturas_aprovadas", None)
+        try:
+            out["deslocamentos"] = self.deslocamentos() if self.plano is not None else None
+        except Exception:  # noqa: BLE001
+            out["deslocamentos"] = None
         if self.tipo == "ct" and self.pasta_ct is not None:          # caso recebido pela automação
             try:
                 from tps.app import automacao
@@ -2871,7 +3106,8 @@ class Sessao:
                             "campos_setup": [self._campo_json(c) for c in p.campos_setup]}
             if self.dose_atualizada and self.resultado:
                 r = self.resultado
-                out["resultado"] = {"hi": r["hi"], "dmax_gy": r["dmax_gy"], "dmax_xyz": r.get("dmax_xyz"), "info": r["info"],
+                out["resultado"] = {"hi": r["hi"], "indices": r.get("indices") or {}, "dmax_gy": r["dmax_gy"],
+                                    "dmax_xyz": r.get("dmax_xyz"), "info": r["info"],
                                     "restricoes": r.get("restricoes"),
                                     "comparacao": {k: v for k, v in (r.get("comparacao") or {}).items() if k != "dvh"}
                                     or None,

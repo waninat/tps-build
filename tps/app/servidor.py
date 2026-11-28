@@ -386,6 +386,21 @@ def caso_etapa(cid: str, etapa: str, u: dict = Depends(usuario)):
     return automacao.estado()
 
 
+@app.post("/api/{sid}/estruturas/desaprovar")
+def estruturas_desaprovar(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    """Desaprova as estruturas (com senha; fica registrado quem e o motivo) para poder alterá-las."""
+    from tps.app import automacao
+    s = _s(sid)
+    a = banco().assinar(u, d.get("senha", ""), PODE_APROVAR, "desaprovar estruturas")
+    with TRAVA:
+        try:
+            r = automacao.desaprovar_estruturas(s, a["login"], PAPEIS[a["papel"]], str(d.get("motivo", ""))[:300])
+        except ValueError as e:
+            raise ErroUsuario(str(e)) from e
+    auditar(u, "estruturas_desaprovadas", s, motivo=d.get("motivo", ""))
+    return {**r, "resumo": s.resumo()}
+
+
 @app.post("/api/{sid}/estruturas/aprovar")
 def estruturas_aprovar(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     """Aprovação das estruturas (médico/físico, com senha): grava o RTSTRUCT aprovado no caso e dispara o plano
@@ -451,11 +466,32 @@ def aplicar_modelo(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     return r
 
 
+@app.post("/api/{sid}/plano/renomear")
+def plano_renomear(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    s = _s(sid)
+    with TRAVA:
+        antigo = s.plano.rotulo if s.plano else None
+        r = s.renomear_plano(str(d.get("rotulo", "")))
+    auditar(u, "plano_renomeado", s, de=antigo, para=d.get("rotulo"))
+    return r
+
+
+@app.post("/api/{sid}/referencia")
+def referencia(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
+    """Ponto de referência (marcas/BB) do posicionamento: na cruz, automático (marcadores) ou removido."""
+    s = _s(sid)
+    with TRAVA:
+        r = s.definir_referencia(d.get("xyz"), bool(d.get("automatico")))
+    auditar(u, "referencia_definida", s, **r)
+    return {**r, "resumo": s.resumo()}
+
+
 @app.post("/api/{sid}/isocentro")
 def isocentro(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     s = _s(sid)
-    s.definir_isocentro(d["xyz"])
-    return s.resumo()
+    with TRAVA:
+        s.definir_isocentro(d.get("xyz"), d.get("estrutura") or None, float(d.get("arredondar_mm") or 0))
+        return s.resumo()
 
 
 @app.post("/api/{sid}/campos/todos")
@@ -691,7 +727,7 @@ def progresso(sid: str, u: dict = Depends(usuario)):
 @app.post("/api/{sid}/densidade")
 def densidade(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     s = _s(sid)
-    s.definir_densidade(d["estrutura"], d.get("valor"))
+    s.definir_densidade(d["estrutura"], d.get("valor"), d.get("modo") or "forcar")
     auditar(u, "densidade_definida", s, estrutura=d["estrutura"], valor=d.get("valor"))
     return s.resumo()
 
@@ -845,7 +881,8 @@ def estrutura(sid: str, d: dict = Body(...), u: dict = Depends(usuario)):
     with TRAVA:
         r = s.criar_estrutura(d.get("nome", ""), d.get("operacao", ""), d.get("a", ""), d.get("b"),
                               d.get("margens"), bool(d.get("contrair", False)), float(d.get("interno_mm", 0) or 0),
-                              float(d.get("externo_mm", 0) or 0), d.get("nivel_gy"), d.get("cor"))
+                              float(d.get("externo_mm", 0) or 0), d.get("nivel_gy"), d.get("cor"),
+                              None if d.get("recortar_pele_mm") in (None, "") else float(d["recortar_pele_mm"]))
     auditar(u, "estrutura_criada", s, **{k: v for k, v in d.items() if k != "cor"}, volume_cc=r["volume_cc"])
     return s.resumo()
 
@@ -870,6 +907,17 @@ def remover_ponto(sid: str, nome: str, u: dict = Depends(usuario)):
     s = _s(sid)
     s.remover_ponto(nome)
     return s.resumo()
+
+
+@app.get("/api/{sid}/ponto")
+def ponto_cursor(sid: str, x: float, y: float, z: float, u: dict = Depends(usuario)):
+    """HU, densidade e dose no ponto do cursor (sem trava: leitura rápida)."""
+    return _s(sid).ponto((x, y, z))
+
+
+@app.get("/api/{sid}/estrutura_info/{nome}")
+def estrutura_info(sid: str, nome: str, u: dict = Depends(usuario)):
+    return _s(sid).info_estrutura(nome)
 
 
 @app.get("/api/{sid}/dose")

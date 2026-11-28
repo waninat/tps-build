@@ -30,6 +30,24 @@ def _algoritmo_txt(p) -> str:
     return "dose por collapsed cone"
 
 
+def tempo_feixe(s) -> tuple[float, list]:
+    """Tempo de feixe ligado estimado (min): UM / taxa de dose; nos arcos, o maior entre isso e o giro do gantry na
+    velocidade máxima da máquina. Não inclui o tempo entre campos nem o posicionamento."""
+    raw = s.maquina.raw if s.maquina else {}
+    vmax = float(((raw.get("vmat") or {}).get("gantry_vel_max_graus_s") or (raw.get("vmat") or {}).get("gantry_max_deg_s")
+                  or 6.0))
+    tot, por = 0.0, []
+    for c in s.plano.campos:
+        taxa = float(c.taxa_dose or 400.0)
+        t = float(c.mu or 0.0) / taxa
+        if c.e_arco:
+            from tps.planejamento.vmat import comprimento_arco
+            t = max(t, comprimento_arco(c.gantry, c.arco_fim, c.sentido) / vmax / 60.0)
+        tot += t
+        por.append((c.nome, t))
+    return tot, por
+
+
 def _f(v, n=1):
     return "—" if v is None else f"{v:.{n}f}"
 
@@ -108,21 +126,50 @@ def relatorio_pdf(s, usuario: dict | None = None) -> bytes:
                     f"{pr.estrutura_alvo or 'ponto'}; normalização {pr.metodo}"
                     f"{' em ' + str(pr.ponto_mm) if pr.ponto_mm else ''}; isodose {pr.isodose_pct:g}%. "
                     f"HI {_f(r.get('hi'), 3)} · Dmax {_f(r.get('dmax_gy'), 2)} Gy.", normal)]
+    um_tot = sum(float(c.mu or 0) for c in p.campos)
+    t_tot, _ = tempo_feixe(s)
+    el.append(Paragraph(f"<b>UM total {um_tot:.1f}</b> · tempo de feixe ligado estimado <b>{t_tot:.1f} min</b> por "
+                        "fração (UM/taxa; arcos limitados pelo giro do gantry; sem o tempo entre campos)", normal))
+    ix = (r.get("indices") or {}) if r else {}
+    if ix:
+        el.append(Paragraph(
+            f"Índices: V95% {_f(ix.get('v95_pct'))}% · V100% {_f(ix.get('v100_pct'))}% · HI {_f(ix.get('hi'), 3)} · "
+            f"CI RTOG {_f(ix.get('ci_rtog'), 2)} · CI Paddick {_f(ix.get('ci_paddick'), 3)} · GI {_f(ix.get('gi'), 2)} · "
+            f"R50% {_f(ix.get('r50'), 2)}" + (f" · D2cm {_f(ix.get('d2cm_pct'))}%" if ix.get("d2cm_pct") is not None else ""),
+            normal))
+    desl = s.deslocamentos() if hasattr(s, "deslocamentos") else None
+    el.append(Paragraph("Posicionamento", sub))
+    if desl:
+        ref = p.referencia_mm
+        el.append(Paragraph(f"Referência (marcas/BB) em {', '.join(_f(v) for v in ref)} mm · isocentro em "
+                            f"{', '.join(_f(v) for v in (s.isocentro or ()))} mm.<br/><b>Deslocamentos das marcas ao "
+                            f"isocentro:</b> lateral {desl['lateral']} · vertical {desl['vertical']} · longitudinal "
+                            f"{desl['longitudinal']}", normal))
+    else:
+        el.append(Paragraph("Ponto de referência (marcas/BB) não definido — deslocamentos não informados.", normal))
     if p.densidades or p.bolus:
         txt = []
         if p.densidades:
-            txt.append("Densidades forçadas: " + ", ".join(f"{k} = {v:g}" for k, v in p.densidades.items()))
+            txt.append("Densidades atribuídas: " + ", ".join(
+                f"{k} = {v['valor']:g} (preencher)" if isinstance(v, dict) else f"{k} = {v:g}" for k, v in p.densidades.items()))
         if p.bolus:
             txt.append("<b>BOLUS:</b> " + "; ".join(f"{b['nome']} ({b['espessura_mm']:g} mm, campos "
                                                     f"{', '.join(b['campos'])})" for b in p.bolus))
         el.append(Paragraph(" · ".join(txt), normal))
     el.append(Paragraph("Campos", sub))
-    linhas = [["Campo", "Pai", "Gantry", "Colim.", "Mesa", "Peso", "UM", "SSD (cm)", "Jaw X (mm)", "Jaw Y (mm)", "Seg."]]
+    _, tempos = tempo_feixe(s)
+    tmap = dict(tempos)
+    linhas = [["Campo", "Pai", "Gantry", "Colim.", "Mesa", "Peso", "UM", "SSD (cm)", "Jaw X (mm)", "Jaw Y (mm)",
+               "Seg./PC", "Tempo"]]
     for c in p.campos:
-        linhas.append([c.nome, c.campo_pai or "", f"{c.gantry:.1f}", f"{c.colimador:.1f}", f"{c.mesa:.1f}",
+        g_txt = (f"{c.gantry:.0f}→{c.arco_fim:.0f} {c.sentido or ''}" if c.e_arco else f"{c.gantry:.1f}")
+        linhas.append([c.nome, c.campo_pai or "", g_txt, f"{c.colimador:.1f}", f"{c.mesa:.1f}",
                        _f(c.peso, 3), _f(c.mu), _f(c.ssd_mm / 10 if c.ssd_mm else None),
                        f"{_f(c.jaw_x[0])} / {_f(c.jaw_x[1])}" if c.jaw_x else "—",
-                       f"{_f(c.jaw_y[0])} / {_f(c.jaw_y[1])}", str(len(c.segmentos) if c.segmentos else 1)])
+                       f"{_f(c.jaw_y[0])} / {_f(c.jaw_y[1])}",
+                       str(len(c.pontos_controle) if c.pontos_controle else (len(c.segmentos) if c.segmentos else 1)),
+                       f"{tmap.get(c.nome, 0):.2f} min"])
+    linhas.append(["Total", "", "", "", "", "", f"{um_tot:.1f}", "", "", "", "", f"{t_tot:.1f} min"])
     t = Table(linhas, repeatRows=1)
     t.setStyle(estilo_tab)
     el.append(t)
@@ -136,7 +183,15 @@ def relatorio_pdf(s, usuario: dict | None = None) -> bytes:
         t.setStyle(estilo_tab)
         el.append(t)
     if s.dose_atualizada:
-        el.append(KeepTogether([Paragraph("Distribuição de dose", sub), Image(io.BytesIO(_fig_axial(s)), 150 * mm, 111 * mm)]))
+        centro = None
+        alvo_n = pr.estrutura_alvo
+        if alvo_n and alvo_n in s.estruturas and s.estruturas[alvo_n].mascara.any():
+            try:
+                centro = s.info_estrutura(alvo_n)["centro_mm"]
+            except Exception:  # noqa: BLE001
+                centro = None
+        el.append(KeepTogether([Paragraph(f"Distribuição de dose — cortes no centro do {alvo_n or 'isocentro'}", sub),
+                                Image(io.BytesIO(_fig_tres_vistas(s, centro)), 180 * mm, 67 * mm)]))
         el.append(KeepTogether([Paragraph("Histograma dose-volume", sub), Image(io.BytesIO(_fig_dvh(s)), 150 * mm, 77 * mm)]))
         lin = [["Estrutura", "Volume (cc)", "Dmin", "Dmédia", "Dmax", "D98", "D95", "D2"]]
         for n, h in r["dvh"].items():
@@ -168,6 +223,10 @@ def relatorio_pdf(s, usuario: dict | None = None) -> bytes:
             t.setStyle(estilo_tab)
             el.append(t)
     el.append(Paragraph("Aprovação", sub))
+    ae = getattr(s, "estruturas_aprovadas", None)
+    el.append(Paragraph(f"Estruturas aprovadas por <b>{ae.get('por')}</b>"
+                        f"{' (' + ae['papel'] + ')' if ae.get('papel') else ''} em {ae.get('quando')}" if ae else
+                        "Estruturas: <font color='#b06000'>sem aprovação registrada</font>", normal))
     ap = p.aprovacao
     el.append(Paragraph(f"Aprovado por <b>{ap['usuario']}</b> ({ap['papel']}) em {ap['quando']}<br/>"
                         f"<font size=7>hash do plano: {ap['hash']}</font>" if ap else
@@ -231,11 +290,12 @@ def relatorio_pdf(s, usuario: dict | None = None) -> bytes:
 
 
 # ------------------------------------------------------------------ relatório para o médico
-def _fig_tres_vistas(s) -> bytes:
-    """Axial, coronal e sagital pelo isocentro: CT, contornos, colorwash da dose e isodoses 95/100/105/107%."""
+def _fig_tres_vistas(s, centro=None) -> bytes:
+    """Axial, coronal e sagital pelo isocentro (ou pelo `centro`, ex.: centro do PTV): CT, contornos, colorwash da
+    dose e isodoses 95/100/105/107%."""
     g, p = s.grade, s.plano
     cx, cy, cz = s.ct.axes()
-    iso = np.asarray(s.isocentro or p.campos[0].isocentro_mm, float)
+    iso = np.asarray(centro if centro is not None else (s.isocentro or p.campos[0].isocentro_mm), float)
     rx = p.prescricao.dose_total_gy
     tot = s.dose_fx * p.prescricao.fracoes / rx * 100 if s.dose_atualizada else None
     fig, axs = plt.subplots(1, 3, figsize=(10.5, 3.9), dpi=150, gridspec_kw={"width_ratios": [1.2, 1, 1]})
@@ -278,7 +338,9 @@ def _fig_tres_vistas(s) -> bytes:
             if m.any():
                 ax.contour(hh[0], hh[1], m.astype(float), levels=[0.5], colors=[np.array(e.cor) / 255],
                            linewidths=0.8)
-        ax.plot(*pi, "r+", ms=8)
+        ii = np.asarray(s.isocentro or iso, float)
+        pis = {"axial": (ii[0], ii[1]), "coronal": (ii[0], ii[2]), "sagital": (ii[1], ii[2])}[v]
+        ax.plot(*pis, "r+", ms=8)
         ax.set_title(v.capitalize(), fontsize=8)
         ax.set_xticks([])
         ax.set_yticks([])

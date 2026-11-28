@@ -510,6 +510,20 @@ def _parecer(s) -> dict | None:
         return {"erro": str(e)[:200]}
 
 
+def desaprovar_estruturas(s, usuario: str, papel: str, motivo: str = "") -> dict:
+    """Desaprova (fica registrado quem e por quê) e grava um RTSTRUCT não aprovado como o mais recente do caso."""
+    from tps.exportacao.rtstruct import exportar_rtstruct
+    r = s.desaprovar_estruturas(usuario, papel, motivo)
+    cid = caso_da_pasta(s.pasta_ct)
+    if cid:
+        agora = dt.datetime.now()
+        arq = _pasta_casos() / cid / f"RS_desaprovado_{agora:%Y%m%d_%H%M%S}.dcm"
+        exportar_rtstruct(s, arq, rotulo="DESAPROVADO")
+        _gravar_caso(cid, estruturas_aprovadas=None, estado="estruturas desaprovadas",
+                     evento=f"estruturas DESAPROVADAS por {usuario} ({papel})" + (f": {motivo}" if motivo else ""))
+    return r
+
+
 def aprovar_estruturas(s, usuario: str, papel: str) -> dict:
     """Aprovação das estruturas na sessão: grava o RTSTRUCT aprovado no caso (adota a TC como caso, se preciso) e,
     com o plano automático ligado, põe o plano na fila."""
@@ -544,6 +558,8 @@ def aprovar_estruturas(s, usuario: str, papel: str) -> dict:
     rs.ReviewDate, rs.ReviewTime = agora.strftime("%Y%m%d"), agora.strftime("%H%M%S")
     rs.ReviewerName = usuario
     rs.save_as(arq, enforce_file_format=True)
+    s.estruturas_aprovadas = {"por": usuario, "papel": papel, "quando": agora.strftime("%Y-%m-%d %H:%M"),
+                              "nomes": list(s.estruturas)}
     _gravar_caso(cid, estruturas_aprovadas={"por": usuario, "papel": papel, "quando": agora.isoformat(timespec="seconds"),
                                             "arquivo": arq.name, "estruturas": len(nomes)},
                  ptvs=[p["nome"] for p in ptvs], estado="estruturas aprovadas",

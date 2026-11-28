@@ -126,7 +126,8 @@ def exportar_rtstruct(sessao, destino: str | Path, rotulo: str = "TPS") -> Datas
         dens = (getattr(s.plano, "densidades", None) or {}).get(nome) if s.plano else None
         if dens is not None:
             o.ROIPhysicalPropertiesSequence = Sequence([_ds(ROIPhysicalProperty="REL_ELEC_DENSITY",
-                                                            ROIPhysicalPropertyValue=float(dens))])
+                                                            ROIPhysicalPropertyValue=float(
+                                                                dens["valor"] if isinstance(dens, dict) else dens))])
         obs.append(o)
     ds.StructureSetROISequence = Sequence(rois)
     ds.ROIContourSequence = Sequence(contornos)

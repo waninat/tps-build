@@ -14,6 +14,12 @@ RAIO_CABECOTE_MM = 300.0
 UM_MIN_SEGMENTO = 2.0
 
 
+def _dtxt(v) -> str:
+    if isinstance(v, dict):
+        return f"{float(v.get('valor', 0)):g} (preencher)"
+    return f"{float(v):g}"
+
+
 def _item(i, titulo, estado, detalhe=""):
     return {"id": i, "titulo": titulo, "estado": estado, "detalhe": detalhe}
 
@@ -138,7 +144,7 @@ def checklist(sessao) -> list[dict]:
     dens = getattr(p, "densidades", None) or {}
     if dens:
         out.append(_item("densidades", "Densidades forçadas", "aviso",
-                         ", ".join(f"{n} = {v:g}" for n, v in dens.items()) + " — confirme que é intencional"))
+                         ", ".join(f"{n} = {_dtxt(v)}" for n, v in dens.items()) + " — confirme que é intencional"))
     if p.bolus:
         out.append(_item("bolus", "Bolus no plano", "aviso", ", ".join(b["nome"] for b in p.bolus) +
                          " — precisa estar no paciente em todas as frações"))
