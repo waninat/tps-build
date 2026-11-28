@@ -122,8 +122,14 @@ def sequenciar(c: Campo, colim: Colimacao, u: np.ndarray, F: np.ndarray, aberto:
                            min(u[t[-1]] + res / 2, max(c.mlc_b[i], c.mlc_a[i]))) for t in tr]
         if not trechos:
             continue
-        jy = c.jaw_y
-        jx = c.jaw_x
+        if base_camada:                      # segmento-base = a abertura conformada exata (não a da grade de 2,5 mm)
+            formas = c.segmentos_blindagem or [{"mlc_a": list(c.mlc_a), "mlc_b": list(c.mlc_b),
+                                                 "jaw_x": c.jaw_x, "jaw_y": c.jaw_y}]
+            for f in formas:
+                segs.append({"mlc_a": list(f["mlc_a"]), "mlc_b": list(f["mlc_b"]),
+                             "jaw_x": f.get("jaw_x") if f.get("jaw_x") is None else tuple(f["jaw_x"]),
+                             "jaw_y": tuple(f.get("jaw_y") or c.jaw_y), "peso": peso})
+            continue
         for k in range(max(len(t) for t in trechos.values())):
             a = np.full(colim.n_pares, np.nan)
             b = np.full(colim.n_pares, np.nan)
@@ -132,6 +138,16 @@ def sequenciar(c: Campo, colim: Colimacao, u: np.ndarray, F: np.ndarray, aberto:
                     a[i], b[i] = tr[k]
             if np.all(np.isnan(a)):
                 continue
+            # mandíbulas do segmento justas nos pares abertos: os pares fechados fora deles ficam atrás das
+            # mandíbulas (não "meio abertos" dentro do campo) e a fuga entre as lâminas fechadas não chega ao paciente
+            lim = colim.limites_laminas
+            abertos_i = np.nonzero(~np.isnan(a))[0]
+            jy = (max(c.jaw_y[0], float(lim[abertos_i[0]])), min(c.jaw_y[1], float(lim[abertos_i[-1] + 1])))
+            jx = None
+            if c.jaw_x is not None:
+                jx = (max(c.jaw_x[0], float(np.nanmin(a))), min(c.jaw_x[1], float(np.nanmax(b))))
+                jx = (round(jx[0], 1), round(jx[1], 1))
+            jy = (round(jy[0], 1), round(jy[1], 1))
             _posicionar_fechados(a, b, colim, jx, op)
             s = Campo(c.nome, c.gantry, c.colimador, c.mesa, c.isocentro_mm, jaw_x=jx, jaw_y=jy,
                       mlc_a=[round(float(x), 1) for x in a], mlc_b=[round(float(x), 1) for x in b])
@@ -350,8 +366,10 @@ def compensar(plano: Plano, grade: calculo.GradeDose, doses_um: dict, alvo: np.n
             c.segmentos = novos
             doses_um.update(calculo.dose_por_um(grade, [c], colim, modelo, kernels, posicao, permitir_demonstracao))
     dose = calculo.normalizar(plano, doses_um, grade, alvo)
-    for c in alvos:                                    # o envelope do campo vira a união dos segmentos
-        c.mlc_a = [min(s["mlc_a"][i] for s in c.segmentos) for i in range(colim.n_pares)]
-        c.mlc_b = [max(s["mlc_b"][i] for s in c.segmentos) for i in range(colim.n_pares)]
+    for c in alvos:
+        # o campo continua mostrando a abertura conformada (os segmentos estão dentro dela). Antes o envelope virava
+        # a união dos segmentos — e os pares fechados de um segmento, estacionados no meio do campo, apareciam como
+        # lâminas "meio abertas" no campo principal
+        c.mlc_a, c.mlc_b = list(abertos[c.nome]["a"]), list(abertos[c.nome]["b"])
     return ResultadoCompensador({n: (m[0], None) for n, m in mapas.items()},
                                 {c.nome: len(c.segmentos) for c in alvos}, hi0, _hi(dose, alvo), hist, avisos)

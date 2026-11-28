@@ -83,3 +83,27 @@ def test_exportacao_e_releitura_reproduzem_a_dose(caso, modo, tmp_path):
     # campos separados: UM de cada segmento arredondada a 0,1 → diferença pequena
     tol = 0.01 if modo == "campos_separados" else 1e-3
     assert np.max(np.abs(d - caso.d1)) < tol * caso.d1.max()
+
+
+def test_campo_continua_conformado_e_fechados_ficam_atras_das_mandibulas(caso):
+    """Bug de 0.9.x: o envelope do campo virava a união dos segmentos e os pares fechados de um segmento (estacionados
+    no meio do campo) apareciam como lâminas "meio abertas" no campo principal."""
+    x, y, z = caso.g.x, caso.g.y, caso.g.z
+    lim = caso.colim.limites_laminas
+    for c in caso.plano.campos:
+        ref = Campo(c.nome, c.gantry)
+        ajustar(ref, caso.colim, [(caso.ptv, Margem.uniforme(7))], eixos=(x, y, z))
+        assert c.mlc_a == ref.mlc_a and c.mlc_b == ref.mlc_b            # o campo principal não muda
+        assert any(sg["mlc_a"] == ref.mlc_a and sg["mlc_b"] == ref.mlc_b for sg in c.segmentos)   # base = conformado
+        for sg in c.segmentos:
+            jy = sg["jaw_y"]
+            for i in range(caso.colim.n_pares):
+                dentro_y = lim[i + 1] > jy[0] + 0.5 and lim[i] < jy[1] - 0.5
+                fechado = sg["mlc_b"][i] - sg["mlc_a"][i] < caso.colim.gap_minimo_mm + 0.5
+                if not (dentro_y and fechado):
+                    continue
+                meio = 0.5 * (sg["mlc_a"][i] + sg["mlc_b"][i])
+                abre = [k for k in range(caso.colim.n_pares) if sg["mlc_b"][k] - sg["mlc_a"][k] > caso.colim.gap_minimo_mm + 0.5]
+                vizinho = any(abs(k - i) == 1 for k in abre)
+                # fechado dentro das mandíbulas só entre pares abertos (não-interdigitação) ou sob a mandíbula X
+                assert vizinho or (sg["jaw_x"] is not None and not (sg["jaw_x"][0] < meio < sg["jaw_x"][1])), (c.nome, i)
