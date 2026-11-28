@@ -168,6 +168,11 @@ def field_in_field_filtro(plano: Plano, grade: calculo.GradeDose, doses_um: dict
     rx = plano.prescricao.dose_fracao_gy
     hi0 = indice_homogeneidade(d0, alvo)
     dmax0 = float(d0[corpo].max() / rx * 100)
+    if len(base) < len(principais):                 # só a região onde os campos escolhidos dão a maior parte da dose
+        d_base = sum(doses_um[c.nome] * float(c.mu or 0.0) for c in base)
+        dominio = d_base >= 0.6 * d0
+        if (interior & dominio).any():
+            interior = interior & dominio
     ref = float(d0[interior].max()) if interior.any() else float(d0.max())
     avisos, novos = [], []
     u, v = grade_bev(colim.jaw_y_max_mm + 5, 1.0)
@@ -202,6 +207,9 @@ def field_in_field_filtro(plano: Plano, grade: calculo.GradeDose, doses_um: dict
                 avisos.append(f"{sub.nome}: o campo não passa pela isodose de {nivel:g}%")
                 continue
             sub.peso = peso_pct / 100.0 * ref / por_um / len(base)
+            if sub.peso > 0.25 * float(c.mu or 0.0):        # o campo quase não passa pela região quente
+                avisos.append(f"{sub.nome}: o campo contribui pouco para a isodose de {nivel:g}%; nível ignorado")
+                continue
             novos.append(sub)
     if not novos:
         return ResultadoFiF([], dmax0, dmax0, 0.0, 0.0, hi0, hi0, avisos + ["Nenhum subcampo criado"])

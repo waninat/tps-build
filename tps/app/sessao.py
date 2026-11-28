@@ -764,8 +764,11 @@ class Sessao:
         self._registrar(f"Plano {rotulo}: {dose_total} Gy / {fracoes} fx em {alvo}")
 
     def aplicar_modelo(self, modelo_id: str, rotulo: str, dose_total: float | None = None, fracoes: int | None = None,
-                       alvo: str | None = None, calcular: bool = True) -> dict:
-        """Plano semi-pronto a partir de um modelo por sítio (dados/modelos_plano/*.yaml). SRS-PLN-080."""
+                       alvo: str | None = None, calcular: bool = True, ajustes: dict | None = None) -> dict:
+        """Plano semi-pronto a partir de um modelo por sítio (dados/modelos_plano/*.yaml). SRS-PLN-080.
+        ajustes (planejamento automático, tentativas seguintes): margem_extra_mm (abre a abertura em volta do alvo),
+        fif_fino (field-in-field com mais níveis e ajuste fino), isocentro (xyz no lugar do centro do alvo)."""
+        aj = ajustes or {}
         from tps.planejamento import modelos_plano as MP
         from tps.planejamento.conformacao import projetar_bev
         mods = MP.carregar()
@@ -782,6 +785,8 @@ class Sessao:
         self.novo_plano(rotulo, float(dose_total or md.get("dose_total", 50)), int(fracoes or md.get("fracoes", 25)),
                         alvo, metodo, None, float(norm.get("isodose_pct", 100)),
                         (norm.get("volume_pct", 95), norm.get("dose_pct", 100)))
+        if aj.get("isocentro") is not None:
+            self.isocentro = tuple(round(float(v), 1) for v in aj["isocentro"])
         g = self.grade
         eixos = (g.x, g.y, g.z)
         am = self.estruturas[alvo].mascara
@@ -813,6 +818,8 @@ class Sessao:
             else:
                 gantry = float(gtxt)
             margem = dict(md.get("margem") or {"x1": 7, "x2": 7, "y1": 7, "y2": 7})
+            if aj.get("margem_extra_mm"):
+                margem = {k: float(v) + float(aj["margem_extra_mm"]) for k, v in margem.items()}
             if md.get("flash_mm"):                      # abre o lado anterior (pele) do BEV: flash
                 c0 = Campo("t", float(gantry), isocentro_mm=self.isocentro)
                 u_ant, _ = projetar_bev(np.array([[self.isocentro[0], self.isocentro[1] - 150, self.isocentro[2]]]), c0)
@@ -820,6 +827,8 @@ class Sessao:
             spec = {"nome": cdef.get("nome"), "gantry": gantry, "colimador": cdef.get("colimador", 0),
                     "peso": cdef.get("peso", 1.0), "modo": "conformado", "alvo": alvo, "margem": margem,
                     "ponto_encontro": md.get("ponto_encontro", "fora"), "blindagens": blind}
+            if aj.get("fechar_y"):
+                spec["fechar_y"] = aj["fechar_y"]
             r = self.salvar_campo(spec)
             avisos += r["avisos"]
         fif = md.get("field_in_field")
@@ -833,6 +842,8 @@ class Sessao:
             opcoes["field_in_field"] = {"modo": fif.get("modo", "filtro"), "niveis": fif.get("niveis", [97, 94, 91, 88]),
                                         "peso_pct": fif.get("peso_pct", 3), "campos": campos,
                                         "ajuste_fino": bool(fif.get("ajuste_fino", False))}
+            if aj.get("fif_fino"):
+                opcoes["field_in_field"].update(niveis=[99, 97, 95, 93, 91, 89, 87], ajuste_fino=True)
         prot = []
         for o in md.get("proteger") or []:
             for n in MP.achar_todas(nomes, [o["oar"]])[:1]:
@@ -957,6 +968,27 @@ class Sessao:
             if c.segmentos_blindagem:                 # cada parte recebe 1/K das UM: o peso ×K mantém a fluência
                 c.peso *= len(c.segmentos_blindagem)
                 avisos.append(f"{nome}: peso ×{len(c.segmentos_blindagem)} (UM repartidas entre os segmentos)")
+        meio = str(spec.get("fechar_y") or "").lower()     # meio campo (junção mono-isocêntrica, ex.: mama + FSC)
+        if meio in ("y1", "y2") and c.jaw_y:
+            jy = list(c.jaw_y)
+            if meio == "y2":
+                jy[1] = min(jy[1], 0.0)
+            else:
+                jy[0] = max(jy[0], 0.0)
+            if jy[1] - jy[0] < 5.0:
+                raise ErroUsuario(f"{nome}: fechando {meio.upper()} no isocentro o campo fica sem abertura")
+            c.jaw_y = tuple(jy)
+            if c.mlc_a is not None:                      # pares inteiros do lado fechado: lâminas fechadas também
+                lim = list(map(float, m.colim.limites_laminas))
+                gap = float(m.colim.gap_minimo_mm or 0.0)
+                a_, b_ = list(c.mlc_a), list(c.mlc_b)
+                for i in range(len(lim) - 1):
+                    if (meio == "y2" and lim[i] >= 0.0) or (meio == "y1" and lim[i + 1] <= 0.0):
+                        meio_x = 0.5 * (float(a_[i]) + float(b_[i]))
+                        a_[i], b_[i] = meio_x - gap / 2, meio_x + gap / 2
+                c.mlc_a = np.asarray(a_, float) if isinstance(c.mlc_a, np.ndarray) else a_
+                c.mlc_b = np.asarray(b_, float) if isinstance(c.mlc_b, np.ndarray) else b_
+            avisos.append(f"{nome}: {meio.upper()} fechado no isocentro (meio campo)")
         c.ssd_mm = calculo.ssd_no_eixo(g, c)
         if c.ssd_mm is None:
             raise ErroUsuario(f"{nome}: o eixo central não cruza o paciente")
@@ -989,7 +1021,7 @@ class Sessao:
         self._exigir_plano()
         self.plano._exigir_rascunho()
         chaves = ("modo", "alvo", "margem", "ponto_encontro", "blindagens", "otimizar_colimador", "prioridade_alvo",
-                  "folga_jaw", "blindagem_meio", "x1", "x2", "y1", "y2")
+                  "folga_jaw", "blindagem_meio", "x1", "x2", "y1", "y2", "fechar_y")
         alvos = [c for c in self.plano.campos if c.campo_pai is None and not c.e_arco
                  and (not campos or c.nome in campos)]
         if not alvos:
@@ -3102,6 +3134,7 @@ class Sessao:
                             "pontos": pts, "restricoes": p.restricoes, "bolus": p.bolus, "densidades": p.densidades,
                             "prescricao": dataclasses.asdict(p.prescricao), "historico": p.historico,
                             "calculo_dose": p.calculo_dose or {}, "perfil": getattr(p, "perfil", "tps"),
+                            "referencia_mm": getattr(p, "referencia_mm", None),
                             "campos": [self._campo_json(c) for c in p.campos],
                             "campos_setup": [self._campo_json(c) for c in p.campos_setup]}
             if self.dose_atualizada and self.resultado:
@@ -3286,22 +3319,95 @@ class Sessao:
                 out["iso_ref"] = {"referencia": referencia, "unidade": unidade, "cem_gy": round(cem, 3),
                                   "dmax_gy": round(dmax, 3), "rx_gy": round(rx, 3), "niveis": lista, "niveis_gy": extras, "fonte": fonte,
                                   "dif": e_dif, "descricao": (self.dose_vista.get(fonte) or {}).get("descricao")}
-        if self.plano and vista == "axial":
+        if self.plano:
+            out["feixes"] = self._feixes_no_corte(vista, pos)
+        return out
+
+    def _abertura_bev(self, c) -> np.ndarray:
+        """Contorno da abertura (jaws ∩ lâminas) no plano do isocentro, em (u, v) mm."""
+        colim = self.maquina.colim
+        jx = c.jaw_x if c.jaw_x else (min(c.mlc_a), max(c.mlc_b)) if c.mlc_a else (-50.0, 50.0)
+        jy = c.jaw_y if c.jaw_y else (-50.0, 50.0)
+        lim = list(map(float, colim.limites_laminas)) if c.mlc_a else []
+        esq, dir_ = [], []
+        for i in range(len(lim) - 1):
+            v0, v1 = max(lim[i], jy[0]), min(lim[i + 1], jy[1])
+            if v1 <= v0:
+                continue
+            a, b = max(float(c.mlc_a[i]), jx[0]), min(float(c.mlc_b[i]), jx[1])
+            if b - a < 0.5:
+                continue
+            esq += [(a, v0), (a, v1)]
+            dir_ += [(b, v0), (b, v1)]
+        if not esq:
+            return np.array([(jx[0], jy[0]), (jx[0], jy[1]), (jx[1], jy[1]), (jx[1], jy[0])], float)
+        return np.array(esq + dir_[::-1], float)
+
+    def malha_3d(self, nome: str, passo_mm: float = 4.0) -> dict:
+        from tps.app.malha3d import malha
+        e = self.estruturas.get(nome)
+        if e is None or not e.mascara.any():
+            raise ErroUsuario(f"Estrutura {nome} vazia ou inexistente")
+        g = self.grade
+        r = malha(e.mascara, (g.x, g.y, g.z), passo_mm=float(passo_mm))
+        return {"nome": nome, "cor": e.cor, "tipo": e.tipo, **r}
+
+    def cena_3d(self) -> dict:
+        """Isocentro e campos (fonte e abertura no plano do isocentro, em mm do paciente) para a vista 3D."""
+        out = {"isocentro": self.isocentro, "campos": [],
+               "estruturas": [{"nome": n, "cor": e.cor, "tipo": e.tipo} for n, e in self.estruturas.items()
+                              if e.mascara.any() and e.tipo != "BOLUS"]}
+        if self.plano:
             for c in self.plano.campos:
                 if c.campo_pai:
                     continue
                 fr = beam_frame(c.gantry, c.colimador, c.mesa, c.isocentro_mm, 1000.0, "HFS")
-                iso = np.asarray(c.isocentro_mm, float)
-                lo, hi = (c.jaw_x if c.jaw_x else (min(c.mlc_a), max(c.mlc_b)))
-                ext = []
-                for uu in (lo, hi):
-                    alvo = iso + uu * fr.u
-                    d = alvo - fr.source
-                    ext.append((fr.source + d * 1.25)[:2].round(1).tolist())
-                out["feixes"].append({"nome": c.nome, "fonte": fr.source[:2].round(1).tolist(),
-                                      "iso": iso[:2].round(1).tolist(), "bordas": ext,
-                                      "cax_fim": (fr.source + fr.w * 1250)[:2].round(1).tolist()})
+                ab = self._abertura_bev(c)
+                P = np.asarray(c.isocentro_mm, float) + ab[:, :1] * fr.u + ab[:, 1:] * fr.v
+                out["campos"].append({"nome": c.nome, "fonte": fr.source.round(1).tolist(),
+                                      "abertura": P.round(1).tolist(), "arco": c.arco_fim is not None,
+                                      "arco_fim": c.arco_fim, "gantry": c.gantry, "sentido": getattr(c, "sentido", None)})
         return out
+
+    def _feixes_no_corte(self, vista: str, pos: float) -> list:
+        """Feixes no corte: bordas projetadas (fonte → cantos da abertura) e, quando o feixe atravessa o plano do
+        corte, a secção do feixe (forma da abertura naquela profundidade); entrada do eixo central na pele."""
+        k_n = {"axial": 2, "coronal": 1, "sagital": 0}[vista]
+        hv = {"axial": (0, 1), "coronal": (0, 2), "sagital": (1, 2)}[vista]
+        corpo = self._corpo()
+        g = self.grade
+        feixes = []
+        for c in self.plano.campos:
+            if c.campo_pai:
+                continue
+            fr = beam_frame(c.gantry, c.colimador, c.mesa, c.isocentro_mm, 1000.0, "HFS")
+            iso = np.asarray(c.isocentro_mm, float)
+            ab = self._abertura_bev(c)
+            P = iso + ab[:, :1] * fr.u + ab[:, 1:] * fr.v
+            u0, v0 = ab.min(axis=0)
+            u1, v1 = ab.max(axis=0)
+            cantos = [iso + uu * fr.u + vv * fr.v for uu in (u0, u1) for vv in (v0, v1)]
+            src = fr.source
+            bordas = [[src[list(hv)].round(1).tolist(), (src + (q - src) * 1.25)[list(hv)].round(1).tolist()]
+                      for q in cantos]
+            f = {"nome": c.nome, "fonte": src[list(hv)].round(1).tolist(), "iso": iso[list(hv)].round(1).tolist(),
+                 "bordas": bordas, "cax_fim": (src + fr.w * 1250)[list(hv)].round(1).tolist()}
+            if abs(fr.w[k_n]) > 0.25:                       # o feixe cruza o plano do corte: secção
+                d = P - src
+                t = (pos - src[k_n]) / d[:, k_n]
+                Q = src + t[:, None] * d
+                f["secao"] = Q[:, list(hv)].round(1).tolist()
+                f["bordas"] = []
+            # entrada do eixo central no corpo
+            for tt in np.arange(0.0, 1000.0, 2.0):
+                q = src + tt * fr.w
+                ix = np.searchsorted(g.x, q[0]); iy = np.searchsorted(g.y, q[1]); iz = np.searchsorted(g.z, q[2])
+                if 0 < ix < len(g.x) and 0 < iy < len(g.y) and 0 < iz < len(g.z) and corpo[iz, iy, ix]:
+                    f["entrada"] = q[list(hv)].round(1).tolist()
+                    f["entrada_no_corte"] = bool(abs(q[k_n] - pos) < 3.0)
+                    break
+            feixes.append(f)
+        return feixes
 
     # ---------------------------------------------------------------- BEV e DRR
     def bev(self, nome: str, estruturas: list[str] | None = None, res_mm: float = 1.0) -> dict:
@@ -3322,7 +3428,10 @@ class Sessao:
                 cg = contour_generator(u, v, r.m.astype(np.float64))
                 proj.append({"nome": n, "cor": e.cor, "linhas": [np.round(l, 1).tolist() for l in cg.lines(0.5)]})
         segs = [{"mlc_a": s["mlc_a"], "mlc_b": s["mlc_b"], "peso": s["peso"]} for s in (c.segmentos or [])]
-        return {"campo": self._campo_json(c), "limites": list(map(float, colim.limites_laminas)),
+        fr0 = beam_frame(c.gantry, c.colimador, c.mesa, c.isocentro_mm, 1000.0, "HFS")
+        quadro = {"u": fr0.u.round(6).tolist(), "v": fr0.v.round(6).tolist(), "w": fr0.w.round(6).tolist(),
+                  "iso": [float(t) for t in c.isocentro_mm]}
+        return {"campo": self._campo_json(c), "limites": list(map(float, colim.limites_laminas)), "quadro": quadro,
                 "projecoes": proj, "segmentos": segs, "ext": ext, "tem_jaw_x": colim.tem_jaw_x,
                 "gap": colim.gap_minimo_mm, "interdigitacao": colim.interdigitacao,
                 "lamina_max": colim.lamina_max_mm, "overtravel": colim.overtravel_mm}

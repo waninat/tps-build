@@ -137,7 +137,8 @@ def corpo_3d(hu: np.ndarray, limiar_hu: float = -350.0, passo_mm: tuple | None =
     Corte a corte, o maior componente perdia uma das pernas (e, nos pés, podia pegar a mesa). Aqui: limiar + abertura
     leve por corte; componentes 3D; fica o maior (o paciente — as pernas se ligam na pelve) e os outros grandes
     (≥ 5% dele: pernas/braços que saem do campo de visão), menos os finos e largos (mesa, colchão: espessura < 2,5
-    cm); buracos preenchidos por corte (ar intestinal e pulmão ficam dentro)."""
+    cm); em cada corte saem as ilhas finas (< 8 mm: colchão encostado no paciente em outro corte); buracos
+    preenchidos por corte (ar intestinal e pulmão ficam dentro)."""
     nz = hu.shape[0]
     m = np.empty(hu.shape, bool)
     # abertura leve com um disco de ~2 mm (tira fios e ruído sem chanfrar o contorno; duas passadas da cruz
@@ -169,9 +170,21 @@ def corpo_3d(hu: np.ndarray, limiar_hu: float = -350.0, passo_mm: tuple | None =
             manter.append(int(i))
     m = np.isin(lab, manter)
     del lab
+    dx = px
     for k in range(nz):
-        if m[k].any():
-            m[k] = ndimage.binary_fill_holes(m[k])
+        if not m[k].any():
+            continue
+        # ilhas finas do corte (colchão/mesa grudados no paciente em outro corte, fios): espessura < 8 mm — fora
+        lab2, n2 = ndimage.label(m[k])
+        if n2 > 1:
+            dist = ndimage.distance_transform_edt(m[k], sampling=(dy, dx))
+            esp = ndimage.maximum(dist, lab2, index=np.arange(1, n2 + 1))
+            area = np.bincount(lab2.ravel(), minlength=n2 + 1)[1:]
+            grande = int(np.argmax(area)) + 1
+            finos = [i + 1 for i, e in enumerate(esp) if e < 4.0 and i + 1 != grande]
+            if finos:
+                m[k] &= ~np.isin(lab2, finos)
+        m[k] = ndimage.binary_fill_holes(m[k])
     return m
 
 

@@ -102,11 +102,35 @@ def executavel() -> Path | None:
     return Path(w) if w else None
 
 
+def _arq_pref() -> Path:
+    return paths.home() / "ia" / "preferencias.yaml"
+
+
+def dispositivo_preferido() -> str:
+    """auto (placa de vídeo NVIDIA/CUDA se a instalação tiver suporte, senão CPU) | gpu | cpu."""
+    try:
+        d = yaml.safe_load(_arq_pref().read_text(encoding="utf-8")) or {}
+        v = str(d.get("dispositivo", "auto")).lower()
+        return v if v in ("auto", "gpu", "cpu") else "auto"
+    except Exception:  # noqa: BLE001
+        return "auto"
+
+
+def definir_dispositivo(v: str) -> str:
+    v = str(v or "auto").lower()
+    if v not in ("auto", "gpu", "cpu"):
+        raise ValueError("Dispositivo: auto, gpu ou cpu")
+    _arq_pref().parent.mkdir(parents=True, exist_ok=True)
+    _arq_pref().write_text(yaml.safe_dump({"dispositivo": v}), encoding="utf-8")
+    return v
+
+
 def estado() -> dict:
     exe = executavel()
     return {"disponivel": exe is not None, "executavel": str(exe) if exe else None,
             "motivo": None if exe else "Segmentação automática não instalada: menu Ferramentas > Segmentação automática de órgãos… (ou menu Iniciar > TPS > Instalar segmentação automática)",
-            "orgaos": [{"id": k, "nome": ORGAOS[k][0], "grupo": g} for g, ks in GRUPOS.items() for k in ks]}
+            "orgaos": [{"id": k, "nome": ORGAOS[k][0], "grupo": g} for g, ks in GRUPOS.items() for k in ks],
+            "dispositivo": dispositivo_preferido()}
 
 
 def _rodar(exe: Path, ent: Path, saida: Path, tarefa: str, classes: list[str], rapido: bool, tempo_max_s: int,
@@ -148,6 +172,9 @@ def segmentar(arquivos_ct: list[Path], orgaos: list[str], rapido: bool = True, t
     desconhecidos = [o for o in orgaos if o not in ORGAOS]
     if desconhecidos:
         raise ValueError(f"Órgãos desconhecidos: {', '.join(desconhecidos)}")
+    if dispositivo is None:
+        pref = dispositivo_preferido()
+        dispositivo = None if pref == "auto" else pref
     tarefas: dict[str, set] = {}
     for o in orgaos:
         tarefas.setdefault(ORGAOS[o][1], set()).update(ORGAOS[o][2])

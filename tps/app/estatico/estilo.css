@@ -355,3 +355,42 @@ pre.log { background: #0a0d10; border: 1px solid var(--borda); border-radius: 4p
 /* abas do painel direito: quebram em duas linhas em vez de cortar o texto */
 .abas-dir { display: flex; flex-wrap: wrap; gap: 2px; }
 .aba-d { flex: 1 1 64px; overflow: visible; text-overflow: clip; }
+.tab-indices { width: 100%; font-size: 12px; border-collapse: collapse; margin-bottom: 8px; }
+.tab-indices td { padding: 2px 4px; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
+.tab-indices td:first-child { color: var(--texto2, #8b949e); white-space: nowrap; }
+/* menu de contexto das vistas e leituras */
+#menu-ctx { position: fixed; z-index: 1000; display: none; min-width: 210px; background: var(--painel); border: 1px solid var(--borda);
+  border-radius: 6px; box-shadow: 0 6px 20px rgba(0,0,0,.45); padding: 4px; }
+#menu-ctx.aberto { display: block; }
+#menu-ctx button { display: flex; justify-content: space-between; width: 100%; text-align: left; background: transparent;
+  border-color: transparent; padding: 5px 10px; }
+#menu-ctx button:hover:not(:disabled) { background: var(--acento2); border-color: var(--acento2); color: #fff; }
+#menu-ctx hr { border: none; border-top: 1px solid var(--borda); margin: 4px 2px; }
+#menu-ctx kbd { color: var(--fraco); font-size: 11px; font-family: inherit; margin-left: 16px; }
+#menu-ctx .marcado::before { content: "✓ "; }
+.vista .leitura { position: absolute; left: 6px; bottom: 34px; pointer-events: none; font-size: 11px; color: #fff;
+  background: rgba(0,0,0,.6); padding: 2px 6px; border-radius: 4px; white-space: nowrap; display: none; }
+.vista.com-leitura .leitura { display: block; }
+button.ligado { background: var(--acento2); border-color: var(--acento2); color: #fff; }
+.vista canvas.mao { cursor: grab; } .vista canvas.mira { cursor: crosshair; }
+.janela-flut { position: fixed; z-index: 45; right: 24px; top: 70px; width: min(900px, 92vw); height: min(640px, 80vh);
+  background: var(--painel); border: 1px solid var(--borda); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.55);
+  display: flex; flex-direction: column; resize: both; overflow: hidden; min-width: 320px; min-height: 240px; }
+.janela-flut.oculto { display: none; }
+.jf-topo { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border-bottom: 1px solid var(--borda); cursor: move;
+  background: var(--painel2); flex-wrap: wrap; user-select: none; }
+.jf-topo #j3d-fechar { margin-left: auto; }
+.jf-corpo { flex: 1; display: flex; min-height: 0; }
+#j3d-lista { width: 170px; overflow-y: auto; padding: 6px; border-right: 1px solid var(--borda); font-size: 12px; }
+#j3d-lista label { display: flex; gap: 5px; align-items: center; }
+#j3d-lista .cor { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+#j3d-tela { flex: 1; position: relative; min-width: 0; }
+#j3d-tela canvas { display: block; }
+#lista-estruturas .est-nome { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; min-width: 40px; }
+#lista-estruturas .vol { margin-left: 0; white-space: nowrap; }
+#lista-estruturas select.dens-modo { width: 4.6em; padding: 0 1px; font-size: 10px; flex: none; }
+#lista-estruturas input.dens { flex: none; }
+#lista-estruturas button.pequeno { padding: 0 4px; }
+#copiloto { resize: both; overflow: hidden; min-width: 300px; min-height: 260px; max-width: 96vw; max-height: 94vh; }
+#copiloto .cp-topo { cursor: move; user-select: none; }
+#sec-iso .linha-inline { align-items: flex-end; }

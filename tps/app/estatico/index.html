@@ -89,6 +89,14 @@
   <span id="wl-txt" class="pequeno-txt"></span>
   <span class="sep"></span>
   <label class="check ferr-l"><input type="checkbox" id="t-iso" checked> isodoses</label>
+  <label class="check ferr-l" title="bordas, secção e entrada dos campos nos cortes"><input type="checkbox" id="t-feixes" checked> campos</label>
+  <label class="ferr-l" title="estruturas só delineadas ou sólidas (com transparência), nos cortes e no BEV">Estr.<select id="est-modo"><option value="contorno">contorno</option><option value="solido">sólido</option></select></label>
+  <label class="ferr-l oculto" id="est-transp-l" title="transparência das estruturas sólidas">transp.<input type="range" id="est-transp" min="0" max="100" step="5" value="60" style="width:70px"><span id="est-transp-t" class="pequeno-txt">60%</span></label>
+  <span class="sep"></span>
+  <button id="b-regua" class="pequeno" title="régua: clique e arraste num corte (Esc apaga)">📏</button>
+  <button id="b-hu" class="pequeno" title="cursor de HU: mostra HU, densidade e dose do ponto sob o mouse">HU</button>
+  <button id="b-ir-iso" class="pequeno" title="ir para o isocentro nas 3 vistas">⌖ iso</button>
+  <button id="b-zoom-0" class="pequeno" title="restaurar zoom e pan das vistas (Ctrl+roda = zoom, Ctrl+arrastar = pan, botão direito = menu)">⤢</button>
   <label class="check ferr-l" title="dose em cores (mínimo/máximo em % ou Gy no ⚙)"><input type="checkbox" id="t-wash-topo"> colorwash</label>
   <button id="b-iso-cfg" class="pequeno" title="curvas relativas e absolutas (Gy), referência e colorwash">⚙</button>
   <span class="linha-inline ferr-gy" title="acrescenta uma isodose em dose absoluta (Gy, dose total)"><input id="iso-gy-rapido" type="number" step="0.5" min="0.1" placeholder="Gy"><button id="b-iso-gy-rapido" class="pequeno">+ Gy</button></span>
@@ -143,7 +151,7 @@
   <section class="aba-e-p oculto" id="sec-plano">
     <label>Máquina <select id="maquina"></select></label>
     <div class="linha3">
-      <label>Rótulo<input id="p-rotulo" value="PLANO1" maxlength="16"></label>
+      <label>Rótulo<span class="linha-inline"><input id="p-rotulo" value="PLANO1" maxlength="16"><button id="b-renomear" class="pequeno" disabled title="renomeia o plano atual">✎</button></span></label>
       <label>Dose (Gy)<input id="p-dose" type="number" value="50" step="0.1"></label>
       <label>Frações<input id="p-fx" type="number" value="25"></label>
     </div>
@@ -181,8 +189,26 @@
         do outro sistema fica para comparação), ou crie um plano novo acima.</div>
       <ul id="lista-planos-dicom"></ul>
     </div>
-    <div class="isocentro">Isocentro (mm): <span id="iso-txt">—</span>
-      <button id="b-iso" class="pequeno" title="Usar a posição da cruz no corte axial" disabled>usar cruz</button></div>
+    <details class="sub" id="sec-iso" open><summary>Isocentro</summary>
+      <div class="isocentro">Atual (mm): <span id="iso-txt">—</span>
+        <button id="b-iso" class="pequeno" title="Usar a posição da cruz (3 vistas)" disabled>usar cruz</button>
+        <button id="b-iso-ir" class="pequeno" title="ir para o isocentro nas 3 vistas">⌖</button></div>
+      <div class="linha-inline"><label>Centro de<select id="iso-est"></select></label>
+        <button id="b-iso-est" class="pequeno" disabled title="centroide da estrutura escolhida">usar</button></div>
+      <div class="linha3"><label>x (mm)<input id="iso-x" type="number" step="0.5"></label>
+        <label>y (mm)<input id="iso-y" type="number" step="0.5"></label><label>z (mm)<input id="iso-z" type="number" step="0.5"></label></div>
+      <div class="linha-inline"><label title="arredonda cada coordenada (ex.: 5 mm), útil para marcar na pele">arredondar a (mm)<input id="iso-arr" type="number" value="0" min="0" max="10" step="0.5" style="width:4em"></label>
+        <button id="b-iso-xyz" class="pequeno" disabled>usar x, y, z</button></div>
+      <div class="pequeno-txt">Campos conformados são refeitos no novo isocentro; recalcule a dose.</div>
+    </details>
+    <details class="sub" id="sec-ref"><summary>Referência (marcas / BB) e deslocamentos</summary>
+      <div class="pequeno-txt">Zero da TC no posicionamento: a cruz das marcas de pele (BBs). Os deslocamentos até o isocentro vão para o relatório.</div>
+      <div class="botoes"><button id="b-ref-cruz" class="pequeno" disabled title="a referência é a posição da cruz">referência = cruz</button>
+        <button id="b-ref-auto" class="pequeno" disabled title="procura os marcadores radiopacos na pele e usa o centro deles">achar marcadores</button>
+        <button id="b-ref-ir" class="pequeno" disabled>⌖</button>
+        <button id="b-ref-rem" class="pequeno" disabled>remover</button></div>
+      <div id="desloc-txt" class="pequeno-txt"></div>
+    </details>
   </section>
   <section class="aba-e-p oculto" id="sec-campos">
     <div class="modelos">
@@ -470,6 +496,7 @@
   <div class="vista" id="v-bev" data-slot="B">
     <div class="vista-topo"><b>BEV</b><select id="bev-campo"></select>
       <label class="check"><input type="checkbox" id="t-drr"> DRR</label>
+      <label class="check" title="linhas tracejadas na altura dos cortes axial, coronal e sagital mostrados"><input type="checkbox" id="t-bev-cortes" checked> cortes</label>
       <select id="bev-dose" title="dose em colorwash no BEV: a máxima ao longo de cada raio mostra atrás de qual lâmina está o ponto quente">
         <option value="">sem dose</option><option value="max">dose: máx. no raio</option><option value="iso">dose: plano do iso</option></select>
       <input id="bev-dose-min" type="number" value="100" min="0" max="150" step="1" title="mostrar a partir de (% da prescrição)" style="width:4.2em" class="oculto">
@@ -532,7 +559,8 @@
   </div>
   <div class="painel-d" id="pd-est">
     <div class="linha-aprov-est"><span id="est-aprov-txt" class="pequeno-txt"></span>
-      <button id="b-est-aprovar" class="pequeno" title="médico/físico: aprova as estruturas (alvos com a prescrição no nome, ex.: PTVPelve45@25); com o plano automático ligado, o plano é feito em seguida">Aprovar estruturas…</button></div>
+      <button id="b-est-aprovar" class="pequeno" title="médico/físico: aprova as estruturas (alvos com a prescrição no nome, ex.: PTVPelve45@25); com o plano automático ligado, o plano é feito em seguida">Aprovar estruturas…</button>
+      <button id="b-est-desaprovar" class="pequeno oculto" title="desaprova (com senha e motivo, fica registrado) para poder alterar ou apagar estruturas">Desaprovar…</button></div>
     <ul id="lista-estruturas"></ul>
     <details class="sub" id="sec-auto"><summary>Contorno automático</summary>
       <div class="botoes">
@@ -626,6 +654,8 @@
       <label>A<select id="ne-a"></select></label>
       <label id="ne-lb">B<select id="ne-b"></select></label>
     </div>
+    <div id="ne-sim" class="linha2 pequeno-txt"><label class="check"><input type="checkbox" id="ne-simetrica" checked> margem simétrica</label>
+      <label>todos os lados (mm)<input id="ne-m-todos" type="number" value="5" min="0" max="50" step="0.5"></label></div>
     <div id="ne-margens" class="linha3 pequeno-txt">
       <label>Dir.<input type="number" data-m="direita" value="5" min="0" max="50" step="0.5"></label>
       <label>Esq.<input type="number" data-m="esquerda" value="5" min="0" max="50" step="0.5"></label>
@@ -636,6 +666,8 @@
     </div>
     <div id="ne-anel" class="linha2 oculto"><label>Interno (mm)<input id="ne-int" type="number" value="0" min="0"></label>
       <label>Externo (mm)<input id="ne-ext" type="number" value="20" min="1"></label></div>
+    <div class="linha2 pequeno-txt"><label class="check" title="tira a parte que sair do corpo (BODY)"><input type="checkbox" id="ne-pele"> recortar da pele</label>
+      <label>a (mm) da pele<input id="ne-pele-mm" type="number" value="0" min="0" max="20" step="0.5" title="0 = rente à pele; 3–5 mm deixa a camada de build-up de fora"></label></div>
     <div id="ne-iso" class="linha2 oculto"><label>Dose (Gy)<input id="ne-gy" type="number" value="45" step="0.5"></label></div>
     <button id="b-nova-est" class="pequeno" disabled>Criar</button>
   </details>
@@ -668,6 +700,8 @@
   <div class="painel-d oculto" id="pd-aval">
   <h3>Dose</h3>
   <div id="resumo-dose" class="pequeno-txt">—</div>
+  <h3>Índices do plano</h3>
+  <table id="tab-indices" class="tab-indices"></table>
   <table id="tab-estat"><thead><tr><th>Estrutura</th><th>Dméd</th><th>D95</th><th>D2</th><th>Dmax</th></tr></thead><tbody></tbody></table>
   <h3>Restrições <span id="rest-prot" class="pequeno-txt"></span></h3>
   <div id="rest-avisos" class="pequeno-txt avisotxt"></div>

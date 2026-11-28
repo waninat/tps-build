@@ -47,18 +47,25 @@ PADRAO = {
               "maquina": "radioserra_precise", "energia": "6MV",
               "tecnica_padrao": "VMAT",
               "tecnica_por_sitio": {"mama": "3D", "encefalo": "3D"},
+              "variantes": ["3D", "VMAT"],       # um plano de cada técnica para o físico escolher ([] = por sítio)
+              "tentativas": 3,                   # 1ª simples; as seguintes corrigem o que faltou (mais agressivas)
               "motor": "auto", "perfil": "tps", "parecer_claude": True},
 }
 
 # palavra no nome do PTV / na descrição do exame → sítio (protocolo do assistente)
 SITIOS = [
+    (r"\bcp\b|c\.p\.|cabe[cç]a\s*(e|&)?\s*pesco[cç]o", "cabeca_pescoco"), (r"\bsnc\b|\bcr[aâ]nio\b|\btc\s*cr", "encefalo"),
+    (r"\bmd\b|\bme\b(?!d)|\bmama", "mama"), (r"\bpel\b|\bpelv", "pelve"),
     (r"prost", "prostata"), (r"mama|breast|parede", "mama"), (r"pulm|lung", "pulmao"), (r"esof", "esofago"),
     (r"enc[eé]f|cerebr|cranio|crânio|brain|glio", "encefalo"), (r"cab|pesc|orof|laring|nasof|boca|h&n|hn", "cabeca_pescoco"),
     (r"colo|utero|útero|endom|gine|cervix|colodo", "pelve_ginecologica"), (r"reto|anal|anus|rectum", "reto"),
-    (r"pelv", "pelve"), (r"t[oó]rax|thorax|chest", "torax"), (r"abd", "abdome"),
+    (r"pelv", "pelve"), (r"t[oó]rax|thorax|chest|mediast", "torax"), (r"abd", "abdome"),
 ]
 MODELO_3D = {"prostata": "prostata", "pulmao": "pulmao", "esofago": "esofago", "encefalo": "encefalo_total",
-             "pelve_ginecologica": "colo_uterino", "reto": "reto"}          # mama: mama_d / mama_e pelo lado
+             "pelve_ginecologica": "colo_uterino", "reto": "reto", "pelve": "colo_uterino", "torax": "pulmao",
+             "abdome": "prostata", "cabeca_pescoco": "encefalo_total"}   # mama: mama_d / mama_e pelo lado
+# PTV de drenagem (fossa supraclavicular, axila, cadeias): campos diretos AP (+PA) na mama
+RE_FSC = re.compile(r"fsc|scf|supra|clav|fossa|axil|nodal|linfo|cadeia|\bln\b|imn|mam.*int", re.IGNORECASE)
 ORGAOS_SITIO = {
     "pelve": ["bexiga", "reto", "bowel_bag", "femur_e", "femur_d", "colon", "intestino_delgado"],
     "torax": ["coracao", "pulmao_e", "pulmao_d", "esofago", "medula", "traqueia"],
@@ -117,6 +124,11 @@ def salvar_config(novo: dict) -> dict:
     for t in [c["plano"]["tecnica_padrao"], *c["plano"]["tecnica_por_sitio"].values()]:
         if t not in ("3D", "IMRT", "VMAT"):
             raise ValueError(f"Técnica {t}: use 3D, IMRT ou VMAT")
+    var = c["plano"].get("variantes") or []
+    if not isinstance(var, list) or any(t not in ("3D", "IMRT", "VMAT") for t in var):
+        raise ValueError("Variantes do plano: lista com 3D, IMRT e/ou VMAT")
+    c["plano"]["variantes"] = list(dict.fromkeys(var))
+    c["plano"]["tentativas"] = max(1, min(3, int(c["plano"].get("tentativas") or 3)))
     if c["ativo"] and not c["pasta_entrada"] and not c["receptor_dicom"]["ativo"]:
         raise ValueError("Informe a pasta de entrada (ou ligue o receptor DICOM)")
     if c["pasta_entrada"]:
@@ -397,8 +409,21 @@ def grupos_de_ptv(nomes: list[str]) -> list[dict]:
     return out
 
 
+def _variantes(pc: dict, sit: str) -> list[str]:
+    v = [t for t in (pc.get("variantes") or []) if t in ("3D", "IMRT", "VMAT")]
+    return v or [pc["tecnica_por_sitio"].get(sit) or pc["tecnica_padrao"]]
+
+
+def _rotulo(base: str, tec: str, n_var: int) -> str:
+    if n_var <= 1:
+        return base[:16]
+    return f"{base[:13]}_{'3D' if tec == '3D' else tec[:2]}"
+
+
 def planejar(cid: str, forcar: bool = False, progresso=None) -> dict:
-    """Um plano por grupo de PTVs ainda não planejado. Devolve o caso atualizado."""
+    """Para cada grupo de PTVs: um plano por técnica (3D e VMAT, por padrão), cada um com até 3 tentativas — a 1ª
+    simples, as seguintes corrigindo cobertura, ponto quente e restrições que falharam; fica a melhor. O físico
+    escolhe entre as técnicas. Devolve o caso atualizado."""
     from tps.app.servidor import banco
     pc = config()["plano"]
     s = _sessao(cid)
@@ -411,64 +436,220 @@ def planejar(cid: str, forcar: bool = False, progresso=None) -> dict:
     _gravar_caso(cid, estado="planejando", evento=f"plano automático: {', '.join(g['rotulo'] for g in grupos)}")
     info_caso = _ler_caso(cid)
     for gr in grupos:
-        if gr["rotulo"] in ja and not forcar:
-            continue
         p0 = gr["principal"]
-        sit = sitio_do_texto(p0["sitio_txt"]) or info_caso.get("sitio") or "pelve"
+        sit = next((x for x in (sitio_do_texto(a["sitio_txt"]) for a in gr["alvos"]) if x), None) \
+            or info_caso.get("sitio") or "pelve"
         if sit == "pelve":
             sit = "pelve_ginecologica" if info_caso.get("sexo") == "F" else ("prostata" if p0["dose_gy"] >= 60 else "reto")
         if sit in ("torax", "abdome"):
             sit = "pulmao" if sit == "torax" else "reto"
-        tec = pc["tecnica_por_sitio"].get(sit) or pc["tecnica_padrao"]
-        registro = {"rotulo": gr["rotulo"], "alvos": [f"{a['nome']} ({a['dose_gy']:g} Gy/{a['fracoes']} fx)" for a in gr["alvos"]],
-                    "sitio": sit, "tecnica": tec, "quando": dt.datetime.now().isoformat(timespec="seconds")}
-        try:
-            avisos = _fazer_plano(s, gr, sit, tec, pc, progresso)
-            f = s.salvar()
-            p = s.plano
-            banco().registrar_plano(f.stem, s.paciente.get("id", ""), s.paciente.get("nome", ""), p.rotulo, p.estado,
-                                    s.maquina.id, str(f), "automacao", None)
-            banco().auditar("automacao", "plano_automatico", f"{s.paciente.get('id', '')}/{cid}",
-                            {"plano": p.rotulo, "tecnica": tec, "sitio": sit})
-            r = s.resultado or {}
-            registro.update({"arquivo": str(f), "estado": "pronto — aguardando o físico", "avisos": avisos[:20],
-                             "hi": round(float(r["hi"]), 3) if r.get("hi") is not None else None,
-                             "tecnica": p.tecnica})
-            if pc.get("parecer_claude"):
-                registro["parecer"] = _parecer(s)
-        except Exception as e:  # noqa: BLE001
-            registro.update({"estado": f"erro: {e}"[:300]})
-            _log(f"Caso {cid}: plano {gr['rotulo']} falhou: {e}")
-            _estado["ultimo_erro"] = f"{cid}/{gr['rotulo']}: {e}"
-        feitos = [x for x in feitos if x.get("rotulo") != gr["rotulo"]] + [registro]
-        _gravar_caso(cid, planos=feitos, evento=f"plano {gr['rotulo']}: {registro.get('estado')}")
+        variantes = _variantes(pc, sit)
+        for tec in variantes:
+            rot = _rotulo(gr["rotulo"], tec, len(variantes))
+            if rot in ja and not forcar:
+                continue
+            registro = {"rotulo": rot, "grupo": gr["rotulo"],
+                        "alvos": [f"{a['nome']} ({a['dose_gy']:g} Gy/{a['fracoes']} fx)" for a in gr["alvos"]],
+                        "sitio": sit, "tecnica": tec, "quando": dt.datetime.now().isoformat(timespec="seconds")}
+            try:
+                if progresso:
+                    progresso(f"{rot}: planejando ({tec})")
+                avisos, hist = _com_tentativas(s, gr, sit, tec, pc, rot, progresso)
+                f = s.salvar()
+                p = s.plano
+                banco().registrar_plano(f.stem, s.paciente.get("id", ""), s.paciente.get("nome", ""), p.rotulo, p.estado,
+                                        s.maquina.id, str(f), "automacao", None)
+                banco().auditar("automacao", "plano_automatico", f"{s.paciente.get('id', '')}/{cid}",
+                                {"plano": p.rotulo, "tecnica": tec, "sitio": sit, "tentativas": len(hist)})
+                r = s.resultado or {}
+                ind = r.get("indices") or {}
+                registro.update({"arquivo": str(f), "estado": "pronto — aguardando o físico", "avisos": avisos[:20],
+                                 "hi": round(float(r["hi"]), 3) if r.get("hi") is not None else None,
+                                 "v95": ind.get("v95_pct"), "dmax_alvo_pct": ind.get("dmax_alvo_pct"),
+                                 "tecnica": p.tecnica, "tentativas": hist,
+                                 "escolhida": next((h["tentativa"] for h in hist if h.get("escolhida")), None)})
+                if pc.get("parecer_claude"):
+                    registro["parecer"] = _parecer(s)
+            except Exception as e:  # noqa: BLE001
+                registro.update({"estado": f"erro: {e}"[:300]})
+                _log(f"Caso {cid}: plano {rot} falhou: {e}")
+                _estado["ultimo_erro"] = f"{cid}/{rot}: {e}"
+            feitos = [x for x in feitos if x.get("rotulo") != rot] + [registro]
+            _gravar_caso(cid, planos=feitos, evento=f"plano {rot}: {registro.get('estado')}")
     ok = all(str(x.get("estado", "")).startswith("pronto") for x in feitos)
-    d = _gravar_caso(cid, estado="plano pronto — aguardando o físico" if ok else "plano com erro — ver detalhes")
+    d = _gravar_caso(cid, estado="planos prontos — o físico escolhe" if ok else "plano com erro — ver detalhes")
     _log(f"Caso {cid}: {d['estado']}")
     return d
 
 
-def _fazer_plano(s, gr: dict, sit: str, tec: str, pc: dict, progresso=None) -> list[str]:
+def _nota(s, gr: dict) -> dict:
+    """Penalidade do plano: cobertura (V95 de cada alvo com a sua dose), ponto quente e restrições que falharam."""
+    import numpy as np
+    r = s.resultado or {}
+    ind = r.get("indices") or {}
+    rest = r.get("restricoes") or {}
+    falhas = [x for x in rest.get("resultados") or [] if not x.get("ok")]
+    lim = [x for x in falhas if x.get("tipo") == "limite"]
+    total = s.dose_fx * s.plano.prescricao.fracoes if s.dose_fx is not None else None
+    cob = {}
+    for a in gr["alvos"]:
+        e = s.estruturas.get(a["nome"])
+        if total is not None and e is not None and e.mascara.any():
+            cob[a["nome"]] = round(float((total[e.mascara] >= 0.95 * a["dose_gy"]).mean() * 100), 1)
+    rx = s.plano.prescricao.dose_total_gy
+    dmax_pct = round(float(r["dmax_gy"]) / rx * 100, 1) if r.get("dmax_gy") and rx else None
+    pen = sum(max(0.0, 95.0 - v) * 4 for v in cob.values())
+    if dmax_pct:
+        pen += max(0.0, dmax_pct - 107.0) * 3
+    pen += 10 * len(lim) + 2 * (len(falhas) - len(lim))
+    return {"penalidade": round(float(pen), 2), "v95": cob, "dmax_pct": dmax_pct, "hi": ind.get("hi") or r.get("hi"),
+            "falhas": [f"{x.get('estrutura')} {x.get('metrica')} {x.get('valor')}/{x.get('limite')}" for x in falhas][:12],
+            "_falhas": falhas, "cobertura_baixa": any(v < 95 for v in cob.values()),
+            "quente": bool(dmax_pct and dmax_pct > 107), "rx_ok": bool(np.isfinite(pen))}
+
+
+def _com_tentativas(s, gr: dict, sit: str, tec: str, pc: dict, rot: str, progresso=None):
+    n = max(1, min(3, int(pc.get("tentativas", 3) or 1)))
+    melhor, hist, ant = None, [], None
+    for k in range(n):
+        rot_k = rot if k == 0 else f"{rot[:14]}~{k}"
+        if progresso and k:
+            progresso(f"{rot}: tentativa {k + 1} ({', '.join(_o_que_corrigir(ant)) or 'refinando'})")
+        avisos = _fazer_plano(s, gr, sit, tec, pc, rot_k, k, ant)
+        nota = _nota(s, gr)
+        resumo = {"tentativa": k + 1, "penalidade": nota["penalidade"], "v95": nota["v95"], "dmax_pct": nota["dmax_pct"],
+                  "hi": nota["hi"], "falhas": nota["falhas"],
+                  "corrigiu": _o_que_corrigir(ant) if ant else []}
+        hist.append(resumo)
+        if melhor is None or nota["penalidade"] < melhor[0]["penalidade"] - 1e-6:
+            if melhor is not None:
+                s.remover_plano(melhor[1])
+            melhor = (nota, rot_k, avisos, resumo)
+        else:
+            s.remover_plano(rot_k)
+        if nota["penalidade"] <= 0:
+            break
+        ant = nota
+    nota, rot_m, avisos, resumo = melhor
+    resumo["escolhida"] = True
+    s.trocar_plano(rot_m)
+    if rot_m != rot:
+        s.renomear_plano(rot)
+    s._registrar(f"Plano automático {rot}: tentativa {resumo['tentativa']} de {len(hist)} escolhida "
+                 f"(penalidade {nota['penalidade']})")
+    return avisos + [f"Tentativa {resumo['tentativa']} de {len(hist)} escolhida (penalidade {nota['penalidade']})"], hist
+
+
+def _o_que_corrigir(nota: dict | None) -> list[str]:
+    if not nota:
+        return []
+    o = []
+    if nota.get("cobertura_baixa"):
+        o.append("cobertura")
+    if nota.get("quente"):
+        o.append("ponto quente")
+    if nota.get("_falhas"):
+        o.append("órgãos de risco")
+    return o
+
+
+def _uniao_alvos(s, gr: dict) -> str:
+    """Um alvo só para conformar campos/arcos quando o grupo tem vários PTVs (boost integrado, mama + FSC)."""
+    nomes = [a["nome"] for a in gr["alvos"] if a["nome"] in s.estruturas]
+    if len(nomes) <= 1:
+        return nomes[0]
+    return _uniao(s, nomes, "zPTV_TOTAL")
+
+
+def _uniao(s, nomes: list, final: str) -> str:
+    if final in s.estruturas:
+        return final
+    atual = nomes[0]
+    for i, n in enumerate(nomes[1:]):
+        novo = final if i == len(nomes) - 2 else f"{final[:10]}_U{i}"
+        if novo not in s.estruturas:
+            s.criar_estrutura(novo, "uniao", atual, n)
+        atual = novo
+    return final
+
+
+def _fsc_e_mama(gr: dict) -> tuple:
+    fsc = [a for a in gr["alvos"] if RE_FSC.search(a["nome"])]
+    mama = [a for a in gr["alvos"] if a not in fsc]
+    return (mama[0] if mama else None), fsc
+
+
+def _fazer_plano(s, gr: dict, sit: str, tec: str, pc: dict, rotulo: str | None = None, tentativa: int = 0,
+                 anterior: dict | None = None) -> list[str]:
+    import numpy as np
     p0 = gr["principal"]
+    rotulo = rotulo or gr["rotulo"]
     alvo = p0["nome"]
     avisos = []
+    corr = _o_que_corrigir(anterior)
     if tec == "3D":
         modelo = MODELO_3D.get(sit)
+        ajustes = {}
+        if tentativa:
+            if "cobertura" in corr:
+                ajustes["margem_extra_mm"] = 2.0 * tentativa
+            if "ponto quente" in corr or tentativa >= 2:
+                ajustes["fif_fino"] = True
+        fsc = []
         if sit == "mama":
             from tps.planejamento import modelos_plano as MP
+            m_alvo, fsc = _fsc_e_mama(gr)
+            if m_alvo:
+                alvo = m_alvo["nome"]
             lado = MP.lateralidade(s.estruturas[alvo].mascara, s._corpo(), s.grade.x)
             modelo = "mama_e" if lado == "E" else "mama_d"
+            if fsc:                                 # mono-isocêntrico: iso na junção, tangentes com Y2 fechado
+                g = s.grade
+                mm = s.estruturas[alvo].mascara
+                mf = np.zeros_like(mm)
+                for a in fsc:
+                    mf |= s.estruturas[a["nome"]].mascara
+                zm = g.z[np.nonzero(mm.any(axis=(1, 2)))[0]]
+                zf = g.z[np.nonzero(mf.any(axis=(1, 2)))[0]]
+                zj = 0.5 * (zm.max() + zf.min()) if zf.min() > zm.max() else float(zf.min())
+                kk, jj, ii = np.nonzero(mm)
+                k2, j2, i2 = np.nonzero(mf)
+                xi = 0.5 * (float(g.x[ii].mean()) + float(g.x[i2].mean()))
+                yi = 0.5 * (float(g.y[jj].mean()) + float(g.y[j2].mean()))
+                corpo = s._corpo()
+                kz = int(np.argmin(np.abs(g.z - zj)))
+                ix = int(np.argmin(np.abs(g.x - xi)))
+                passo_y = float(g.y[1] - g.y[0])
+                for _ in range(60):                     # o isocentro dentro do paciente (desce para posterior)
+                    jy = int(np.argmin(np.abs(g.y - yi)))
+                    if corpo[kz, jy, ix]:
+                        break
+                    yi += abs(passo_y)
+                ajustes["isocentro"] = [round(xi, 1), round(yi + 10.0, 1), round(float(zj), 1)]
+                ajustes["fechar_y"] = "y2"
         if modelo:
-            s.aplicar_modelo(modelo, gr["rotulo"], p0["dose_gy"], p0["fracoes"], alvo, calcular=True)
+            out = s.aplicar_modelo(modelo, rotulo, p0["dose_gy"], p0["fracoes"], alvo, calcular=not fsc, ajustes=ajustes)
+            if fsc:
+                avisos += _campos_fsc(s, fsc, out["modelo_aplicado"]["opcoes"], tentativa)
             avisos += list(s.avisos or [])
             return avisos
-        avisos.append(f"Sem modelo 3D para {sit}: feito em {pc['tecnica_padrao'] if pc['tecnica_padrao'] != '3D' else 'IMRT'}")
-        tec = pc["tecnica_padrao"] if pc["tecnica_padrao"] != "3D" else "IMRT"
-    s.novo_plano(gr["rotulo"], p0["dose_gy"], p0["fracoes"], alvo, "media_alvo")
+        avisos.append(f"Sem modelo 3D para {sit}: feito em IMRT")
+        tec = "IMRT"
+    s.novo_plano(rotulo, p0["dose_gy"], p0["fracoes"], alvo, "media_alvo")
+    conf = _uniao_alvos(s, gr)
+    if conf != alvo:                                    # isocentro no centro do conjunto de alvos
+        s.definir_isocentro(estrutura=conf)
     if tec == "VMAT":
-        s.campos_vmat(n_arcos=2, alvo=alvo)
+        if sit == "mama":                               # arcos parciais pelo lado da mama (sem atravessar o tórax)
+            from tps.planejamento import modelos_plano as MP
+            m_alvo, _ = _fsc_e_mama(gr)
+            lado = MP.lateralidade(s.estruturas[(m_alvo or p0)["nome"]].mascara, s._corpo(), s.grade.x)
+            ini, fim = (295.0, 135.0) if lado == "E" else (225.0, 65.0)
+            s.campos_vmat(n_arcos=2, inicio=ini, fim=fim, alvo=conf)
+        else:
+            s.campos_vmat(n_arcos=3 if tentativa >= 2 else 2, alvo=conf)
     else:
-        s.campos_imrt(7, alvo=alvo)
+        s.campos_imrt(9 if tentativa >= 2 else 7, alvo=conf)
     texto = (f"{sit.replace('_', ' ')}; {p0['dose_gy']:g} Gy em {p0['fracoes']} frações; alvos: "
              + ", ".join(f"{a['nome']} {a['dose_gy']:g} Gy" for a in gr["alvos"]))
     motor = pc.get("motor", "auto")
@@ -485,10 +666,102 @@ def _fazer_plano(s, gr: dict, sit: str, tec: str, pc: dict, progresso=None) -> l
     doses = {a["nome"]: a["dose_gy"] for a in gr["alvos"]}
     objs = [o for o in objs if not (o.get("tipo") == "alvo" and o.get("estrutura") in doses)]
     objs = [{"estrutura": n, "tipo": "alvo", "dose_gy": d, "peso": 5.0} for n, d in doses.items()] + objs
+    if tentativa and anterior:
+        objs = _objetivos_mais_agressivos(objs, anterior, doses, tentativa)
+        avisos.append(f"Tentativa {tentativa + 1}: objetivos reforçados ({', '.join(corr) or 'refino'})")
     avisos += [f"Assistente ({r.get('motor', 'regras')}): {a}" for a in (r.get("avisos") or [])]
     chave = "vmat" if tec == "VMAT" else "imrt"
     s.calcular({chave: {"objetivos": objs, "perfil": pc.get("perfil", "tps")}})
     avisos += list(s.avisos or [])
+    return avisos
+
+
+def _objetivos_mais_agressivos(objs: list, ant: dict, doses: dict, k: int) -> list:
+    """Tentativa k (1, 2): reforça o que falhou — órgãos que passaram do limite (dose ×0,9 / ×0,8, peso ×2 / ×3),
+    cobertura (DVH mínimo no alvo) e ponto quente (máximo no alvo)."""
+    import copy
+    import re
+    objs = copy.deepcopy(objs)
+    f_dose, f_peso = (0.9, 2.0) if k == 1 else (0.8, 3.0)
+    for x in ant.get("_falhas") or []:
+        n, met, val = x.get("estrutura"), str(x.get("metrica", "")), float(x.get("limite") or 0)
+        if not n or n in doses:
+            continue
+        mesmos = [o for o in objs if o.get("estrutura") == n and o.get("tipo") != "alvo"]
+        for o in mesmos:
+            if o.get("tipo") == "dvh" and o.get("volume_pct"):
+                o["volume_pct"] = round(float(o["volume_pct"]) * f_dose, 1)
+            elif o.get("dose_gy"):
+                o["dose_gy"] = round(float(o["dose_gy"]) * f_dose, 2)
+            o["peso"] = round(float(o.get("peso", 1.0)) * f_peso, 2)
+        if not mesmos and val > 0:
+            if met == "Dmax" or re.fullmatch(r"D[\d.]+cc", met):
+                objs.append({"estrutura": n, "tipo": "max", "dose_gy": round(val * f_dose, 2), "peso": f_peso})
+            elif met == "Dmean":
+                objs.append({"estrutura": n, "tipo": "media", "dose_gy": round(val * f_dose, 2), "peso": f_peso})
+            else:
+                mm = re.fullmatch(r"V([\d.]+)Gy", met)
+                if mm:
+                    objs.append({"estrutura": n, "tipo": "dvh", "dose_gy": float(mm.group(1)),
+                                 "volume_pct": round(val * f_dose, 1), "peso": f_peso})
+    for n, d in doses.items():
+        if ant.get("v95", {}).get(n, 100) < 95:
+            objs.append({"estrutura": n, "tipo": "dvh_min", "dose_gy": round(0.97 * d, 2), "volume_pct": 97.0,
+                         "peso": 5.0 * k})
+            for o in objs:
+                if o.get("estrutura") == n and o.get("tipo") == "alvo":
+                    o["peso"] = round(float(o.get("peso", 5.0)) * (1 + 0.5 * k), 2)
+    if ant.get("quente"):
+        for n, d in doses.items():
+            objs.append({"estrutura": n, "tipo": "max", "dose_gy": round(1.05 * d, 2), "peso": 2.0 * k})
+    return objs
+
+
+def _campos_fsc(s, fsc: list, opcoes: dict, tentativa: int = 0) -> list[str]:
+    """Campos diretos na drenagem (FSC/axila): AP com Y1 fechado no isocentro (junção com as tangentes); se a
+    cobertura ficar baixa, entra também o PA. Os pesos são acertados para a dose média chegar à prescrição dela."""
+    import numpy as np
+    avisos = []
+    nomes = [a["nome"] for a in fsc]
+    alvo_f = nomes[0] if len(nomes) == 1 else _uniao(s, nomes, "zFSC_TOTAL")
+    dose_f = max(a["dose_gy"] for a in fsc)
+    mg = 7.0 + (2.0 * tentativa if tentativa else 0.0)
+    base = {"modo": "conformado", "alvo": alvo_f, "margem": {"x1": mg, "x2": mg, "y1": mg, "y2": mg},
+            "ponto_encontro": "fora", "blindagens": [], "fechar_y": "y1", "colimador": 0}
+    s.salvar_campo({**base, "nome": "FSC_AP", "gantry": 0.0, "peso": 1.0})
+    campos = ["FSC_AP"]
+    mascara = s.estruturas[alvo_f].mascara
+
+    sem_fif = {k: v for k, v in opcoes.items() if k != "field_in_field"}
+
+    def acertar() -> float:
+        """Escala os campos da FSC para a dose média dela chegar à prescrição (as tangentes quase não passam ali;
+        a normalização é na mama): fecha num passo com a dose por UM de cada campo. Devolve o V95 estimado."""
+        s.calcular(sem_fif)
+        tot = (s.dose_fx * s.plano.prescricao.fracoes)[mascara]
+        fr = s.plano.prescricao.fracoes
+        f = sum(float(s._campo(n).mu or 0.0) * s.doses_um[n][mascara] for n in campos) * fr
+        f_m = float(np.mean(f)) if np.size(f) else 0.0
+        if f_m <= 0:
+            return float((tot >= 0.95 * dose_f).mean() * 100)
+        k = float(np.clip((dose_f - (float(tot.mean()) - f_m)) / f_m, 0.05, 20.0))
+        for n in campos:
+            c = s._campo(n)
+            spec = dict(c.__dict__.get("_spec") or {})
+            spec.update(nome=n, nome_antigo=n, peso=max(0.01, float(spec.get("peso", c.peso)) * k))
+            s.salvar_campo(spec)
+        return float(((tot + (k - 1.0) * f) >= 0.95 * dose_f).mean() * 100)
+    v95 = acertar()
+    if v95 < 90.0 or tentativa >= 2:                    # drenagem profunda: AP + PA
+        peso_ap = float((s._campo("FSC_AP").__dict__.get("_spec") or {}).get("peso", 1.0))
+        s.salvar_campo({**base, "nome": "FSC_PA", "gantry": 180.0, "peso": max(0.01, 0.4 * peso_ap)})
+        campos.append("FSC_PA")
+        acertar()
+    s.calcular(opcoes)
+    tot = s.dose_fx * s.plano.prescricao.fracoes
+    v95 = float((tot[mascara] >= 0.95 * dose_f).mean() * 100)
+    avisos.append(f"FSC: {'AP + PA' if len(campos) > 1 else 'campo AP direto'} (V95 {v95:.0f}%, "
+                  f"média {float(tot[mascara].mean()):.1f} Gy)")
     return avisos
 
 

@@ -62,7 +62,7 @@ def test_fluxo_automatico(amb, monkeypatch):
     monkeypatch.setattr(AU, "iniciar", lambda: None)            # sem threads no teste: as etapas rodam aqui
     cfg = {"ativo": True, "pasta_entrada": str(entrada.parent), "estabilizar_s": 0,
            "plano": {"ativo": True, "gatilho": "aprovacao", "tecnica_por_sitio": {"reto": "3D"},
-                     "parecer_claude": False}}
+                     "variantes": [], "tentativas": 1, "parecer_claude": False}}
     assert c.post("/api/automacao", json={**cfg, "senha": "errada"}).status_code in (400, 401, 403)
     e = _ok(c.post("/api/automacao", json={**cfg, "senha": SENHA}))
     assert e["config"]["plano"]["tecnica_por_sitio"]["reto"] == "3D"
@@ -93,7 +93,7 @@ def test_fluxo_automatico(amb, monkeypatch):
     assert AU._fila.get_nowait() == ("planejar", cid)
     # 4. plano automático: nome = nome do PTV, pronto para o físico
     d = AU.planejar(cid)
-    assert d["estado"] == "plano pronto — aguardando o físico", d
+    assert d["estado"] == "planos prontos — o físico escolhe", d
     p = d["planos"][0]
     assert p["rotulo"] == "PTVPelve50@25" and p["sitio"] == "reto" and p["tecnica"] == "3D"
     assert any(x["rotulo"] == "PTVPelve50@25" for x in _ok(c.get("/api/planos")))

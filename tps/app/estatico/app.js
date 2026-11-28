@@ -386,9 +386,30 @@ function ligar() {
   $("#p-metodo").onchange = mostrarPonto; mostrarPonto();
   $("#b-plano").onclick = () => tentar(criarPlano);
   $("#b-iso").onclick = () => tentar(async () => {
-    if (!E.cruz) throw new Error("Clique no corte axial para posicionar a cruz");
-    atualizar(await api("POST", `/api/${E.sid}/isocentro`, { xyz: E.cruz }));
+    if (!E.cruz) throw new Error("Clique num corte para posicionar a cruz");
+    atualizar(await api("POST", `/api/${E.sid}/isocentro`, { xyz: E.cruz, arredondar_mm: +$("#iso-arr").value || 0 }, "Movendo o isocentro…"));
   });
+  $("#b-iso-ir").onclick = () => tentar(async () => irParaIso());
+  $("#b-iso-est").onclick = () => tentar(async () => {
+    atualizar(await api("POST", `/api/${E.sid}/isocentro`, { estrutura: $("#iso-est").value, arredondar_mm: +$("#iso-arr").value || 0 }, "Movendo o isocentro…"));
+    irParaIso();
+  });
+  $("#b-iso-xyz").onclick = () => tentar(async () => {
+    const xyz = ["#iso-x", "#iso-y", "#iso-z"].map(k => +String($(k).value).replace(",", "."));
+    if (xyz.some(v => !isFinite(v))) throw new Error("Informe x, y e z em mm");
+    atualizar(await api("POST", `/api/${E.sid}/isocentro`, { xyz, arredondar_mm: +$("#iso-arr").value || 0 }, "Movendo o isocentro…"));
+    irParaIso();
+  });
+  $("#b-renomear").onclick = () => tentar(async () => {
+    const novo = $("#p-rotulo").value.trim();
+    if (!E.resumo.plano || novo === E.resumo.plano.rotulo) throw new Error("Escreva o novo nome no campo Rótulo e clique em ✎");
+    atualizar(await api("POST", `/api/${E.sid}/plano/renomear`, { rotulo: novo })); aviso(`Plano renomeado para ${novo}`, true);
+  });
+  const ref = (corpo) => tentar(async () => { const r = await api("POST", `/api/${E.sid}/referencia`, corpo, "Procurando…"); atualizar(r.resumo); mostrarDeslocamentos(); if (r.aviso) aviso(r.aviso); });
+  $("#b-ref-cruz").onclick = () => { if (!E.cruz) return aviso("Clique num corte para posicionar a cruz"); ref({ xyz: E.cruz }); };
+  $("#b-ref-auto").onclick = () => ref({ automatico: true });
+  $("#b-ref-rem").onclick = () => ref({ xyz: null });
+  $("#b-ref-ir").onclick = () => { const p = E.resumo.plano; if (p && p.referencia_mm) { irPara(p.referencia_mm); doseCruz(); } };
   $("#c-modo").onchange = () => {
     const r = $("#c-modo").value === "retangular";
     $("#c-conformado").classList.toggle("oculto", r); $("#c-retangular").classList.toggle("oculto", !r);
@@ -457,17 +478,24 @@ function ligar() {
   $("#ne-op").onchange = () => {
     const op = $("#ne-op").value;
     $("#ne-margens").classList.toggle("oculto", !["margem", "contrair"].includes(op));
+    $("#ne-sim").classList.toggle("oculto", !["margem", "contrair"].includes(op));
     $("#ne-anel").classList.toggle("oculto", op !== "anel");
     $("#ne-iso").classList.toggle("oculto", op !== "isodose");
     $("#ne-lb").classList.toggle("oculto", !["uniao", "intersecao", "subtracao"].includes(op));
   };
   $("#ne-op").onchange();
+  const simetrica = () => {
+    const on = $("#ne-simetrica").checked;
+    $$("#ne-margens [data-m]").forEach(i => { i.disabled = on; if (on) i.value = $("#ne-m-todos").value; });
+    $("#ne-m-todos").disabled = !on;
+  };
+  $("#ne-simetrica").onchange = simetrica; $("#ne-m-todos").oninput = simetrica; simetrica();
   $("#b-nova-est").onclick = () => tentar(async () => {
     const op = $("#ne-op").value, margens = {};
     $$("#ne-margens [data-m]").forEach(i => margens[i.dataset.m] = +i.value || 0);
     const corpo = { nome: $("#ne-nome").value, operacao: op === "contrair" ? "margem" : op, contrair: op === "contrair",
       a: $("#ne-a").value, b: $("#ne-b").value, margens, interno_mm: +$("#ne-int").value, externo_mm: +$("#ne-ext").value,
-      nivel_gy: +$("#ne-gy").value };
+      nivel_gy: +$("#ne-gy").value, recortar_pele_mm: $("#ne-pele").checked ? (+$("#ne-pele-mm").value || 0) : null };
     atualizar(await api("POST", `/api/${E.sid}/estrutura`, corpo, "Criando estrutura…"));
     $("#ne-nome").value = "";
   });
@@ -490,13 +518,30 @@ function ligar() {
   $("#bev-seg-r").oninput = (e) => { E.bevSeg = +e.target.value; desenharBev(); };
   for (const v of ["axial", "coronal", "sagital"]) {
     const cv = $(`#v-${v} canvas`);
-    cv.addEventListener("wheel", (ev) => { ev.preventDefault(); mudarCorte(v, ev.deltaY > 0 ? 1 : -1); }, { passive: false });
-    cv.addEventListener("click", (ev) => { if (v === "axial" && contornoAtivo()) return; clicarCorte(v, ev); });
+    cv.addEventListener("wheel", (ev) => {
+      ev.preventDefault();
+      if (ev.ctrlKey || ev.metaKey) zoomVista(v, ev.deltaY > 0 ? 1 / 1.15 : 1.15, ev); else mudarCorte(v, ev.deltaY > 0 ? 1 : -1);
+    }, { passive: false });
+    cv.addEventListener("click", (ev) => {
+      if (E.semClique) { E.semClique = false; return; }
+      if (v === "axial" && contornoAtivo() && !E.modoVista) return; clicarCorte(v, ev);
+    });
   }
   iniciarContorno();
   const bc = $("#v-bev canvas");
   bc.addEventListener("mousedown", bevBaixo); bc.addEventListener("mousemove", bevMove);
   bc.addEventListener("dblclick", bevDuplo);
+  bc.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    if (!E.resumo || !E.resumo.ct) return;
+    menuContexto(ev, [
+      { t: "Vista 3D (estruturas e campos)", f: () => vista3d() },
+      { t: "Linhas dos cortes das 3 vistas", marcado: $("#t-bev-cortes").checked, f: () => { $("#t-bev-cortes").checked = !$("#t-bev-cortes").checked; desenharBev(); } },
+      { t: "DRR", marcado: $("#t-drr").checked, f: () => { $("#t-drr").checked = !$("#t-drr").checked; $("#t-drr").onchange(); } },
+      { t: E.estVis && E.estVis.modo === "solido" ? "Estruturas só delineadas" : "Estruturas sólidas", f: () => { $("#est-modo").value = E.estVis.modo === "solido" ? "contorno" : "solido"; $("#est-modo").onchange(); } },
+      { t: $("#v-bev").classList.contains("max") ? "Restaurar layout" : "Maximizar o BEV", f: () => maximizarVista("bev") },
+    ]);
+  });
   window.addEventListener("mouseup", bevSolta);
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape" && E.bevDes.pts.length) { E.bevDes = { pts: [], mouse: null, livre: false }; desenharBev(); }
@@ -606,18 +651,46 @@ function atualizar(r) {
   $("#b-modelo").disabled = !E.sid || r.tipo !== "ct";
   listarOars();
   const dens = (p && p.densidades) || {};
-  $("#lista-estruturas").innerHTML = r.estruturas.map(e => `<li><input type="checkbox" data-est="${e.nome}" ${E.ocultas.has(e.nome) ? "" : "checked"}>
-    <span class="cor" style="background:rgb(${e.cor})"></span>${e.nome}<span class="vol">${e.volume_cc} cc</span><button class="pequeno rem-est" data-rem-est="${e.nome}" title="apagar a estrutura ${e.nome}">🗑</button>
-    <input class="dens ${dens[e.nome] != null ? "ativa" : ""}" data-dens="${e.nome}" title="densidade eletrônica relativa forçada (vazio = do CT)"
-      placeholder="ρe" value="${dens[e.nome] != null ? dens[e.nome] : ""}" ${p && p.estado === "RASCUNHO" ? "" : "disabled"}></li>`).join("");
-  $$("[data-dens]").forEach(c => c.onchange = () => tentar(async () =>
-    atualizar(await api("POST", `/api/${E.sid}/densidade`, { estrutura: c.dataset.dens, valor: c.value.trim() || null }))));
+  const aprovEst = new Set((r.estruturas_aprovadas && r.estruturas_aprovadas.nomes) || []);
+  const rasc = p && p.estado === "RASCUNHO";
+  $("#lista-estruturas").innerHTML = r.estruturas.map(e => {
+    const d = dens[e.nome], dv = d == null ? "" : (typeof d === "object" ? d.valor : d), dm = d && typeof d === "object" ? d.modo : "forcar";
+    const trav = aprovEst.has(e.nome);
+    return `<li><input type="checkbox" data-est="${esc(e.nome)}" ${E.ocultas.has(e.nome) ? "" : "checked"}>
+    <span class="cor" style="background:rgb(${e.cor})"></span><span class="est-nome" title="${esc(e.nome)}">${esc(e.nome)}</span>${trav ? `<span title="aprovada: desaprove para alterar ou apagar">🔒</span>` : ""}<span class="vol">${e.volume_cc} cc</span>
+    <button class="pequeno" data-centro-est="${esc(e.nome)}" title="ir para o centro de ${esc(e.nome)} nas 3 vistas">⌖</button>
+    <button class="pequeno" data-info-est="${esc(e.nome)}" title="HU e densidade médias, volume e extensão">ⓘ</button>
+    <button class="pequeno rem-est" data-rem-est="${esc(e.nome)}" ${trav ? "disabled" : ""} title="${trav ? "aprovada: desaprove as estruturas para apagar" : "apagar a estrutura " + esc(e.nome)}">🗑</button>
+    <input class="dens ${d != null ? "ativa" : ""}" data-dens="${esc(e.nome)}" title="densidade eletrônica relativa atribuída (vazio = do CT)"
+      placeholder="ρe" value="${dv}" ${rasc ? "" : "disabled"}>
+    <select class="dens-modo" data-dens-modo="${esc(e.nome)}" ${rasc ? "" : "disabled"} title="forçar: toda a estrutura com este valor · preencher: só onde o CT é menos denso (ar, gás), o resto mantém o CT">
+      <option value="forcar" ${dm !== "preencher" ? "selected" : ""}>forçar</option><option value="preencher" ${dm === "preencher" ? "selected" : ""}>preencher</option></select></li>`;
+  }).join("");
+  const enviarDens = (nome) => tentar(async () => {
+    const v = $(`[data-dens="${CSS.escape(nome)}"]`).value.trim(), m = $(`[data-dens-modo="${CSS.escape(nome)}"]`).value;
+    atualizar(await api("POST", `/api/${E.sid}/densidade`, { estrutura: nome, valor: v || null, modo: m }));
+  });
+  $$("[data-dens]").forEach(c => c.onchange = () => enviarDens(c.dataset.dens));
+  $$("[data-dens-modo]").forEach(c => c.onchange = () => { if ($(`[data-dens="${CSS.escape(c.dataset.densModo)}"]`).value.trim()) enviarDens(c.dataset.densModo); });
+  $$("[data-centro-est]").forEach(b => b.onclick = () => tentar(async () => {
+    const i = await api("GET", `/api/${E.sid}/estrutura_info/${encodeURIComponent(b.dataset.centroEst)}`);
+    irPara(i.centro_mm); doseCruz();
+    for (const v of Object.keys(VISTAS)) { const Z = E.vz && E.vz[v]; if (Z && Z.z > 1) { const V = VISTAS[v], k = { x: 0, y: 1, z: 2 }; centralizarEm(v, [i.centro_mm[k[V.h]], i.centro_mm[k[V.v]]]); } }
+  }));
+  $$("[data-info-est]").forEach(b => b.onclick = () => tentar(() => infoEstrutura(b.dataset.infoEst)));
   $$("[data-rem-est]").forEach(b => b.onclick = () => tentar(async () => {
     if (!confirm(`Apagar a estrutura ${b.dataset.remEst}? (sai também do RTSTRUCT exportado)`)) return;
     atualizar(await api("DELETE", `/api/${E.sid}/estrutura/${encodeURIComponent(b.dataset.remEst)}`));
   }));
   $$("[data-est]").forEach(c => c.onchange = () => { c.checked ? E.ocultas.delete(c.dataset.est) : E.ocultas.add(c.dataset.est); desenharTudo(); desenharDvh(); });
   $("#iso-txt").textContent = r.isocentro ? r.isocentro.map(v => v.toFixed(1)).join(", ") : "—";
+  { const atual = $("#iso-est").value; $("#iso-est").innerHTML = alvos.filter(n => !/^(body|external|corpo|externo)$/i.test(n)).map(n => `<option>${esc(n)}</option>`).join("");
+    if (alvos.includes(atual)) $("#iso-est").value = atual; }
+  if (r.isocentro && document.activeElement && !document.activeElement.id.startsWith("iso-")) ["#iso-x", "#iso-y", "#iso-z"].forEach((k, i) => $(k).value = r.isocentro[i].toFixed(1));
+  { const pode = !!p && p.estado === "RASCUNHO";
+    $("#b-iso-est").disabled = !pode; $("#b-iso-xyz").disabled = !pode; $("#b-renomear").disabled = !p || p.estado === "APROVADO";
+    ["#b-ref-cruz", "#b-ref-auto"].forEach(k => $(k).disabled = !p); $("#b-ref-rem").disabled = $("#b-ref-ir").disabled = !(p && p.referencia_mm); }
+  mostrarDeslocamentos();
   // estados dos botões
   const temPlano = !!p, aprovado = p && p.estado === "APROVADO";
   $("#b-plano").disabled = !E.sid;
@@ -997,11 +1070,23 @@ const f1 = (v, n = 1) => v == null || isNaN(v) ? "—" : (+v).toFixed(n);
 function tabelas() {
   const r = E.resumo, res = r && r.resultado;
   if (!res) {
-    $("#tab-estat tbody").innerHTML = ""; $("#resumo-dose").textContent = r && r.plano ? "Dose ainda não calculada" : "—";
+    $("#tab-estat tbody").innerHTML = ""; $("#resumo-dose").textContent = r && r.plano ? "Dose ainda não calculada" : "—"; $("#tab-indices").innerHTML = "";
   } else {
     const rx = r.plano.prescricao;
     $("#resumo-dose").innerHTML = `Prescrição ${rx.dose_total_gy} Gy / ${rx.fracoes} fx · Dmax ${f1(res.dmax_gy, 2)} Gy (${f1(res.dmax_gy / rx.dose_total_gy * 100)}%)` +
       (res.hi != null ? ` · HI ${f1(res.hi, 3)}` : "");
+    const ix = res.indices || {};
+    $("#tab-indices").innerHTML = !ix.tv_cc ? "" : [
+      ["Alvo", `${rx.estrutura_alvo} · ${f1(ix.tv_cc, 1)} cm³`, ""],
+      ["Cobertura", `V95% ${f1(ix.v95_pct, 1)}% · V100% ${f1(ix.v100_pct, 1)}%`, "do alvo"],
+      ["D98 / D95 / D50 / D2", `${f1(ix.d98_gy, 2)} / ${f1(ix.d95_gy, 2)} / ${f1(ix.d50_gy, 2)} / ${f1(ix.d2_gy, 2)} Gy`, ""],
+      ["HI (ICRU 83)", f1(ix.hi, 3), "(D2−D98)/D50 · ideal 0"],
+      ["CI (RTOG)", f1(ix.ci_rtog, 2), "V(isodose Rx)/V(alvo) · ideal 1"],
+      ["CI de Paddick", f1(ix.ci_paddick, 3), "ideal 1"],
+      ["GI de Paddick", f1(ix.gi, 2), "V50%/V100% · menor = queda mais rápida"],
+      ["R50%", f1(ix.r50, 2), "V50%/V(alvo) (SBRT)"],
+      ["D2cm", ix.d2cm_pct != null ? `${f1(ix.d2cm_pct, 1)}%` : "—", "dose máx. a ≥ 2 cm do alvo (SBRT)"],
+    ].map(([a, b, c]) => `<tr><td>${a}</td><td><b>${b}</b></td><td class="pequeno-txt">${c}</td></tr>`).join("");
     $("#tab-estat tbody").innerHTML = Object.entries(res.estatisticas).map(([n, h]) =>
       `<tr><td>${n}</td><td>${f1(h.Dmean, 2)}</td><td>${f1(h.D95, 2)}</td><td>${f1(h.D2, 2)}</td><td>${f1(h.Dmax, 2)}</td></tr>`).join("");
   }
@@ -1065,6 +1150,7 @@ function carregarCorte(vista) {
   }
   carregarSobreVista(vista);
   desenharCorte(vista);
+  if (E.bev && $("#t-bev-cortes") && $("#t-bev-cortes").checked) desenharBev();
 }
 function carregarSobre() { for (const v of Object.keys(VISTAS)) carregarSobreVista(v); }
 async function carregarSobreVista(vista) {
@@ -1092,8 +1178,10 @@ function transf(vista, w, h) {
   // mm → px preservando proporção; a imagem cobre [a − d/2, b + d/2] em cada eixo
   const V = VISTAS[vista], eh = eixo(V.h), ev = eixo(V.v);
   const H0 = eh.a - eh.d / 2, H1 = eh.b + eh.d / 2, V0 = ev.a - ev.d / 2, V1 = ev.b + ev.d / 2;
-  const s = Math.min(w / (H1 - H0), h / (V1 - V0));
-  const ox = (w - (H1 - H0) * s) / 2, oy = (h - (V1 - V0) * s) / 2;
+  const Z = (E.vz && E.vz[vista]) || { z: 1, ph: 0, pv: 0 };   // zoom e pan da vista
+  const s = Math.min(w / (H1 - H0), h / (V1 - V0)) * Z.z;
+  const hc = (H0 + H1) / 2 + Z.ph, vc = (V0 + V1) / 2 + Z.pv;
+  const ox = w / 2 - (hc - H0) * s, oy = V.invV ? h / 2 - (V1 - vc) * s : h / 2 - (vc - V0) * s;
   return {
     s, ox, oy, H0, H1, V0, V1,
     px: (hh, vv) => [ox + (hh - H0) * s, V.invV ? oy + (V1 - vv) * s : oy + (vv - V0) * s],
@@ -1150,8 +1238,14 @@ function desenharCorte(vista) {
   const linha = (pts, fechar) => { g.beginPath(); pts.forEach(([a, b], k) => { const [x, y] = T.px(a, b); k ? g.lineTo(x, y) : g.moveTo(x, y); }); if (fechar) g.closePath(); g.stroke(); };
   if (sob && sob !== "carregando") {
     g.lineWidth = 1.4;
+    const solido = E.estVis && E.estVis.modo === "solido", alfa = solido ? 1 - E.estVis.transp / 100 : 0;
     for (const c of sob.contornos) {
       if (E.ocultas.has(c.nome)) continue;
+      if (solido && alfa > 0 && c.tipo !== "EXTERNAL" && c.nome !== "BODY") {   // preenchido (furos: par-ímpar)
+        g.beginPath();
+        for (const l of c.linhas) l.forEach(([a, b], k) => { const [x, y] = T.px(a, b); k ? g.lineTo(x, y) : g.moveTo(x, y); });
+        g.fillStyle = `rgba(${c.cor},${alfa})`; g.fill("evenodd");
+      }
       g.strokeStyle = `rgb(${c.cor})`; c.linhas.forEach(l => linha(l, true));
     }
     if ($("#t-iso").checked) {
@@ -1163,15 +1257,22 @@ function desenharCorte(vista) {
       }
       g.setLineDash([]);
     }
-    if (vista === "axial") {
+    if (!$("#t-feixes") || $("#t-feixes").checked) {
       g.setLineDash([5, 4]);
-      for (const f of sob.feixes) {
-        g.strokeStyle = f.nome === E.campoSel ? "#ffd84d" : "rgba(120,200,255,.75)"; g.lineWidth = 1;
-        for (const b of f.bordas) linha([f.fonte, b], false);
-        g.strokeStyle = "rgba(255,255,255,.45)"; linha([f.fonte, f.cax_fim], false);
-        // rótulo do lado da entrada do feixe (entre o isocentro e a fonte)
-        const ent = [f.iso[0] + (f.fonte[0] - f.iso[0]) * 0.17, f.iso[1] + (f.fonte[1] - f.iso[1]) * 0.17];
-        const [lx, ly] = T.px(...ent); g.fillStyle = f.nome === E.campoSel ? "#ffd84d" : "#9fd3ff"; g.font = "11px system-ui";
+      for (const f of sob.feixes || []) {
+        const sel = f.nome === E.campoSel;
+        g.strokeStyle = sel ? "#ffd84d" : "rgba(120,200,255,.75)"; g.lineWidth = 1;
+        for (const b of f.bordas) linha(b, false);
+        if (f.secao) { g.lineWidth = sel ? 1.6 : 1.1; linha(f.secao, true); }
+        if (!f.secao) { g.strokeStyle = "rgba(255,255,255,.45)"; linha([f.fonte, f.cax_fim], false); }
+        if (f.entrada) {                                   // entrada do eixo central na pele
+          const [ex, ey] = T.px(...f.entrada); g.setLineDash([]);
+          g.fillStyle = sel ? "#ffd84d" : (f.entrada_no_corte ? "#9fd3ff" : "rgba(159,211,255,.4)");
+          g.beginPath(); g.moveTo(ex, ey - 4); g.lineTo(ex + 4, ey); g.lineTo(ex, ey + 4); g.lineTo(ex - 4, ey); g.closePath(); g.fill();
+          g.setLineDash([5, 4]);
+        }
+        const ent = f.secao ? f.secao[0] : [f.iso[0] + (f.fonte[0] - f.iso[0]) * 0.17, f.iso[1] + (f.fonte[1] - f.iso[1]) * 0.17];
+        const [lx, ly] = T.px(...ent); g.fillStyle = sel ? "#ffd84d" : "#9fd3ff"; g.font = "11px system-ui";
         g.fillText(f.nome, Math.min(Math.max(lx + 4, 4), w - 50), Math.min(Math.max(ly - 4, 12), h - 4));
       }
       g.setLineDash([]);
@@ -1192,6 +1293,7 @@ function desenharCorte(vista) {
     g.moveTo(x, 0); g.lineTo(x, h); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
   }
   if (vista === "axial") desenharContornoPreview(g, T);
+  desenharRegua(g, T, vista);
   if (E.voi) {                                            // VOI do BODY (caixa de busca do contorno externo)
     const V = E.voi, ax = { axial: ["x", "y"], coronal: ["x", "z"], sagital: ["y", "z"] }[vista];
     const [a0, b0] = T.px(V[ax[0]][0], V[ax[1]][0]), [a1, b1] = T.px(V[ax[0]][1], V[ax[1]][1]);
@@ -1313,10 +1415,33 @@ function desenharBev() {
   if (c.jaw_x) { g.strokeStyle = "#4db8ff"; g.setLineDash([6, 4]); for (const u of c.jaw_x) { const [x] = T.px(u, 0); g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); } g.setLineDash([]); }
   // projeções
   g.lineWidth = 1.6;
+  const solido = E.estVis && E.estVis.modo === "solido", alfa = solido ? 1 - E.estVis.transp / 100 : 0;
   for (const p of B.projecoes) {
     if (E.ocultas.has(p.nome)) continue;
+    if (solido && alfa > 0) {
+      g.beginPath();
+      for (const l of p.linhas) l.forEach(([u, v], k) => { const [x, y] = T.px(u, v); k ? g.lineTo(x, y) : g.moveTo(x, y); });
+      g.fillStyle = `rgba(${p.cor},${alfa})`; g.fill("evenodd");
+    }
     g.strokeStyle = `rgb(${p.cor})`;
     for (const l of p.linhas) { g.beginPath(); l.forEach(([u, v], k) => { const [x, y] = T.px(u, v); k ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); }
+  }
+  // altura dos cortes mostrados nas 3 vistas (interseção do plano do corte com o plano do isocentro)
+  if (B.quadro && $("#t-bev-cortes") && $("#t-bev-cortes").checked && E.resumo && E.resumo.ct) {
+    const Q = B.quadro, R = T.r * 1.2;
+    g.save(); g.setLineDash([6, 5]); g.lineWidth = 1.2; g.font = "10px system-ui";
+    for (const [vista, k, cor, rot] of [["axial", 2, "#ffe14d", "ax"], ["coronal", 1, "#5dd6ff", "cor"], ["sagital", 0, "#ff8de0", "sag"]]) {
+      const pos = posDoIdx(vista, E.idx[vista]), du = Q.u[k], dv = Q.v[k], c0 = pos - Q.iso[k];
+      if (Math.abs(du) < 1e-3 && Math.abs(dv) < 1e-3) continue;
+      let p0, p1;
+      if (Math.abs(dv) >= Math.abs(du)) { p0 = [-R, (c0 + R * du) / dv]; p1 = [R, (c0 - R * du) / dv]; }
+      else { p0 = [(c0 + R * dv) / du, -R]; p1 = [(c0 - R * dv) / du, R]; }
+      const [x0, y0] = T.px(...p0), [x1, y1] = T.px(...p1);
+      g.strokeStyle = cor; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      const lx = Math.min(Math.max(Math.min(x0, x1) + 4, 4), w - 30), ly = Math.abs(dv) >= Math.abs(du) ? (x0 < x1 ? y0 : y1) - 3 : 22;
+      g.fillStyle = cor; g.fillText(rot, Math.abs(dv) >= Math.abs(du) ? 6 : Math.min(x0, x1) + 3, Math.abs(dv) >= Math.abs(du) ? Math.min(Math.max(ly, 12), h - 4) : 24);
+    }
+    g.restore();
   }
   // eixo central
   const [cx, cy] = T.px(0, 0); g.strokeStyle = "rgba(255,255,255,.5)"; g.lineWidth = 1;
@@ -1336,6 +1461,7 @@ function desenharBev() {
     g.fillStyle = "#ffd84d";
     g.fillText(E.arrasto.jaw ? `${E.arrasto.jaw.toUpperCase()} ${(E.arrasto.pos / 10).toFixed(2)} cm` :
       `par ${E.arrasto.par + 1} ${E.arrasto.banco.toUpperCase()} ${(E.arrasto.pos / 10).toFixed(2)} cm`, 8, 28);
+    if (E.arrasto.motivo) { g.fillStyle = "#ff6b6b"; g.font = "bold 12px system-ui"; g.fillText("⚠ " + E.arrasto.motivo, 8, 44); g.font = "11px system-ui"; }
   }
   $("#bev-seg-t").textContent = E.bevSeg ? `${E.bevSeg}/${B.segmentos.length}` : "envelope";
 }
@@ -1345,6 +1471,13 @@ function bevPos(ev) {
   return { T, mm: T.mm(ev.clientX - r.left, ev.clientY - r.top) };
 }
 function bevEditavel() { return E.bev && E.bevSeg === 0 && E.resumo.plano && E.resumo.plano.estado === "RASCUNHO"; }
+function motivoLimite(banco, pos) {
+  const B = E.bev, lmax = B.lamina_max || 200, ot = B.overtravel || 125, g = B.gap || 0, cm = (v) => (v / 10).toFixed(1);
+  if (banco === "a" && pos > ot) return `não passa: overtravel máximo ${cm(ot)} cm além do eixo central`;
+  if (banco === "b" && pos < -ot) return `não passa: overtravel máximo ${cm(ot)} cm além do eixo central`;
+  if (Math.abs(pos) > lmax - g) return `fim de curso da lâmina (±${cm(lmax)} cm)`;
+  return "posição não permitida (gap mínimo / lâminas vizinhas)";
+}
 // cópia em JS de ajuste_mlc.acomodar_lamina (prévia durante o arrasto; o servidor refaz e confere a mecânica)
 function acomodarLamina(a, b, par, banco, pos) {
   const B = E.bev, g = B.gap || 0, n = a.length, lmax = B.lamina_max || 200, ot = B.overtravel || 125;
@@ -1383,10 +1516,13 @@ function bevBaixo(ev) {
   if (jmin[2] <= tol && (ev.shiftKey || Math.min(da, db) > tol)) {
     E.arrasto = { jaw: jmin[0], jy: c.jaw_y.slice(), jx: c.jaw_x ? c.jaw_x.slice() : null, a: c.mlc_a.slice(), b: c.mlc_b.slice() };
   } else {
-    if (par < 0 || Math.min(da, db) > tol) return;
-    // par fechado: o lado é o do clique em relação ao gap
-    const banco = Math.abs(da - db) < 1e-6 ? (u < c.mlc_a[par] ? "a" : "b") : (da < db ? "a" : "b");
-    E.arrasto = { par, banco, a: c.mlc_a.slice(), b: c.mlc_b.slice() };
+    if (par < 0) return;
+    // a lâmina pode ser pega em qualquer ponto do corpo dela (ou perto da ponta); o arrasto mantém a distância à ponta
+    const noA = u <= c.mlc_a[par] + tol, noB = u >= c.mlc_b[par] - tol;
+    if (!noA && !noB) return;
+    let banco = noA && !noB ? "a" : !noA && noB ? "b" : (Math.abs(da - db) < 1e-6 ? (u < c.mlc_a[par] ? "a" : "b") : (da < db ? "a" : "b"));
+    const ponta = banco === "a" ? c.mlc_a[par] : c.mlc_b[par];
+    E.arrasto = { par, banco, a: c.mlc_a.slice(), b: c.mlc_b.slice(), desvio: ponta - u };
   }
   ev.preventDefault();
 }
@@ -1408,7 +1544,10 @@ function bevMove(ev) {
     else { const k = A.jaw === "x1" ? 0 : 1; c.jaw_x = A.jx.slice(); c.jaw_x[k] = uu; }
     A.pos = A.jaw[0] === "y" ? vv : uu;
   } else {
-    [c.mlc_a, c.mlc_b] = acomodarLamina(A.a, A.b, A.par, A.banco, uu); A.pos = uu;
+    const alvo = Math.round((u + (A.desvio || 0)) * 2) / 2;
+    [c.mlc_a, c.mlc_b] = acomodarLamina(A.a, A.b, A.par, A.banco, alvo);
+    A.pos = A.banco === "a" ? c.mlc_a[A.par] : c.mlc_b[A.par];
+    A.motivo = Math.abs(A.pos - alvo) > 0.25 ? motivoLimite(A.banco, alvo) : "";
   }
   desenharBev();
 }
@@ -1422,6 +1561,7 @@ function bevSolta() {
   const A = E.arrasto; E.arrasto = null;
   const c = E.bev.campo;
   if (A.pos === undefined) { desenharBev(); return; }
+  if (A.motivo) aviso(`Lâmina ${A.banco.toUpperCase()}${A.par + 1}: ${A.motivo}`);
   tentar(async () => {
     const corpo = A.jaw ? { jaw: A.jaw, pos: A.pos } : { par: A.par, banco: A.banco, pos: A.pos };
     try { atualizar(await api("POST", `/api/${E.sid}/campo/${encodeURIComponent(c.nome)}/lamina`, corpo)); }
@@ -1540,7 +1680,7 @@ function iniciarContorno() {
   const cv = $("#v-axial canvas");
   $("#k-raio").oninput = () => { $("#k-raio-t").textContent = $("#k-raio").value; desenharCorte("axial"); };
   cv.addEventListener("mousedown", (ev) => {
-    if (!contornoAtivo() || ev.button !== 0) return;
+    if (!contornoAtivo() || ev.button !== 0 || ev.ctrlKey || E.modoVista) return;
     const f = ferramentaK();
     if (f === "pincel" || f === "borracha") { E.k.traco = [mmAxial(ev)]; ev.preventDefault(); }
   });
@@ -1665,8 +1805,15 @@ function ligarInterface() {
       if (ev.button !== 2) return;
       ev.preventDefault();
       const ini = { x: ev.clientX, y: ev.clientY, j: E.wl.janela, n: E.wl.nivel };
-      const mover = (e) => aplicarWL(Math.max(1, ini.j + (e.clientX - ini.x) * 4), ini.n + (e.clientY - ini.y) * 2);
-      const soltar = () => { window.removeEventListener("mousemove", mover); window.removeEventListener("mouseup", soltar); };
+      let mexeu = false;
+      const mover = (e) => {
+        if (!mexeu && Math.hypot(e.clientX - ini.x, e.clientY - ini.y) < 4) return;
+        mexeu = true; aplicarWL(Math.max(1, ini.j + (e.clientX - ini.x) * 4), ini.n + (e.clientY - ini.y) * 2);
+      };
+      const soltar = (e) => {
+        window.removeEventListener("mousemove", mover); window.removeEventListener("mouseup", soltar);
+        if (!mexeu) menuVista(v, e);            // clique direito sem arrastar: menu da vista
+      };
       window.addEventListener("mousemove", mover); window.addEventListener("mouseup", soltar);
     });
   }
@@ -1694,6 +1841,7 @@ function ligarInterface() {
   $("#b-obj-limpar").onclick = () => { if ((E.objetivos || []).length && confirm("Apagar todos os objetivos?")) { E.objetivos = []; listarObjetivos(); } };
   $("#b-obj-prot").onclick = () => tentar(aplicarProtocolo);
   $("#b-obj-assist").onclick = () => tentar(() => assistente());
+  ligarVisualizador();
   // layout: divisórias, troca e maximizar
   ligarLayout();
   atualizarBarra();
@@ -1997,6 +2145,10 @@ async function janelaIA() {
     <div class="botoes"><button id="b-ia-cpu" class="primario">Instalar (CPU)</button><button id="b-ia-gpu">Instalar (GPU NVIDIA)</button></div>
     <label>Ou usar uma instalação já existente (caminho do executável)
       <span class="linha-inline"><input id="ia-exe" placeholder="C:\\…\\segmentador.exe"><button id="b-ia-apontar" class="pequeno">Usar</button></span></label>
+    <label>Rodar a segmentação na<select id="ia-disp">
+      <option value="auto">automático (placa de vídeo NVIDIA se houver, senão CPU)</option>
+      <option value="gpu">placa de vídeo (GPU NVIDIA / CUDA)</option><option value="cpu">CPU</option></select></label>
+    <div class="pequeno-txt">O cálculo de dose roda sempre na CPU (todos os núcleos); a GPU só acelera a segmentação, se instalada a versão GPU.</div>
     <div class="pequeno-txt" id="ia-rodando"></div>
     <pre class="log" id="ia-log">${esc((e.log || []).join("\n")) || "—"}</pre>`, { ok: "Fechar", cancelar: false });
   $("#modal .caixa").classList.add("larga");
@@ -2011,6 +2163,8 @@ async function janelaIA() {
   const instalar = (gpu) => tentar(async () => {
     e = await api("POST", "/api/ia/instalar", { gpu, senha: $("#ia-senha").value }); mostrar();
   });
+  $("#ia-disp").value = (e.segmentacao && e.segmentacao.dispositivo) || "auto";
+  $("#ia-disp").onchange = () => tentar(async () => { await api("POST", "/api/ia/dispositivo", { dispositivo: $("#ia-disp").value }); aviso("Preferência gravada", true); });
   $("#b-ia-cpu").onclick = () => instalar(false);
   $("#b-ia-gpu").onclick = () => instalar(true);
   $("#b-ia-apontar").onclick = () => tentar(async () => {
@@ -2224,6 +2378,8 @@ async function enviarCopiloto(texto, novo = false) {
 document.addEventListener("DOMContentLoaded", () => {
   if (!$("#copiloto")) return;
   $("#cp-fechar").onclick = () => $("#copiloto").classList.add("oculto");
+  { const cp = $("#copiloto"); cp.dataset.guardar = "1"; restaurarJanela(cp); arrastavel(cp, cp.querySelector(".cp-topo"));
+    new ResizeObserver(() => { if (!cp.classList.contains("oculto")) guardarJanela(cp); }).observe(cp); }
   $("#cp-enviar").onclick = () => enviarCopiloto($("#cp-txt").value);
   $("#cp-txt").onkeydown = (ev) => { if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); enviarCopiloto($("#cp-txt").value); } };
   $("#cp-novo").onclick = () => { $("#cp-msgs").innerHTML = ""; E.cpNovo = true; cpMsg("Conversa nova.", "cp-ia"); };
@@ -2273,15 +2429,26 @@ document.addEventListener("DOMContentLoaded", () => {
 // ---- automação: casos recebidos, configuração e aprovação das estruturas
 function mostrarAprovEst(r) {
   if (!$("#est-aprov-txt")) return;
-  const ca = r && r.caso_auto, ap = ca && ca.estruturas_aprovadas;
+  const ca = r && r.caso_auto, ap = (r && r.estruturas_aprovadas) || (ca && ca.estruturas_aprovadas);
   $("#est-aprov-txt").innerHTML = ap ? `<span class="ok">Estruturas aprovadas</span> por ${esc(ap.por)} em ${esc((ap.quando || "").replace("T", " ").slice(0, 16))}`
     : (ca ? `Caso ${esc(ca.id)} · ${esc(ca.estado || "")}` : "");
-  $("#b-est-aprovar").disabled = !(r && r.tipo === "ct");
+  $("#b-est-aprovar").disabled = !(r && r.tipo === "ct") || !!ap;
+  $("#b-est-desaprovar").classList.toggle("oculto", !ap);
   if ($("#b-aprovar-est-topo")) {
     $("#b-aprovar-est-topo").disabled = !(r && r.tipo === "ct");
     $("#b-aprovar-est-topo").classList.toggle("feito", !!ap);
     $("#b-aprovar-est-topo").textContent = ap ? "✔ Estruturas aprovadas" : "✔ Estruturas";
   }
+}
+async function desaprovarEstruturas() {
+  const v = await modal("Desaprovar estruturas", `<p>As estruturas voltam a poder ser alteradas e apagadas. Fica registrado quem desaprovou,
+    quando e o motivo (o RTSTRUCT aprovado é guardado no caso). Depois de alterar, aprove de novo.</p>
+    <label>Motivo<input name="motivo" maxlength="300" placeholder="ex.: corrigir reto nos cortes inferiores"></label>
+    <label>Sua senha (médico/físico)<input name="senha" type="password"></label>`, { ok: "Desaprovar" });
+  if (!v) return;
+  if (!v.motivo.trim()) throw new Error("Informe o motivo");
+  const r = await api("POST", `/api/${E.sid}/estruturas/desaprovar`, { senha: v.senha, motivo: v.motivo.trim() }, "Desaprovando…");
+  atualizar(r.resumo); aviso("Estruturas desaprovadas: já podem ser alteradas", true);
 }
 async function aprovarEstruturas() {
   const ptvs = ((E.resumo && E.resumo.estruturas) || []).map(e => e.nome).filter(n => /^PTV.*@\s*\d+/i.test(n));
@@ -2300,7 +2467,7 @@ async function janelaCasos() {
     <td>${esc(c.estado || "")}${c.sitio ? `<div class="pequeno-txt">sítio: ${esc(c.sitio)}</div>` : ""}</td>
     <td>${(c.ptvs || []).map(esc).join("<br>")}</td>
     <td>${(c.planos || []).map(p => `<div><button class="pequeno" data-abrir-plano="${esc(c.id)}" data-plano="${esc(p.rotulo)}" ${p.arquivo ? "" : "disabled"}>${esc(p.rotulo)}</button>
-      <span class="pequeno-txt">${esc(p.tecnica || "")} · ${esc(p.estado || "")}${p.hi != null ? ` · HI ${p.hi}` : ""}${p.parecer && p.parecer.aval ? ` · IA: ${esc(AVAL[p.parecer.aval] || p.parecer.aval)}` : ""}</span>
+      <span class="pequeno-txt">${esc(p.tecnica || "")} · ${esc(p.estado || "")}${p.hi != null ? ` · HI ${p.hi}` : ""}${p.v95 != null ? ` · V95 ${p.v95}%` : ""}${(p.tentativas || []).length ? ` · tentativa ${p.escolhida || "?"}/${p.tentativas.length}` : ""}${p.parecer && p.parecer.aval ? ` · IA: ${esc(AVAL[p.parecer.aval] || p.parecer.aval)}` : ""}</span>
       ${p.parecer && p.parecer.resumo ? `<div class="pequeno-txt">${esc(p.parecer.resumo)}</div>` : ""}</div>`).join("")}</td>
     <td><button class="pequeno" data-abrir-caso="${esc(c.id)}">Abrir TC</button>
       <button class="pequeno" data-etapa="contornar" data-caso="${esc(c.id)}" title="refaz o contorno automático">Recontornar</button>
@@ -2344,6 +2511,11 @@ async function janelaAutomacao() {
       <label>Objetivos<select id="au-motor"><option value="auto" ${pl.motor === "auto" ? "selected" : ""}>IA (cai nas regras)</option>
         <option value="regras" ${pl.motor === "regras" ? "selected" : ""}>Regras</option><option value="claude" ${pl.motor === "claude" ? "selected" : ""}>Só IA</option></select></label>
       <label>Planejar como<select id="au-perfil">${["tps", "monaco", "eclipse"].map(x => `<option ${x === pl.perfil ? "selected" : ""}>${x}</option>`).join("")}</select></label></div>
+    <div class="linha2"><span>Fazer um plano de cada:</span>${["3D", "IMRT", "VMAT"].map(t => `<label class="check"><input type="checkbox" data-var="${t}"
+      ${(pl.variantes || []).includes(t) ? "checked" : ""}> ${t}</label>`).join("")}
+      <label title="1ª tentativa simples; as seguintes corrigem cobertura, ponto quente e órgãos que passaram do limite; fica a melhor">Tentativas<select id="au-tent">
+        ${[1, 2, 3].map(n => `<option ${n === (pl.tentativas || 3) ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
+    <div class="pequeno-txt">Sem nenhuma marcada: uma técnica só, pela tabela por sítio abaixo. Mama: tangentes (3D) ou arcos parciais (VMAT); PTV de FSC/axila no mesmo grupo recebe campo AP direto (e PA se precisar), com junção mono-isocêntrica.</div>
     <div class="linha2">${sitios.map(st => `<label>${st.replace("_", " ")}<select data-sit="${st}"><option value="">padrão</option>${opT(ts[st] || "")}</select></label>`).join("")}</div>
     <label class="check"><input type="checkbox" id="au-parecer" ${pl.parecer_claude ? "checked" : ""}> Parecer da IA no plano pronto (só avalia)</label>
     <label>Sua senha (físico/administrador)<input id="au-senha" type="password"></label>
@@ -2358,13 +2530,16 @@ async function janelaAutomacao() {
     receptor_dicom: { ativo: $("#au-rec").checked, porta: +$("#au-porta").value, ae: $("#au-ae").value },
     contorno: { ativo: $("#au-cont").checked, ia: $("#au-ia").checked, suavizar_mm: +$("#au-suave").value },
     plano: { ativo: $("#au-plano").checked, gatilho: $("#au-gat").value, maquina: $("#au-maq").value, tecnica_padrao: $("#au-tec").value,
-      motor: $("#au-motor").value, perfil: $("#au-perfil").value, parecer_claude: $("#au-parecer").checked, tecnica_por_sitio: por } };
+      motor: $("#au-motor").value, perfil: $("#au-perfil").value, parecer_claude: $("#au-parecer").checked, tecnica_por_sitio: por,
+      variantes: $$("#modal [data-var]").filter(x => x.checked).map(x => x.dataset.var), tentativas: +$("#au-tent").value } };
   await api("POST", "/api/automacao", corpo, "Salvando…");
   aviso(corpo.ativo ? "Automação ligada" : "Configuração salva", true);
 }
 document.addEventListener("DOMContentLoaded", () => {
   if ($("#b-est-aprovar")) $("#b-est-aprovar").onclick = () => tentar(aprovarEstruturas);
-  if ($("#b-aprovar-est-topo")) $("#b-aprovar-est-topo").onclick = () => tentar(aprovarEstruturas);
+  if ($("#b-aprovar-est-topo")) $("#b-aprovar-est-topo").onclick = () => tentar(() =>
+    (E.resumo && E.resumo.estruturas_aprovadas) ? desaprovarEstruturas() : aprovarEstruturas());
+  if ($("#b-est-desaprovar")) $("#b-est-desaprovar").onclick = () => tentar(desaprovarEstruturas);
   if ($("#t-wash-topo")) $("#t-wash-topo").onchange = () => { $("#t-wash").checked = $("#t-wash-topo").checked; desenharTudo(); };
 });
 
@@ -2392,4 +2567,356 @@ async function janelaBody(nome) {
       "Contornando o corpo…");
     atualizar(r); aviso(`${v.nome || "BODY"} criado em todos os cortes do VOI — revise`, true);
   } finally { desenharTudo(); }
+}
+
+// ------------------------------------------------------------------ visualizador: zoom, pan, régua, cursor de HU, menu
+function zoomVista(v, f, ev) {
+  E.vz = E.vz || {};
+  const Z = E.vz[v] = E.vz[v] || { z: 1, ph: 0, pv: 0 };
+  const r = $(`#v-${v} canvas`).getBoundingClientRect();
+  const p = ev ? [ev.clientX - r.left, ev.clientY - r.top] : [r.width / 2, r.height / 2];
+  const antes = transf(v, r.width, r.height).mm(...p);
+  Z.z = Math.max(0.5, Math.min(16, Z.z * f));
+  const depois = transf(v, r.width, r.height).mm(...p);
+  Z.ph += antes[0] - depois[0]; Z.pv += antes[1] - depois[1];
+  desenharCorte(v);
+}
+function zoomZero(v) {
+  E.vz = E.vz || {};
+  for (const k of v ? [v] : Object.keys(VISTAS)) E.vz[k] = { z: 1, ph: 0, pv: 0 };
+  for (const k of v ? [v] : Object.keys(VISTAS)) desenharCorte(k);
+}
+function centralizarEm(v, hv) {                         // põe o ponto (h, v em mm) no centro da vista
+  E.vz = E.vz || {};
+  const Z = E.vz[v] = E.vz[v] || { z: 1, ph: 0, pv: 0 };
+  const V = VISTAS[v], eh = eixo(V.h), ev = eixo(V.v);
+  Z.ph = hv[0] - (eh.a + eh.b) / 2; Z.pv = hv[1] - (ev.a + ev.b) / 2;
+  desenharCorte(v);
+}
+function mmDoEvento(v, ev) {
+  const r = $(`#v-${v} canvas`).getBoundingClientRect();
+  return transf(v, r.width, r.height).mm(ev.clientX - r.left, ev.clientY - r.top);
+}
+function xyzDoEvento(v, ev) {
+  const [a, b] = mmDoEvento(v, ev), V = VISTAS[v], k = { x: 0, y: 1, z: 2 }, c = [0, 0, 0];
+  c[k[V.h]] = a; c[k[V.v]] = b; c[k[EIXO_IDX[v]]] = posDoIdx(v, E.idx[v]);
+  return c.map(x => Math.round(x * 10) / 10);
+}
+function maximizarVista(v) {
+  const el = $(`#v-${v}`), centro = $("#centro"), max = !el.classList.contains("max");
+  $$("#centro .vista").forEach(x => x.classList.remove("max"));
+  el.classList.toggle("max", max); centro.classList.toggle("tem-max", max);
+  setTimeout(desenharTudo, 30);
+}
+function modoVista(m) {
+  E.modoVista = E.modoVista === m ? null : m;
+  $("#b-regua").classList.toggle("ligado", E.modoVista === "regua");
+  for (const v of Object.keys(VISTAS)) {
+    const cv = $(`#v-${v} canvas`);
+    cv.classList.toggle("mao", E.modoVista === "pan"); cv.classList.toggle("mira", E.modoVista === "regua");
+  }
+}
+function alternarCursorHU(lig) {
+  E.cursorHU = lig ?? !E.cursorHU;
+  $("#b-hu").classList.toggle("ligado", E.cursorHU);
+  if (!E.cursorHU) $$("#centro .vista").forEach(x => x.classList.remove("com-leitura"));
+}
+function desenharRegua(g, T, vista) {
+  const R = E.regua;
+  if (!R || R.vista !== vista) return;
+  const [x0, y0] = T.px(...R.a), [x1, y1] = T.px(...R.b), d = Math.hypot(R.b[0] - R.a[0], R.b[1] - R.a[1]);
+  const outro = R.idx !== E.idx[vista];
+  g.save(); g.strokeStyle = outro ? "rgba(255,170,0,.45)" : "#ffaa00"; g.lineWidth = 1.6;
+  g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+  for (const [x, y] of [[x0, y0], [x1, y1]]) { g.beginPath(); g.arc(x, y, 3, 0, 2 * Math.PI); g.stroke(); }
+  const txt = `${d.toFixed(1)} mm` + (outro ? " (outro corte)" : "");
+  g.font = "bold 12px system-ui"; const tw = g.measureText(txt).width, mx = (x0 + x1) / 2 + 8, my = (y0 + y1) / 2 - 8;
+  g.fillStyle = "rgba(0,0,0,.65)"; g.fillRect(mx - 3, my - 12, tw + 6, 16);
+  g.fillStyle = "#ffaa00"; g.fillText(txt, mx, my); g.restore();
+}
+function leituraDiv(v) {
+  let d = $(`#v-${v} .leitura`);
+  if (!d) { d = document.createElement("div"); d.className = "leitura"; $(`#v-${v}`).appendChild(d); }
+  return d;
+}
+async function lerCursor(v, xyz) {
+  if (E.cursorOcupado) { E.cursorFila = [v, xyz]; return; }
+  E.cursorOcupado = true;
+  try {
+    const r = await api("GET", `/api/${E.sid}/ponto?x=${xyz[0]}&y=${xyz[1]}&z=${xyz[2]}`);
+    const el = $(`#v-${v}`); el.classList.add("com-leitura");
+    const p = [];
+    if (r.hu != null) p.push(`HU ${Math.round(r.hu)}`);
+    if (r.densidade != null) p.push(`ρe ${(+r.densidade).toFixed(3)}`);
+    if (r.dose_gy != null) p.push(`${(+r.dose_gy).toFixed(2)} Gy` + (r.dose_pct != null ? ` (${(+r.dose_pct).toFixed(1)}%)` : ""));
+    if (!p.length) p.push("fora do CT");
+    leituraDiv(v).textContent = `${p.join(" · ")}   [${xyz.map(c => (c / 10).toFixed(1)).join(", ")} cm]`;
+  } catch (e) { /* leitura opcional */ }
+  E.cursorOcupado = false;
+  if (E.cursorFila) { const [a, b] = E.cursorFila; E.cursorFila = null; if (E.cursorHU) lerCursor(a, b); }
+}
+async function medirAqui(xyz) {
+  const r = await api("GET", `/api/${E.sid}/ponto?x=${xyz[0]}&y=${xyz[1]}&z=${xyz[2]}`);
+  aviso(`(${xyz.map(c => (c / 10).toFixed(1)).join(", ")}) cm: HU ${r.hu != null ? Math.round(r.hu) : "—"}, ρe ${r.densidade != null ? (+r.densidade).toFixed(3) : "—"}` +
+    (r.dose_gy != null ? `, dose ${(+r.dose_gy).toFixed(2)} Gy` : ""));
+}
+function menuContexto(ev, itens) {
+  let m = $("#menu-ctx");
+  if (!m) {
+    m = document.createElement("div"); m.id = "menu-ctx"; document.body.appendChild(m);
+    document.addEventListener("mousedown", (e) => { if (!e.target.closest("#menu-ctx")) m.classList.remove("aberto"); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") m.classList.remove("aberto"); });
+  }
+  m.innerHTML = "";
+  for (const it of itens) {
+    if (it === "-") { m.appendChild(document.createElement("hr")); continue; }
+    const b = document.createElement("button");
+    b.innerHTML = `<span class="${it.marcado ? "marcado" : ""}">${esc(it.t)}</span>${it.k ? `<kbd>${esc(it.k)}</kbd>` : ""}`;
+    b.disabled = !!it.off;
+    b.onclick = () => { m.classList.remove("aberto"); tentar(async () => it.f()); };
+    m.appendChild(b);
+  }
+  m.classList.add("aberto");
+  const r = m.getBoundingClientRect();
+  m.style.left = Math.min(ev.clientX, window.innerWidth - r.width - 6) + "px";
+  m.style.top = Math.min(ev.clientY, window.innerHeight - r.height - 6) + "px";
+}
+function menuVista(v, ev) {
+  if (!E.resumo || !E.resumo.ct) return;
+  const xyz = xyzDoEvento(v, ev), hv = mmDoEvento(v, ev), Z = (E.vz && E.vz[v]) || { z: 1 };
+  const temPlano = !!(E.resumo.plano), max = $(`#v-${v}`).classList.contains("max");
+  menuContexto(ev, [
+    { t: "Aproximar (zoom +)", k: "Ctrl+roda", f: () => zoomVista(v, 1.4, ev) },
+    { t: "Afastar (zoom −)", k: "Ctrl+roda", f: () => zoomVista(v, 1 / 1.4, ev) },
+    { t: `Restaurar zoom (${Math.round(Z.z * 100)}%)`, f: () => zoomZero(v) },
+    { t: "Restaurar todas as vistas", f: () => zoomZero() },
+    { t: "Centralizar aqui", f: () => centralizarEm(v, hv) },
+    { t: "Mover (pan)", k: "Ctrl+arrastar", marcado: E.modoVista === "pan", f: () => modoVista("pan") },
+    { t: max ? "Restaurar layout" : "Maximizar esta vista", k: "duplo clique no título", f: () => maximizarVista(v) },
+    "-",
+    { t: "Cruz aqui (3 vistas)", f: () => { irPara(xyz); doseCruz(); } },
+    { t: "Ir para o isocentro", off: !E.resumo.isocentro, f: () => irParaIso() },
+    { t: "Régua", marcado: E.modoVista === "regua", f: () => modoVista("regua") },
+    { t: "Apagar régua", off: !E.regua, f: () => { E.regua = null; desenharTudo(); } },
+    { t: "Cursor de HU / densidade / dose", marcado: !!E.cursorHU, f: () => alternarCursorHU() },
+    { t: "HU e densidade deste ponto", f: () => medirAqui(xyz) },
+    "-",
+    { t: "Isocentro do plano aqui", off: !temPlano, f: () => isocentroEm(xyz) },
+    { t: "Referência (marcas / BB) aqui", f: () => referenciaEm(xyz) },
+  ]);
+}
+function irParaIso() {
+  const iso = E.resumo && E.resumo.isocentro;
+  if (!iso) throw new Error("Sem isocentro: crie o plano");
+  irPara(iso); doseCruz();
+  for (const v of Object.keys(VISTAS)) { const Z = E.vz && E.vz[v]; if (Z && Z.z > 1) { const V = VISTAS[v], k = { x: 0, y: 1, z: 2 }; centralizarEm(v, [iso[k[V.h]], iso[k[V.v]]]); } }
+}
+async function isocentroEm(xyz) {
+  if (!confirm(`Mover o isocentro do plano para (${xyz.map(c => (c / 10).toFixed(1)).join(", ")}) cm?\nCampos conformados são refeitos; a dose precisa ser recalculada.`)) return;
+  atualizar(await api("POST", `/api/${E.sid}/isocentro`, { xyz }, "Movendo o isocentro…"));
+}
+async function referenciaEm(xyz) {
+  const r = await api("POST", `/api/${E.sid}/referencia`, { xyz });
+  atualizar(r.resumo); mostrarDeslocamentos();
+}
+function ligarVisualizador() {
+  for (const v of Object.keys(VISTAS)) {
+    const cv = $(`#v-${v} canvas`);
+    cv.addEventListener("mousedown", (ev) => {
+      if (ev.button !== 0 || !E.resumo || !E.resumo.ct) return;
+      const pan = ev.ctrlKey || ev.metaKey || E.modoVista === "pan", reg = !pan && E.modoVista === "regua";
+      if (!pan && !reg) return;
+      ev.preventDefault(); ev.stopImmediatePropagation();
+      const mm0 = mmDoEvento(v, ev), p0 = [ev.clientX, ev.clientY];
+      if (reg) E.regua = { vista: v, idx: E.idx[v], a: mm0, b: mm0 };
+      const mover = (e) => {
+        if (reg) { E.regua.b = mmDoEvento(v, e); desenharCorte(v); return; }
+        E.vz = E.vz || {}; const Z = E.vz[v] = E.vz[v] || { z: 1, ph: 0, pv: 0 };
+        const mm1 = mmDoEvento(v, e); Z.ph += mm0[0] - mm1[0]; Z.pv += mm0[1] - mm1[1]; desenharCorte(v);
+      };
+      const soltar = (e) => {
+        window.removeEventListener("mousemove", mover); window.removeEventListener("mouseup", soltar);
+        if (reg || Math.hypot(e.clientX - p0[0], e.clientY - p0[1]) > 3) E.semClique = true;
+      };
+      window.addEventListener("mousemove", mover); window.addEventListener("mouseup", soltar);
+    }, true);
+    cv.addEventListener("mousemove", (ev) => { if (E.cursorHU && E.sid && E.resumo && E.resumo.ct) lerCursor(v, xyzDoEvento(v, ev)); });
+    cv.addEventListener("mouseleave", () => $(`#v-${v}`).classList.remove("com-leitura"));
+  }
+  $("#b-regua").onclick = () => modoVista("regua");
+  $("#b-hu").onclick = () => alternarCursorHU();
+  $("#b-ir-iso").onclick = () => tentar(async () => irParaIso());
+  $("#b-zoom-0").onclick = () => zoomZero();
+  $("#t-feixes").onchange = () => desenharTudo();
+  E.estVis = lerGuardado("tps_est_vis") || { modo: "contorno", transp: 60 };
+  $("#est-modo").value = E.estVis.modo; $("#est-transp").value = E.estVis.transp; $("#est-transp-t").textContent = E.estVis.transp + "%";
+  $("#est-transp-l").classList.toggle("oculto", E.estVis.modo !== "solido");
+  $("#est-modo").onchange = () => {
+    E.estVis.modo = $("#est-modo").value; $("#est-transp-l").classList.toggle("oculto", E.estVis.modo !== "solido");
+    guardar("tps_est_vis", E.estVis); desenharTudo();
+  };
+  $("#est-transp").oninput = () => {
+    E.estVis.transp = +$("#est-transp").value; $("#est-transp-t").textContent = E.estVis.transp + "%";
+    guardar("tps_est_vis", E.estVis); desenharTudo();
+  };
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    if (E.regua) { E.regua = null; desenharTudo(); }
+    if (E.modoVista) modoVista(E.modoVista);
+  });
+}
+
+async function infoEstrutura(nome) {
+  const i = await api("GET", `/api/${E.sid}/estrutura_info/${encodeURIComponent(nome)}`);
+  const cm = (v) => (v / 10).toFixed(1), f = (v, d = 1) => v == null ? "—" : (+v).toFixed(d);
+  const da = i.densidade_atribuida;
+  const datxt = da == null ? "do CT" : (typeof da === "object" ? `${da.valor} (preencher)` : `${da} (forçar)`);
+  await modal(`Estrutura ${nome}`, `<table class="tabela-info">
+    <tr><td>Volume</td><td><b>${f(i.volume_cc, 2)} cc</b></td></tr>
+    <tr><td>Centro (x, y, z)</td><td>${i.centro_mm.map(cm).join(", ")} cm</td></tr>
+    <tr><td>Extensão</td><td>x ${cm(i.min_mm[0])} a ${cm(i.max_mm[0])} · y ${cm(i.min_mm[1])} a ${cm(i.max_mm[1])} · z ${cm(i.min_mm[2])} a ${cm(i.max_mm[2])} cm</td></tr>
+    <tr><td>HU médio ± dp</td><td><b>${f(i.hu_medio, 0)}</b> ± ${f(i.hu_dp, 0)} (mín ${f(i.hu_min, 0)}, máx ${f(i.hu_max, 0)})</td></tr>
+    <tr><td>Densidade eletrônica média</td><td><b>${f(i.densidade_media, 3)}</b> (usada no cálculo)</td></tr>
+    <tr><td>Densidade atribuída</td><td>${esc(datxt)}</td></tr></table>`, { ok: "Fechar", cancelar: false });
+}
+
+function mostrarDeslocamentos() {
+  const d = E.resumo && E.resumo.deslocamentos, el = $("#desloc-txt");
+  if (!el) return;
+  if (!d) { el.innerHTML = E.resumo && E.resumo.plano ? "Sem referência: use a cruz sobre as marcas ou “achar marcadores”." : ""; return; }
+  el.innerHTML = `<b>Da referência ao isocentro:</b><br>${esc(d.lateral)}<br>${esc(d.vertical)}<br>${esc(d.longitudinal)}`;
+}
+
+// ------------------------------------------------------------------ vista 3D (three.js, carregado só quando abre)
+async function vista3d() {
+  if (!E.sid) return;
+  let J = $("#j3d");
+  if (!J) {
+    J = document.createElement("div"); J.id = "j3d"; J.className = "janela-flut";
+    J.innerHTML = `<div class="jf-topo"><b>Vista 3D</b><span class="pequeno-txt">arraste: girar · Shift/botão direito: mover · roda: zoom</span>
+      <span class="jf-vistas"><button class="pequeno" data-v3="ant">Ant</button><button class="pequeno" data-v3="post">Post</button>
+      <button class="pequeno" data-v3="dir">Dir</button><button class="pequeno" data-v3="esq">Esq</button><button class="pequeno" data-v3="sup">Sup</button></span>
+      <label class="check"><input type="checkbox" id="j3d-campos" checked> campos</label>
+      <button class="pequeno" id="j3d-fechar">✕</button></div>
+      <div class="jf-corpo"><div id="j3d-lista"></div><div id="j3d-tela"></div></div>`;
+    document.body.appendChild(J);
+    $("#j3d-fechar").onclick = () => { J.classList.add("oculto"); if (E.v3 && E.v3.parar) E.v3.parar(); };
+    arrastavel(J, J.querySelector(".jf-topo"));
+  }
+  J.classList.remove("oculto");
+  const cena = await api("GET", `/api/${E.sid}/cena3d`, undefined, "Montando a vista 3D…");
+  const THREE = await import("/estatico/three.module.min.js");
+  if (E.v3 && E.v3.parar) E.v3.parar();
+  const tela = $("#j3d-tela"); tela.innerHTML = "";
+  const ren = new THREE.WebGLRenderer({ antialias: true }); ren.setPixelRatio(window.devicePixelRatio || 1);
+  tela.appendChild(ren.domElement);
+  const sc = new THREE.Scene(); sc.background = new THREE.Color(0x07090c);
+  const cam = new THREE.PerspectiveCamera(35, 1, 5, 20000);
+  sc.add(new THREE.AmbientLight(0xffffff, 0.55));
+  const luz = new THREE.DirectionalLight(0xffffff, 0.9); sc.add(luz);
+  const P = ([x, y, z]) => new THREE.Vector3(x, z, -y);      // paciente (x esq, y post, z sup) → three (y para cima)
+  const alvo = P(cena.isocentro || [0, 0, 0]);
+  const grupoEst = new THREE.Group(), grupoCampos = new THREE.Group(); sc.add(grupoEst); sc.add(grupoCampos);
+  const malhas = {};
+  const ehCorpo = (e) => e.tipo === "EXTERNAL" || /^(body|external|corpo|externo)$/i.test(e.nome);
+  async function carregar(e) {
+    if (malhas[e.nome]) return;
+    malhas[e.nome] = "…";
+    const m = await api("GET", `/api/${E.sid}/malha/${encodeURIComponent(e.nome)}?passo=${ehCorpo(e) ? 6 : 3}`);
+    const geo = new THREE.BufferGeometry();
+    const v = new Float32Array(m.v.length);
+    for (let i = 0; i < m.v.length; i += 3) { v[i] = m.v[i]; v[i + 1] = m.v[i + 2]; v[i + 2] = -m.v[i + 1]; }
+    geo.setAttribute("position", new THREE.BufferAttribute(v, 3)); geo.setIndex(m.f); geo.computeVertexNormals();
+    const [r, g, b] = e.cor.map(c => c / 255);
+    const mat = new THREE.MeshLambertMaterial({ color: new THREE.Color(r, g, b), transparent: true,
+      opacity: ehCorpo(e) ? 0.18 : 0.85, depthWrite: !ehCorpo(e), side: THREE.DoubleSide });
+    const me = new THREE.Mesh(geo, mat); me.renderOrder = ehCorpo(e) ? 2 : 1;
+    malhas[e.nome] = me; grupoEst.add(me); pedir();
+  }
+  $("#j3d-lista").innerHTML = cena.estruturas.map(e => `<label class="check"><input type="checkbox" data-e3="${esc(e.nome)}"
+    ${E.ocultas.has(e.nome) ? "" : "checked"}><span class="cor" style="background:rgb(${e.cor})"></span>${esc(e.nome)}</label>`).join("");
+  $$("[data-e3]").forEach(c => c.onchange = () => tentar(async () => {
+    const e = cena.estruturas.find(q => q.nome === c.dataset.e3);
+    if (c.checked) { if (malhas[e.nome] && malhas[e.nome] !== "…") malhas[e.nome].visible = true; else await carregar(e); }
+    else if (malhas[e.nome] && malhas[e.nome] !== "…") malhas[e.nome].visible = false;
+    pedir();
+  }));
+  // campos: pirâmide da fonte até 30% além do isocentro, com a abertura no plano do isocentro
+  for (const c of cena.campos) {
+    const f = P(c.fonte), cor = c.nome === E.campoSel ? 0xffd84d : 0x6ec6ff;
+    const ab = c.abertura.map(P), pts = [];
+    for (const q of [ab[0], ab[Math.floor(ab.length / 4)], ab[Math.floor(ab.length / 2)], ab[Math.floor(3 * ab.length / 4)]]) {
+      pts.push(f, f.clone().add(q.clone().sub(f).multiplyScalar(1.3)));
+    }
+    const lin = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: cor, transparent: true, opacity: 0.55 }));
+    const contorno = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(ab), new THREE.LineBasicMaterial({ color: cor }));
+    const eixo = new THREE.Line(new THREE.BufferGeometry().setFromPoints([f, alvo]), new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 20, gapSize: 12 }));
+    eixo.computeLineDistances();
+    grupoCampos.add(lin, contorno, eixo);
+  }
+  { const iso = new THREE.Mesh(new THREE.SphereGeometry(4, 16, 12), new THREE.MeshBasicMaterial({ color: 0xff4d4d })); iso.position.copy(alvo); sc.add(iso); }
+  $("#j3d-campos").onchange = () => { grupoCampos.visible = $("#j3d-campos").checked; pedir(); };
+  // câmera orbital simples em volta do isocentro
+  const ct = E.resumo.ct, diag = ct ? Math.hypot(ct.x[1] - ct.x[0], ct.y[1] - ct.y[0], ct.z[1] - ct.z[0]) : 600;
+  const O = { teta: 0, fi: 0.15, dist: Math.max(250, diag * 1.9), alvo: alvo.clone() };
+  const posicionar = () => {
+    const d = O.dist, x = d * Math.cos(O.fi) * Math.sin(O.teta), y = d * Math.sin(O.fi), z = d * Math.cos(O.fi) * Math.cos(O.teta);
+    cam.position.set(O.alvo.x + x, O.alvo.y + y, O.alvo.z + z); cam.lookAt(O.alvo); luz.position.copy(cam.position);
+  };
+  const VIS = { ant: [0, 0], post: [Math.PI, 0], esq: [Math.PI / 2, 0], dir: [-Math.PI / 2, 0], sup: [0, Math.PI / 2 - 0.01] };
+  $$("[data-v3]").forEach(b => b.onclick = () => { [O.teta, O.fi] = VIS[b.dataset.v3]; pedir(); });
+  const el = ren.domElement;
+  el.addEventListener("contextmenu", (ev) => ev.preventDefault());
+  el.addEventListener("mousedown", (ev) => {
+    const ini = { x: ev.clientX, y: ev.clientY, t: O.teta, f: O.fi, a: O.alvo.clone() }, mover = ev.button === 2 || ev.shiftKey;
+    const mv = (e) => {
+      const dx = e.clientX - ini.x, dy = e.clientY - ini.y;
+      if (mover) {
+        const k = O.dist / 900, dir = new THREE.Vector3(), up = cam.up.clone();
+        cam.getWorldDirection(dir); const dirx = new THREE.Vector3().crossVectors(dir, up).normalize(), upv = new THREE.Vector3().crossVectors(dirx, dir).normalize();
+        O.alvo.copy(ini.a).addScaledVector(dirx, -dx * k).addScaledVector(upv, dy * k);
+      } else { O.teta = ini.t - dx * 0.008; O.fi = Math.max(-1.55, Math.min(1.55, ini.f + dy * 0.008)); }
+      pedir();
+    };
+    const up = () => { window.removeEventListener("mousemove", mv); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", mv); window.addEventListener("mouseup", up);
+  });
+  el.addEventListener("wheel", (ev) => { ev.preventDefault(); O.dist = Math.max(80, Math.min(8000, O.dist * (ev.deltaY > 0 ? 1.12 : 1 / 1.12))); pedir(); }, { passive: false });
+  let pendente = false, ativo = true;
+  function pedir() { if (!pendente && ativo) { pendente = true; requestAnimationFrame(desenhar); } }
+  function desenhar() {
+    pendente = false;
+    const r = tela.getBoundingClientRect();
+    if (r.width < 10 || r.height < 10) return;
+    ren.setSize(r.width, r.height, false); el.style.width = r.width + "px"; el.style.height = r.height + "px";
+    cam.aspect = r.width / r.height; cam.updateProjectionMatrix(); posicionar(); ren.render(sc, cam);
+  }
+  const ro = new ResizeObserver(pedir); ro.observe(tela);
+  E.v3 = { parar: () => { ativo = false; ro.disconnect(); ren.dispose(); } };
+  pedir();
+  for (const e of cena.estruturas) if (!E.ocultas.has(e.nome)) await carregar(e);
+}
+function arrastavel(janela, alca) {
+  alca.addEventListener("mousedown", (ev) => {
+    if (ev.target.closest("button,input,select,label,textarea")) return;
+    ev.preventDefault();
+    const r = janela.getBoundingClientRect(), dx = ev.clientX - r.left, dy = ev.clientY - r.top;
+    const mv = (e) => {
+      janela.style.left = Math.max(0, Math.min(window.innerWidth - 80, e.clientX - dx)) + "px";
+      janela.style.top = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - dy)) + "px";
+      janela.style.right = "auto"; janela.style.bottom = "auto";
+    };
+    const up = () => { window.removeEventListener("mousemove", mv); window.removeEventListener("mouseup", up); if (janela.dataset.guardar) guardarJanela(janela); };
+    window.addEventListener("mousemove", mv); window.addEventListener("mouseup", up);
+  });
+}
+function guardarJanela(j) {
+  const r = j.getBoundingClientRect();
+  guardar("tps_jan_" + j.id, { left: r.left, top: r.top, width: r.width, height: r.height });
+}
+function restaurarJanela(j) {
+  const g = lerGuardado("tps_jan_" + j.id);
+  if (!g) return;
+  Object.assign(j.style, { left: Math.min(g.left, window.innerWidth - 120) + "px", top: Math.min(g.top, window.innerHeight - 60) + "px",
+    width: g.width + "px", height: g.height + "px", right: "auto", bottom: "auto" });
 }

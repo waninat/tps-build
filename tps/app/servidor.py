@@ -207,6 +207,18 @@ def ia_instalar(d: dict = Body(...), u: dict = Depends(usuario)):
     return r
 
 
+@app.post("/api/ia/dispositivo")
+def ia_dispositivo(d: dict = Body(...), u: dict = Depends(usuario)):
+    """Onde a segmentação automática roda: auto | gpu | cpu (o cálculo de dose é sempre na CPU, multinúcleo)."""
+    from tps.ia import segmentacao
+    try:
+        v = segmentacao.definir_dispositivo(str(d.get("dispositivo", "auto")))
+    except ValueError as e:
+        raise ErroUsuario(str(e)) from e
+    auditar(u, "ia_dispositivo", None, dispositivo=v)
+    return {"dispositivo": v}
+
+
 @app.post("/api/ia/apontar")
 def ia_apontar(d: dict = Body(...), u: dict = Depends(usuario)):
     from tps.ia import instalador
@@ -913,6 +925,17 @@ def remover_ponto(sid: str, nome: str, u: dict = Depends(usuario)):
 def ponto_cursor(sid: str, x: float, y: float, z: float, u: dict = Depends(usuario)):
     """HU, densidade e dose no ponto do cursor (sem trava: leitura rápida)."""
     return _s(sid).ponto((x, y, z))
+
+
+@app.get("/api/{sid}/malha/{nome}")
+def malha_3d(sid: str, nome: str, passo: float = 4.0, u: dict = Depends(usuario)):
+    """Superfície da estrutura (triângulos, mm) para a vista 3D."""
+    return _s(sid).malha_3d(nome, max(1.5, min(15.0, passo)))
+
+
+@app.get("/api/{sid}/cena3d")
+def cena_3d(sid: str, u: dict = Depends(usuario)):
+    return _s(sid).cena_3d()
 
 
 @app.get("/api/{sid}/estrutura_info/{nome}")
