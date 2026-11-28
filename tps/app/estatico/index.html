@@ -28,7 +28,8 @@
       <hr><button data-acao="aba:campos">Feixes</button>
       <button data-acao="aba:otim">Otimização</button>
       <button data-acao="calcular" data-precisa="campos">Calcular / otimizar <kbd>F5</kbd></button>
-      <hr><button data-acao="aprovar" data-precisa="dose">Aprovar…</button>
+      <hr><button data-acao="aprovar-est">Aprovar estruturas…</button>
+      <button data-acao="aprovar" data-precisa="dose">Aprovar plano…</button>
       <button data-acao="aba:aprov">Aprovação e exportação</button></div></div>
     <div class="menu"><button class="menu-b">Ferramentas</button><div class="menu-l">
       <button data-acao="ia">Segmentação automática de órgãos…</button>
@@ -73,7 +74,8 @@
   <button id="b-salvar" disabled title="salva todos os planos desta TC (Ctrl+S)">💾 Salvar</button>
   <span class="sep"></span>
   <button id="b-calc-topo" class="primario" disabled title="calcula ou otimiza (F5)">▶ Calcular</button>
-  <button id="b-aprovar-topo" disabled title="aprovar (pede a senha)">✔ Aprovar</button>
+  <button id="b-aprovar-est-topo" disabled title="médico/físico aprova as estruturas (alvos com a prescrição no nome, ex.: PTVPelve45@25) — gatilho do plano automático">✔ Estruturas</button>
+  <button id="b-aprovar-topo" disabled title="aprovar o plano (pede a senha)">✔ Plano</button>
   <button id="b-exportar-topo" disabled title="aprovação e exportação">⇪ Exportar</button>
   <span class="sep"></span>
   <button id="b-relatorio" disabled>Relatório</button>
@@ -82,11 +84,12 @@
   <button id="b-auditoria" class="oculto" title="Trilha de auditoria e usuários">Auditoria</button>
   <span class="sep"></span>
   <label class="ferr-l" title="janela/nível do CT em todas as vistas">CT<select id="wl-preset"></select></label>
-  <label class="ferr-l" title="contraste = largura da janela (HU)">Contraste<input type="range" id="wl-janela" min="20" max="4000" step="10"></label>
-  <label class="ferr-l" title="brilho = centro da janela (HU), invertido: para a direita fica mais claro">Brilho<input type="range" id="wl-brilho" min="-1200" max="1200" step="5"></label>
+  <label class="ferr-l" title="contraste = largura da janela (HU)">◐<input type="range" id="wl-janela" min="20" max="4000" step="10"></label>
+  <label class="ferr-l" title="brilho = centro da janela (HU), invertido: para a direita fica mais claro">☀<input type="range" id="wl-brilho" min="-1200" max="1200" step="5"></label>
   <span id="wl-txt" class="pequeno-txt"></span>
   <span class="sep"></span>
   <label class="check ferr-l"><input type="checkbox" id="t-iso" checked> isodoses</label>
+  <label class="check ferr-l" title="dose em cores (mínimo/máximo em % ou Gy no ⚙)"><input type="checkbox" id="t-wash-topo"> colorwash</label>
   <button id="b-iso-cfg" class="pequeno" title="curvas relativas e absolutas (Gy), referência e colorwash">⚙</button>
   <span class="linha-inline ferr-gy" title="acrescenta uma isodose em dose absoluta (Gy, dose total)"><input id="iso-gy-rapido" type="number" step="0.5" min="0.1" placeholder="Gy"><button id="b-iso-gy-rapido" class="pequeno">+ Gy</button></span>
   <select id="fonte-dose" class="oculto" title="dose mostrada nas imagens e no DVH">
@@ -189,7 +192,7 @@
       <button class="pequeno" data-arranjo="caixa">Caixa 4</button>
       <button class="pequeno" data-arranjo="tres">3 campos</button>
     </div>
-    <table id="tab-campos"><thead><tr><th>Campo</th><th>G</th><th>C</th><th>UM</th><th>Seg</th></tr></thead><tbody></tbody></table>
+    <div class="pequeno-txt dica-doca">Os campos (G, C, M, mandíbulas, peso, UM, SSD…) ficam no painel <b>Campos</b> embaixo das imagens: clique num campo para editá-lo aqui.</div>
     <details class="sub" id="sec-bolus"><summary>Bolus</summary>
       <div class="linha2">
         <label>Espessura (mm)<input id="bo-esp" type="number" value="5" min="2" max="30"></label>
@@ -458,6 +461,7 @@
 </aside>
 <div class="divisor dv" data-div="esq" title="arraste para mudar a largura do painel"></div>
 
+<div id="meio">
 <section id="centro" class="lay-padrao">
   <div class="vista" id="v-axial" data-slot="A">
     <div class="vista-topo"><b>Axial</b><span class="pos"></span></div>
@@ -496,6 +500,25 @@
   <div class="divisor dh" data-div="r1" title="arraste para mudar a altura"></div>
   <div class="divisor dv" data-div="c2" title="arraste para mudar a largura"></div>
 </section>
+<div class="divisor dh" data-div="doca" title="arraste para mudar a altura do painel de campos"></div>
+<section id="doca">
+  <div class="doca-topo">
+    <button class="doca-aba ativa" data-doca="campos">Campos</button>
+    <button class="doca-aba" data-doca="avisos">Avisos <span id="doca-n-avisos" class="pequeno-txt"></span></button>
+    <span id="doca-resumo" class="pequeno-txt"></span>
+    <span class="espaco"></span>
+    <button id="doca-min" class="pequeno" title="recolher/expandir">▾</button>
+  </div>
+  <div class="doca-corpo" id="doca-campos">
+    <table id="tab-campos-doca" class="tab-doca"><thead><tr>
+      <th>Campo</th><th>Tipo</th><th>MV</th><th>Gantry</th><th>Col.</th><th>Mesa</th>
+      <th title="mandíbula X1 (mm no isocentro)">X1</th><th title="mandíbula X2">X2</th><th title="mandíbula Y1">Y1</th><th title="mandíbula Y2">Y2</th>
+      <th>Peso</th><th>UM</th><th title="distância fonte–pele no eixo">SSD</th><th title="segmentos (estático) ou pontos de controle (arco)">Seg.</th>
+      <th>Alvo / margem</th><th>Blindagens</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="doca-corpo oculto" id="doca-avisos"><ul id="lista-avisos-doca"></ul></div>
+</section>
+</div>
 
 <div class="divisor dv" data-div="dir" title="arraste para mudar a largura do painel"></div>
 <aside id="direita">

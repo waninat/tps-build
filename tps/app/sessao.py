@@ -1277,23 +1277,64 @@ class Sessao:
         self._depois_de_editar(e)
         return {"nome": nome, "novos_cortes": len(novos)}
 
-    def corpo_automatico(self, nome: str = "BODY", limiar_hu: float = -350.0) -> dict:
-        """Contorno externo automático em todos os cortes (limiar de HU + maior componente + buracos preenchidos)."""
+    def corpo_voi(self, limiar_hu: float = -350.0) -> dict:
+        """VOI sugerido para o BODY: a caixa do corpo achado (sem a mesa), com 5 mm de folga. A borda posterior (y
+        máximo) é a que corta o colchão/mesa."""
         from tps.planejamento import contorno as K
+        self._exigir(self.tipo == "ct", "Contorno só em CT de paciente")
+        corpo = K.corpo_3d(self.ct.hu, float(limiar_hu), (float(self.ct.spacing[2]), float(self.ct.spacing[1]),
+                                                          float(self.ct.spacing[0])))
+        cx, cy, cz = (np.asarray(v, float) for v in self.ct.axes())
+        if not corpo.any():
+            return {"x": [float(cx[0]), float(cx[-1])], "y": [float(cy[0]), float(cy[-1])],
+                    "z": [float(cz.min()), float(cz.max())]}
+        kk, jj, ii = (np.nonzero(corpo.any(axis=ax))[0] for ax in ((1, 2), (0, 2), (0, 1)))
+        f = 5.0
+        return {"x": [round(float(cx[ii[0]]) - f, 1), round(float(cx[ii[-1]]) + f, 1)],
+                "y": [round(float(min(cy[jj[0]], cy[jj[-1]])) - f, 1), round(float(max(cy[jj[0]], cy[jj[-1]])) + f, 1)],
+                "z": [round(float(min(cz[kk[0]], cz[kk[-1]])), 1), round(float(max(cz[kk[0]], cz[kk[-1]])), 1)]}
+
+    def corpo_automatico(self, nome: str = "BODY", limiar_hu: float = -350.0, voi: dict | None = None,
+                         suavizar_mm: float = 2.0) -> dict:
+        """Contorno externo automático em todos os cortes (limiar de HU, conexo em 3D, sem a mesa, buracos
+        preenchidos), só dentro do VOI {x:[min,max], y:[min,max], z:[min,max]} (mm) se dado — a borda posterior do VOI
+        corta o colchão/mesa — e suavizado em 3D (tira o zigue-zague onde o corpo encosta na mesa)."""
+        from tps.planejamento import contorno as K
+        from tps.planejamento import suavizacao as S
         self._exigir(self.tipo == "ct", "Contorno só em CT de paciente")
         if nome not in self.estruturas:
             self.nova_estrutura(nome, "EXTERNAL", (0, 200, 0))
         e = self._editavel(nome)
-        cx, cy, cz = self.ct.axes()
+        cx, cy, cz = (np.asarray(v, float) for v in self.ct.axes())
         self._guardar_desfazer(e)
-        corpo = K.corpo_3d(self.ct.hu, float(limiar_hu), (float(self.ct.spacing[2]), float(self.ct.spacing[1]),
-                                                          float(self.ct.spacing[0])))
+        passo = (float(self.ct.spacing[2]), float(self.ct.spacing[1]), float(self.ct.spacing[0]))
+        hu = self.ct.hu
+        sk = sj = si = slice(None)
+        if voi:
+            def faixa(eixo, lim):
+                lo, hi = sorted(float(v) for v in lim)
+                ok = np.nonzero((eixo >= lo) & (eixo <= hi))[0]
+                self._exigir(len(ok) > 0, "O VOI não cobre a imagem")
+                return slice(int(ok[0]), int(ok[-1]) + 1)
+            sk, sj, si = faixa(cz, voi.get("z", [cz.min(), cz.max()])), faixa(cy, voi.get("y", [cy.min(), cy.max()])), \
+                faixa(cx, voi.get("x", [cx.min(), cx.max()]))
+            hu = hu[sk, sj, si]
+        corpo = K.corpo_3d(hu, float(limiar_hu), passo)
+        x, y, z = cx[si], cy[sj], cz[sk]
         polys, vazios = [], 0
-        for k, z in enumerate(cz):
-            if not corpo[k].any():
-                vazios += 1
-                continue
-            polys += K.sem_aninhados(K.poligonos_de_mascara(corpo[k], cx, cy, float(z), suavizar=0.7, min_pontos=8))
+        if suavizar_mm and suavizar_mm > 0 and corpo.any():
+            campo, nivel = S.campo_suave(corpo, passo, float(suavizar_mm))
+            for k, zz in enumerate(z):
+                if not corpo[k].any():
+                    vazios += 1
+                    continue
+                polys += K.sem_aninhados(S.poligonos(campo[k], nivel, x, y, float(zz), min_area_mm2=50.0))
+        else:
+            for k, zz in enumerate(z):
+                if not corpo[k].any():
+                    vazios += 1
+                    continue
+                polys += K.sem_aninhados(K.poligonos_de_mascara(corpo[k], x, y, float(zz), suavizar=0.7, min_pontos=8))
         e.contornos = polys
         self._depois_de_editar(e)
         return {"nome": nome, "volume_cc": round(float(e.mascara.sum()) * self.grade.voxel_cc, 1),

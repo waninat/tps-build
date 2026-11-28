@@ -806,7 +806,10 @@ def contorno(sid: str, acao: str, d: dict = Body(...), u: dict = Depends(usuario
         elif acao == "interpolar":
             r = s.interpolar_contorno(d.get("nome", ""))
         elif acao == "corpo":
-            r = s.corpo_automatico(d.get("nome", "BODY") or "BODY", float(d.get("limiar", -350)))
+            r = s.corpo_automatico(d.get("nome", "BODY") or "BODY", float(d.get("limiar", -350)), d.get("voi") or None,
+                                   float(d.get("suavizar_mm", 2.0) or 0.0))
+        elif acao == "corpo_voi":
+            return s.corpo_voi(float(d.get("limiar", -350)))
         elif acao == "desfazer":
             r = s.desfazer_contorno()
         elif acao == "operar":

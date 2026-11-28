@@ -129,3 +129,21 @@ def test_ct_sem_rtstruct_tem_body(amb):
             shutil.copy2(f, pasta / f.name)
     r = _ok(c.post("/api/caso/ct", json={"pasta": str(pasta)}))
     assert [e["nome"] for e in r["estruturas"]] == ["BODY"] and r["estruturas"][0]["volume_cc"] > 100
+
+
+def test_body_com_voi_e_suavizado(amb):
+    c, home, entrada, _ = amb
+    pasta = home / "so_ct2"
+    pasta.mkdir()
+    for f in entrada.iterdir():
+        if pydicom.dcmread(str(f), stop_before_pixels=True, force=True).Modality == "CT":
+            shutil.copy2(f, pasta / f.name)
+    sid = _ok(c.post("/api/caso/ct", json={"pasta": str(pasta)}))["id"]
+    voi = _ok(c.post(f"/api/{sid}/contorno/corpo_voi", json={}))
+    assert voi["y"][0] < voi["y"][1] and voi["z"][0] <= voi["z"][1]
+    cheio = _ok(c.post(f"/api/{sid}/contorno/corpo", json={"nome": "B1", "voi": voi}))
+    meio_y = 0.5 * (voi["y"][0] + voi["y"][1])
+    cortado = _ok(c.post(f"/api/{sid}/contorno/corpo", json={"nome": "B2", "voi": {**voi, "y": [voi["y"][0], meio_y]},
+                                                                 "suavizar_mm": 2}))
+    v = {e["nome"]: e["volume_cc"] for e in cortado["estruturas"]}
+    assert 0.3 * v["B1"] < v["B2"] < 0.75 * v["B1"]          # a borda posterior do VOI corta o corpo

@@ -140,8 +140,17 @@ def corpo_3d(hu: np.ndarray, limiar_hu: float = -350.0, passo_mm: tuple | None =
     cm); buracos preenchidos por corte (ar intestinal e pulmão ficam dentro)."""
     nz = hu.shape[0]
     m = np.empty(hu.shape, bool)
+    # abertura leve com um disco de ~2 mm (tira fios e ruído sem chanfrar o contorno; duas passadas da cruz
+    # deixavam o corpo octogonal em TC de pixel grande)
+    px = float(passo_mm[2]) if passo_mm else 1.0
+    r = max(1, int(round(2.0 / px)))
+    if r == 1:
+        elem = np.ones((3, 3), bool)
+    else:
+        yy, xx = np.ogrid[-r:r + 1, -r:r + 1]
+        elem = xx * xx + yy * yy <= r * r
     for k in range(nz):
-        m[k] = ndimage.binary_opening(hu[k] > limiar_hu, iterations=2)
+        m[k] = ndimage.binary_opening(hu[k] > limiar_hu, structure=elem)
     lab, n = ndimage.label(m, structure=ndimage.generate_binary_structure(3, 1))
     if n == 0:
         return m

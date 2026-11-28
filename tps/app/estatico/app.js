@@ -318,7 +318,7 @@ function ligar() {
     const r = await api("POST", `/api/${E.sid}/contorno/orgaos`, { orgaos }, msg);
     atualizar(r); aviso("Criado: " + r.contorno.criadas.map(n => `${n} (${r.contorno.volumes_cc[n]} cc)`).join(", ") + " — revise", true);
   });
-  $("#b-auto-body").onclick = () => tentar(async () => { atualizar(await api("POST", `/api/${E.sid}/contorno/corpo`, { nome: "BODY" }, "Contornando o corpo…")); aviso("BODY criado — revise", true); });
+  $("#b-auto-body").onclick = () => tentar(() => janelaBody("BODY"));
   $("#b-auto-pulm").onclick = () => auto(["pulmoes"], "Contornando os pulmões…");
   $("#b-auto-ossos").onclick = () => auto(["ossos"], "Contornando os ossos…");
   $("#b-ia").onclick = () => tentar(async () => {
@@ -432,7 +432,7 @@ function ligar() {
   $("#b-exportar").onclick = () => tentar(exportar);
   $("#b-salvar").onclick = () => tentar(async () => { aviso("Salvo em " + (await api("POST", `/api/${E.sid}/salvar`)).arquivo, true); listarPlanos(); });
   $("#b-relatorio").onclick = () => window.open(`/api/${E.sid}/relatorio.pdf?t=${encodeURIComponent(E.token)}`, "_blank");
-  $("#t-wash").onchange = () => desenharTudo();
+  $("#t-wash").onchange = () => { if ($("#t-wash-topo")) $("#t-wash-topo").checked = $("#t-wash").checked; desenharTudo(); };
   $("#wash-min").onchange = $("#wash-max").onchange = () => desenharTudo();
   $("#wash-un").onchange = () => {                       // troca a unidade convertendo os valores
     const rx = (E.resumo && E.resumo.plano && E.resumo.plano.prescricao && E.resumo.plano.prescricao.dose_total_gy) || 0;
@@ -729,6 +729,7 @@ function atualizar(r) {
 
 function listarCampos() {
   const p = E.resumo && E.resumo.plano;
+  if (!$("#tab-campos")) { $("#b-campo").textContent = E.campoSel ? "Atualizar campo" : "Adicionar campo"; listarCamposDoca(); return; }
   $("#tab-campos tbody").innerHTML = !p ? "" : p.campos.map(c => `<tr data-campo="${c.nome}" class="${c.campo_pai ? "sub" : ""} ${c.nome === E.campoSel ? "sel" : ""}">
     <td>${c.nome}</td><td>${c.arco_fim != null ? `${c.gantry.toFixed(0)}→${c.arco_fim.toFixed(0)} ${c.sentido}` : c.gantry.toFixed(0)}</td><td>${c.colimador.toFixed(0)}</td><td>${c.mu != null ? c.mu.toFixed(1) : "—"}</td>
     <td title="${c.arco_fim != null ? "pontos de controle" : "segmentos"}">${c.arco_fim != null ? (c.n_pontos ? c.n_pontos + " PC" : "arco") : (c.n_segmentos || (c.campo_pai ? "sub" : 1))}</td></tr>`).join("");
@@ -737,6 +738,34 @@ function listarCampos() {
     preencherForm(c); listarCampos(); $("#bev-campo").value = c.nome; carregarBev(c.nome).catch(e => aviso(e.message));
   });
   $("#b-campo").textContent = E.campoSel ? "Atualizar campo" : "Adicionar campo";
+  listarCamposDoca();
+}
+function listarCamposDoca() {
+  const p = E.resumo && E.resumo.plano, f = (v, n = 1) => v == null || !isFinite(v) ? "—" : (+v).toFixed(n);
+  const tipo = c => c.campo_pai ? "sub-campo" : c.arco_fim != null ? (c.n_pontos ? "arco (VMAT/DCA)" : "arco") : c.n_segmentos > 1 ? "estático (segm.)" : "estático";
+  $("#tab-campos-doca tbody").innerHTML = !p ? "" : p.campos.map(c => {
+    const sp = c.spec || {}, m = sp.margem, jx = c.jaw_x, jy = c.jaw_y || [null, null];
+    const marg = m == null ? "" : typeof m === "object" ? `${m.x1}/${m.x2}/${m.y1}/${m.y2} mm` : `${m} mm`;
+    const bl = (sp.blindagens || []).map(b => `${b.nome}${b.margem ? ` +${b.margem}` : ""}`).join(", ");
+    return `<tr data-campo="${esc(c.nome)}" class="${c.campo_pai ? "sub" : ""} ${c.nome === E.campoSel ? "sel" : ""}">
+      <td>${esc(c.nome)}</td><td>${tipo(c)}</td><td>${f(c.energia_mv, 0)}</td>
+      <td>${c.arco_fim != null ? `${f(c.gantry, 0)}→${f(c.arco_fim, 0)} ${c.sentido || ""}` : f(c.gantry, 0)}</td>
+      <td>${f(c.colimador, 0)}</td><td>${f(c.mesa, 0)}</td>
+      <td>${jx ? f(-jx[0] / 10) : "—"}</td><td>${jx ? f(jx[1] / 10) : "—"}</td><td>${f(jy[0] != null ? -jy[0] / 10 : null)}</td><td>${f(jy[1] != null ? jy[1] / 10 : null)}</td>
+      <td>${f(c.peso, 3)}</td><td><b>${f(c.mu)}</b></td><td>${c.ssd_mm ? f(c.ssd_mm / 10) : "—"}</td>
+      <td>${c.arco_fim != null ? (c.n_pontos || "—") : (c.n_segmentos || 1)}</td>
+      <td>${esc(c.alvo_conformado || sp.alvo || "")}${marg ? ` · ${marg}` : ""}</td><td>${esc(bl)}</td></tr>`;
+  }).join("");
+  const um = p ? p.campos.reduce((a, c) => a + (c.mu || 0), 0) : 0;
+  $("#doca-resumo").textContent = p ? `${p.campos.length} campo(s) · ${um.toFixed(1)} UM no total · mandíbulas em cm (X1/Y1 positivos para fora)` : "";
+  $$("#tab-campos-doca tbody tr").forEach(tr => tr.onclick = () => {
+    E.campoSel = tr.dataset.campo; const c = p.campos.find(x => x.nome === E.campoSel);
+    if (!c.campo_pai) preencherForm(c);
+    listarCampos(); $("#bev-campo").value = c.nome; carregarBev(c.nome).catch(e => aviso(e.message));
+  });
+  const av = (E.resumo && E.resumo.avisos) || [];
+  $("#doca-n-avisos").textContent = av.length ? `(${av.length})` : "";
+  $("#lista-avisos-doca").innerHTML = av.map(a => `<li>${esc(a)}</li>`).join("") || `<li class="pequeno-txt">sem avisos</li>`;
 }
 
 function preencherForm(c) {
@@ -1163,6 +1192,15 @@ function desenharCorte(vista) {
     g.moveTo(x, 0); g.lineTo(x, h); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
   }
   if (vista === "axial") desenharContornoPreview(g, T);
+  if (E.voi) {                                            // VOI do BODY (caixa de busca do contorno externo)
+    const V = E.voi, ax = { axial: ["x", "y"], coronal: ["x", "z"], sagital: ["y", "z"] }[vista];
+    const [a0, b0] = T.px(V[ax[0]][0], V[ax[1]][0]), [a1, b1] = T.px(V[ax[0]][1], V[ax[1]][1]);
+    const fora = vista === "axial" && (pos < Math.min(...V.z) || pos > Math.max(...V.z));
+    g.save(); g.setLineDash([7, 4]); g.lineWidth = 1.6; g.strokeStyle = fora ? "#888" : "#ffd33d";
+    g.strokeRect(Math.min(a0, a1), Math.min(b0, b1), Math.abs(a1 - a0), Math.abs(b1 - b0));
+    g.fillStyle = g.strokeStyle; g.font = "11px system-ui"; g.fillText("VOI do BODY", Math.min(a0, a1) + 4, Math.min(b0, b1) + 13);
+    g.restore();
+  }
   // ponto de dose máxima do plano (sempre que estiver neste corte)
   const res = E.resumo.resultado, mx = E.resumo.dose_atualizada && res && res.dmax_xyz;
   if (mx) {
@@ -1543,10 +1581,7 @@ function iniciarContorno() {
     atualizar(r); aviso(`${r.contorno.novos_cortes} corte(s) preenchido(s)`);
   });
   $("#b-k-desf").onclick = () => tentar(async () => atualizar(await api("POST", `/api/${E.sid}/contorno/desfazer`, {})));
-  $("#b-k-corpo").onclick = () => tentar(async () => {
-    const nome = E.resumo.estruturas.some(e => e.nome === "BODY") ? "BODY_AUTO" : "BODY";
-    atualizar(await api("POST", `/api/${E.sid}/contorno/corpo`, { nome }, "Contornando o corpo…"));
-  });
+  $("#b-k-corpo").onclick = () => tentar(() => janelaBody("BODY"));
 }
 function desenharContornoPreview(g, T) {
   if (!contornoAtivo()) return;
@@ -1686,13 +1721,14 @@ async function acao(a) {
     case "ia": await janelaIA(); break;
     case "claude": await janelaClaude(); break;
     case "copiloto": abrirCopiloto(); break;
+    case "aprovar-est": await aprovarEstruturas(); break;
     case "casos": await janelaCasos(); break;
     case "automacao": await janelaAutomacao(); break;
     case "assistente": abaEsquerda("otim"); await assistente(); break;
     case "qa": abaEsquerda("aprov"); $("#sec-qa").open = true; break;
     case "auditoria": clicar("#b-auditoria"); break;
     case "lay": definirLayout(arg); break;
-    case "wash": $("#t-wash").checked = !$("#t-wash").checked; desenharTudo(); break;
+    case "wash": $("#t-wash").checked = !$("#t-wash").checked; if ($("#t-wash-topo")) $("#t-wash-topo").checked = $("#t-wash").checked; desenharTudo(); break;
     case "paineis": $("main").classList.toggle("sem-paineis"); break;
     case "sobre": await modal("Sobre o TPS", `<p>TPS ${esc(E.info.versao)} — planejamento de radioterapia (3D, IMRT, VMAT; collapsed cone e
       Monte Carlo).</p><p class="avisotxt">Versão em desenvolvimento: não usar para tratar pacientes.</p>
@@ -1993,17 +2029,27 @@ async function janelaIA() {
 function ligarLayout() {
   const lay = lerGuardado("tps_layout") || {};
   const main = $("main"), centro = $("#centro");
-  for (const [k, v] of Object.entries(lay.vars || {})) (k.startsWith("--l-") ? main : centro).style.setProperty(k, v);
+  for (const [k, v] of Object.entries(lay.vars || {})) (k.startsWith("--l-") ? main : k === "--doca" ? $("#meio") : centro).style.setProperty(k, v);
+  if (lay.doca_recolhida) $("#doca").classList.add("recolhida");
   if (lay.slots) for (const [id, s] of Object.entries(lay.slots)) { const el = $("#" + id); if (el) el.dataset.slot = s; }
   if (lay.modo) centro.className = "lay-" + lay.modo;
   const salvar = () => {
     const vars = {};
     for (const k of ["--l-esq", "--l-dir"]) { const v = main.style.getPropertyValue(k); if (v) vars[k] = v; }
     for (const k of ["--c1", "--c2", "--c3", "--r1", "--r2"]) { const v = centro.style.getPropertyValue(k); if (v) vars[k] = v; }
+    const vd = $("#meio").style.getPropertyValue("--doca"); if (vd) vars["--doca"] = vd;
     const slots = Object.fromEntries($$("#centro .vista").map(v => [v.id, v.dataset.slot]));
-    guardar("tps_layout", { vars, slots, modo: (centro.className.match(/lay-(\w+)/) || [])[1] || "padrao" });
+    guardar("tps_layout", { vars, slots, modo: (centro.className.match(/lay-(\w+)/) || [])[1] || "padrao",
+      doca_recolhida: $("#doca").classList.contains("recolhida") });
   };
   E.salvarLayout = salvar;
+  $$(".doca-aba").forEach(b => b.onclick = () => {
+    $$(".doca-aba").forEach(x => x.classList.toggle("ativa", x === b));
+    $("#doca-campos").classList.toggle("oculto", b.dataset.doca !== "campos");
+    $("#doca-avisos").classList.toggle("oculto", b.dataset.doca !== "avisos");
+    $("#doca").classList.remove("recolhida"); salvar();
+  });
+  $("#doca-min").onclick = () => { $("#doca").classList.toggle("recolhida"); salvar(); setTimeout(desenharTudo, 30); };
   $$(".divisor").forEach(d => d.addEventListener("mousedown", (ev) => {
     ev.preventDefault();
     const tipo = d.dataset.div; d.classList.add("ativo"); document.body.classList.add("arrastando");
@@ -2016,6 +2062,10 @@ function ligarLayout() {
         const c = $("#centro [data-slot=C]").getBoundingClientRect();
         centro.style.setProperty("--c2", Math.max(80, Math.min(e.clientX - c.left, rc.right - c.left - 90)) + "px");
         centro.style.setProperty("--c3", "1fr");
+      } else if (tipo === "doca") {
+        const rmeio = $("#meio").getBoundingClientRect();
+        $("#meio").style.setProperty("--doca", Math.max(60, Math.min(rmeio.bottom - e.clientY, rmeio.height - 200)) + "px");
+        $("#doca").classList.remove("recolhida");
       } else if (tipo === "r1") {
         centro.style.setProperty("--r1", Math.max(80, Math.min(e.clientY - rc.top - 4, rc.height - 90)) + "px");
         centro.style.setProperty("--r2", "1fr");
@@ -2227,6 +2277,11 @@ function mostrarAprovEst(r) {
   $("#est-aprov-txt").innerHTML = ap ? `<span class="ok">Estruturas aprovadas</span> por ${esc(ap.por)} em ${esc((ap.quando || "").replace("T", " ").slice(0, 16))}`
     : (ca ? `Caso ${esc(ca.id)} · ${esc(ca.estado || "")}` : "");
   $("#b-est-aprovar").disabled = !(r && r.tipo === "ct");
+  if ($("#b-aprovar-est-topo")) {
+    $("#b-aprovar-est-topo").disabled = !(r && r.tipo === "ct");
+    $("#b-aprovar-est-topo").classList.toggle("feito", !!ap);
+    $("#b-aprovar-est-topo").textContent = ap ? "✔ Estruturas aprovadas" : "✔ Estruturas";
+  }
 }
 async function aprovarEstruturas() {
   const ptvs = ((E.resumo && E.resumo.estruturas) || []).map(e => e.nome).filter(n => /^PTV.*@\s*\d+/i.test(n));
@@ -2309,4 +2364,32 @@ async function janelaAutomacao() {
 }
 document.addEventListener("DOMContentLoaded", () => {
   if ($("#b-est-aprovar")) $("#b-est-aprovar").onclick = () => tentar(aprovarEstruturas);
+  if ($("#b-aprovar-est-topo")) $("#b-aprovar-est-topo").onclick = () => tentar(aprovarEstruturas);
+  if ($("#t-wash-topo")) $("#t-wash-topo").onchange = () => { $("#t-wash").checked = $("#t-wash-topo").checked; desenharTudo(); };
 });
+
+// ---- BODY automático com VOI (caixa de busca): a borda posterior corta o colchão/mesa; suavização tira o zigue-zague
+async function janelaBody(nome) {
+  const lim = { limiar: -350 };
+  E.voi = await api("POST", `/api/${E.sid}/contorno/corpo_voi`, lim, "Procurando o corpo…");
+  desenharTudo();
+  const n = (k, i) => `<input type="number" step="1" data-voi="${k}${i}" value="${E.voi[k][i]}">`;
+  const pr = modal("BODY automático — VOI", `<p class="pequeno-txt">A caixa amarela (VOI) limita onde o corpo é procurado.
+    Ajuste a borda <b>posterior</b> (y máx.) para cortar o colchão/mesa; os cortes continuam navegáveis com a janela aberta.</p>
+    <div class="linha2"><label>x mín. (D)${n("x", 0)}</label><label>x máx. (E)${n("x", 1)}</label></div>
+    <div class="linha2"><label>y mín. (anterior)${n("y", 0)}</label><label>y máx. (posterior — mesa)${n("y", 1)}</label></div>
+    <div class="linha2"><label>z mín. (inferior)${n("z", 0)}</label><label>z máx. (superior)${n("z", 1)}</label></div>
+    <div class="linha2"><label>Limiar (HU)<input name="limiar" type="number" value="-350" step="10"></label>
+      <label>Suavizar (mm)<input name="suavizar_mm" type="number" value="2" min="0" max="6" step="0.5"></label>
+      <label>Nome<input name="nome" value="${esc(nome)}"></label></div>`, { ok: "Contornar" });
+  $("#modal").classList.add("lado");
+  $$("[data-voi]").forEach(i => i.oninput = () => { const k = i.dataset.voi; E.voi[k[0]][+k[1]] = +i.value; desenharTudo(); });
+  let v;
+  try { v = await pr; } finally { $("#modal").classList.remove("lado"); }
+  const voi = E.voi; E.voi = null;
+  try {
+    const r = await api("POST", `/api/${E.sid}/contorno/corpo`, { nome: v.nome || "BODY", limiar: +v.limiar, voi, suavizar_mm: +v.suavizar_mm },
+      "Contornando o corpo…");
+    atualizar(r); aviso(`${v.nome || "BODY"} criado em todos os cortes do VOI — revise`, true);
+  } finally { desenharTudo(); }
+}
