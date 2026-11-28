@@ -515,7 +515,15 @@ def _com_tentativas(s, gr: dict, sit: str, tec: str, pc: dict, rot: str, progres
         rot_k = rot if k == 0 else f"{rot[:14]}~{k}"
         if progresso and k:
             progresso(f"{rot}: tentativa {k + 1} ({', '.join(_o_que_corrigir(ant)) or 'refinando'})")
-        avisos = _fazer_plano(s, gr, sit, tec, pc, rot_k, k, ant)
+        try:
+            avisos = _fazer_plano(s, gr, sit, tec, pc, rot_k, k, ant)
+        except Exception as e:  # noqa: BLE001
+            if melhor is None:
+                raise
+            hist.append({"tentativa": k + 1, "erro": str(e)[:200]})
+            if s.plano is not None and s.plano.rotulo == rot_k:
+                s.remover_plano(rot_k)
+            break
         nota = _nota(s, gr)
         resumo = {"tentativa": k + 1, "penalidade": nota["penalidade"], "v95": nota["v95"], "dmax_pct": nota["dmax_pct"],
                   "hi": nota["hi"], "falhas": nota["falhas"],

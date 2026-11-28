@@ -115,6 +115,24 @@ def tempo_entrega(c: Campo, lim: LimitesVMAT, linhas: np.ndarray | None = None) 
 
 
 # ------------------------------------------------------------------ mecânica de uma abertura
+def _overtravel(a: np.ndarray, b: np.ndarray, colim: Colimacao, abertos) -> None:
+    """A lâmina A não passa de +overtravel nem a B de −overtravel: par fechado longe do eixo é trazido para dentro;
+    par aberto além do limite abre um pouco mais (a lâmina para no limite)."""
+    ot = getattr(colim, "overtravel_mm", None)
+    if not ot:
+        return
+    g = colim.gap_minimo_mm
+    for i in range(len(a)):
+        if a[i] <= ot + 1e-9 and b[i] >= -ot - 1e-9:
+            continue
+        if not abertos[i] or b[i] - a[i] <= g + 0.5:
+            c = float(np.clip(0.5 * (a[i] + b[i]), -ot + g / 2, ot - g / 2))
+            a[i], b[i] = c - g / 2, c + g / 2
+        else:
+            a[i] = min(a[i], ot)
+            b[i] = max(b[i], -ot)
+
+
 def reparar(a: np.ndarray, b: np.ndarray, colim: Colimacao, lo: float, hi: float, abertos=None) -> None:
     """Impõe (no lugar) gap mínimo, limites [lo, hi] e, sem interdigitação, A_i ≤ B_{i±1} − gap. Pares fechados
     (abertos[i] False) se deslocam inteiros; abertos cedem a lâmina que causa o conflito."""
@@ -127,6 +145,7 @@ def reparar(a: np.ndarray, b: np.ndarray, colim: Colimacao, lo: float, hi: float
             a[i], b[i] = c - g / 2, c + g / 2
     np.clip(a, lo, hi - g, out=a)
     np.clip(b, lo + g, hi, out=b)
+    _overtravel(a, b, colim, ab)
     if getattr(colim, "interdigitacao", True):
         _grade_01(a, b)
         return
@@ -151,6 +170,7 @@ def reparar(a: np.ndarray, b: np.ndarray, colim: Colimacao, lo: float, hi: float
         np.clip(b, lo + g, hi, out=b)
         if not mexeu:
             break
+    _overtravel(a, b, colim, ab)
     # o que sobrar (par fechado entre duas aberturas que não se tocam): abre a lâmina A até cumprir — sempre resolve,
     # porque só diminuir A nunca cria conflito novo
     for i in range(n):
